@@ -112,6 +112,18 @@ addEventListener('load', () => new Chart(document.getElementById('effortChart'),
 }));
 </script>
 
+<div class="task warn">
+  <h3>Fe de erratas (post-implementación, 2026-07-05)</h3>
+  <p>Divergencias reales descubiertas al ejecutar el plan — el código de referencia es <code>src/</code>, no los bloques de este documento:</p>
+  <ul>
+    <li><strong>T5</strong>: el merge de declaraciones con <code>+=</code> conservaba la primera aparición; corregido a última-gana (CSS 2.2 §6.4) — bloque ya corregido arriba.</li>
+    <li><strong>T6</strong>: <code>\Dom\Element-&gt;children</code> NO existe en el DOM API de PHP 8.4 (verificado con probe); la iteración real usa <code>firstElementChild</code>/<code>nextElementSibling</code>.</li>
+    <li><strong>T8</strong>: el property hook <code>public Rect $rect { get; }</code> en la interfaz Fragment rompe el parser embebido de deptrac 2.0.4 (php-parser v4.19.1, sin sintaxis 8.4); la interfaz real expone <code>rect(): Rect</code> como método y las clases concretas mantienen la propiedad readonly + método delegante. Afecta a los accesos Fragment-typed de T9/T11/T12.</li>
+    <li><strong>T12</strong>: la sintaxis <code>new X()-&gt;metodo()</code> (PHP 8.4) hace que deptrac salte el fichero EN SILENCIO; en <code>src/</code> se usa <code>(new X())-&gt;metodo()</code>.</li>
+  </ul>
+  <p class="meta">Detalle completo en los task reports de la sesión de implementación.</p>
+</div>
+
 <h2>Tareas</h2>
 
 <div class="task">
