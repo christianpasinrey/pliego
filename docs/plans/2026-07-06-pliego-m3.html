@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M3 — pliego: imágenes</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M3 «imágenes»</h1>
+<p class="meta">2026-07-06 · Previos: M0 ✅ M1 ✅ M2 ✅ (main, CI verde, 232 tests) · Ejecución: subagent-driven.</p>
+
+<div class="task">
+  <strong>Goal:</strong> <code>&lt;img&gt;</code> funcionando: JPEG (passthrough DCTDecode) y PNG (decodificación pura-PHP con SMask para alpha), medidas intrínsecas, sizing CSS/atributos con aspect ratio, pintado como Image XObjects deduplicados. Con esto el documento objetivo del usuario (itinerario con fotos) se genera COMPLETO salvo el layout flex de tarjeta (M4).<br>
+  <strong>Claves:</strong> (1) JPEG no se decodifica — se embebe tal cual con /DCTDecode (solo parsear SOFn para dims/canales); (2) PNG sí: ext-zlib inflate → des-filtrar scanlines (None/Sub/Up/Average/Paeth) → separar alpha a /SMask → re-deflate ambos; (3) <code>&lt;img&gt;</code> es replaced BLOCK-level en M3 (inline replaced con baseline llega con el inline completo); (4) rutas: relativas a <code>Engine::basePath()</code> nuevo; URL remota o fichero ausente → warning + caja vacía (nunca excepción, RenderReport §errores del design doc).
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0/M1/M2 vigente: strict_types, VOs readonly, px→pt solo Pdf\, deptrac verde (Image: [Css] nueva capa a añadir con collector; Paint/Pdf ganan Image), sin datos personales, trailer Co-Authored-By, TDD estándar (test→RED→impl→GREEN→4 gates→commit), baselines solo tests/.</li>
+  <li>Lecciones acumuladas (ledger): DOM 8.4 sin ->children; deptrac sin hooks/new-chaining sin paréntesis y salta ficheros EN SILENCIO (verificar conteo); comas finales en match; Fragment::rect() método; FontCatalog bool $italic; % con ->resolve(cbWidth).</li>
+  <li>Fixtures de imagen GENERADAS programáticamente en tests (GD si está — <code>extension_loaded('gd')</code> — o bytes mínimos hand-crafted commiteados como fixture binaria pequeña <5KB); JAMÁS descargar imágenes de internet ni usar fotos con copyright.</li>
+  <li>API pública solo crece: <code>Engine::basePath(string): self</code> (default: getcwd()).</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Image (nueva capa src/Image, deptrac Image: [Css])
+interface DecodedImage {
+    public function widthPx(): int;      // px de imagen = px CSS (96dpi asumido)
+    public function heightPx(): int;
+    /** Datos listos para el content stream del XObject */
+    public function pdfData(): ImagePdfData;
+}
+final readonly class ImagePdfData {
+    public string $filter;               // 'DCTDecode' | 'FlateDecode'
+    public string $colorSpace;           // 'DeviceRGB' | 'DeviceGray'
+    public int $bitsPerComponent;        // 8 (M3)
+    public string $bytes;                // stream principal
+    public ?string $smaskBytes;          // alpha 8-bit FlateDecode o null
+}
+final class ImageLoader {               // punto de entrada: detecta formato por magic bytes
+    public function load(string $path): DecodedImage;  // ImageException si formato no soportado
+}
+
+// Box
+final readonly class ImageBox {         // replaced block-level
+    public ComputedStyle $style; public string $src;      // ruta YA resuelta y verificada
+    public int $intrinsicWidth; public int $intrinsicHeight;
+    public ?float $attrWidth; public ?float $attrHeight;  // atributos HTML width/height
+}
+// BlockBox children amplía a BlockBox|TextRun|LineBreakRun|ImageBox
+
+// Layout
+final readonly class ImageFragment implements Fragment { rect + string $imageKey (ruta) }
+
+// Paint/Pdf
+Canvas += drawImage(Rect $rectPx, string $imageKey): void
+final class ImageRegistry {             // en Pdf\: dedup por ruta, un XObject por imagen
+    public function __construct(PdfWriter $writer, ImageLoader $loader);
+    public function xobjectFor(string $imageKey): ImageXObjectRef {objectId, name "Im1"..};
+    public function pageResources(): array<string,int>;   // como FontRegistry
+    public function flushAll(): void;    // escribe los XObjects de imagen (+SMasks)
+}</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 Image\: JPEG passthrough<br/>+ PNG decode con SMask"] --> T2["T2 Box: ImageBox +<br/>basePath + warnings"]
+  T2 --> T3["T3 Layout: replaced sizing<br/>+ ImageFragment"]
+  T1 --> T4["T4 Pdf: ImageRegistry +<br/>drawImage + XObjects"]
+  T3 --> T5["T5 E2E itinerario con fotos<br/>+ README + playground"]
+  T4 --> T5
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M3-T1 — Image\: decodificadores JPEG y PNG</h3>
+<p><strong>JPEG</strong>: parsear marcadores hasta SOF0/SOF1/SOF2 (dims, nº componentes → DeviceGray si 1, DeviceRGB si 3; CMYK 4 → warning + ImageException M3); bytes = fichero entero, filter DCTDecode. <strong>PNG</strong> (pure PHP + ext-zlib): IHDR (dims, bit depth — solo 8, color types 0 gray/2 RGB/6 RGBA; 3 paleta → ImageException M3 documentada), concatenar IDAT, gzuncompress/inflate, des-filtrar por scanline (tipos 0-4: None/Sub/Up/Average/Paeth per RFC 2083 §6), si RGBA separar canal alpha → smaskBytes (gray 8bit re-deflate) y RGB re-deflate. Interlaced (Adam7) → ImageException M3. Tests: fixtures generadas con GD si disponible (imagecreatetruecolor + savealpha) Y fixtures mínimas hand-crafted (PNG 3x2 RGBA con valores conocidos byte a byte para verificar des-filtrado Paeth; JPEG mínimo válido) commiteadas <5KB. Asserts: dims correctas; PNG desfiltrado == píxeles esperados; SMask presente solo con alpha; JPEG bytes == fichero. Commit: <code>feat(image): jpeg passthrough and pure-php png decoding with alpha smask</code></p>
+</div>
+
+<div class="task">
+<h3>M3-T2 — Box: ImageBox, basePath y errores suaves</h3>
+<p>BoxTreeBuilder: <code>&lt;img src width height&gt;</code> → ImageBox con dims intrínsecas del ImageLoader (inyectado); src relativo → basePath (Engine::basePath(), default getcwd(), pasa por el pipeline); http(s):// → warning "remote images not supported yet" + omitir caja; fichero ausente/formato no soportado → warning + omitir. atributos width/height numéricos → attrWidth/Height. Los warnings van al RenderReport (BoxTreeBuilder necesita un colector — diseño: BoxTreeBuilder devuelve {tree, warnings} o recibe un WarningSink compartido; elegir y documentar, Engine los fusiona con los del CSS). display:none sobre img poda. Commit: <code>feat(box): image boxes with base path resolution and soft failures</code></p>
+</div>
+
+<div class="task">
+<h3>M3-T3 — Layout: sizing de replaced boxes + ImageFragment</h3>
+<p>CSS 2.2 §10.3.4/§10.6.2: prioridad CSS width/height &gt; atributos &gt; intrínsecas; una sola dimensión dada → la otra por aspect ratio intrínseco; % width contra containing block; ninguna → intrínsecas (cap al ancho del containing block manteniendo ratio — regla práctica de los navegadores). ImageFragment (rect + imageKey) emitido por BlockFlowContext; Paginator lo trata como hoja (push-down como TextFragment; una imagen más alta que la página se queda — documentado). margin/borders del img aplican (caja replaced con box model normal). Goldens M1/M2 intactos. Commit: <code>feat(layout): replaced box sizing with aspect ratio and image fragments</code></p>
+</div>
+
+<div class="task">
+<h3>M3-T4 — Pdf: ImageRegistry, drawImage y XObjects de imagen</h3>
+<p>Canvas += drawImage(Rect, string); Painter pinta ImageFragment→drawImage (orden: como contenido normal). PdfCanvas: <code>q wPt 0 0 hPt xPt yPt cm /ImN Do Q</code> (flip Y: y = pageH − y − h). ImageRegistry como FontRegistry: dedup por ruta (misma foto en 6 tarjetas = 1 XObject), lazy, pageResources() acumulativo, flushAll() escribe /Type /XObject /Subtype /Image /Width /Height /ColorSpace /BitsPerComponent /Filter (+/SMask ref a XObject gray). Orden de cierre: flushAll de imágenes puede ir junto al de fuentes (antes de finish; ampliar el contrato documentado del writer). Tests: bytes del PDF (cm matrix correcta, dedup 2 usos → 1 XObject), Ghostscript-style structural (xref). Commit: <code>feat(pdf): image xobjects with registry deduplication</code></p>
+</div>
+
+<div class="task">
+<h3>M3-T5 — E2E itinerario con fotos, README y playground</h3>
+<p>E2E: itinerary skeleton + <code>&lt;img&gt;</code> por tarjeta (fixture JPEG generada en el test) + una PNG con alpha → asserts: 1 XObject JPEG deduplicado (misma foto 6 veces), 1 PNG con /SMask, dims escaladas correctas en el cm, 0 warnings; + caso remoto/ausente → warnings correctos y PDF válido igualmente. Golden con imagen. README sección M3 (formatos soportados, límites: sin paleta PNG, sin interlaced, sin CMYK, imágenes remotas no). Playground: fixture pequeña en playground-assets/sample-photo.jpg (generada con GD, gradiente — sin copyright) + sample con <code>&lt;img src="playground-assets/sample-photo.jpg" width="120"&gt;</code> y Engine->basePath(__DIR__) en index.php. Commit: <code>test: itinerary-with-photos e2e; README and playground for M3</code></p>
+</div>
+
+</body>
+</html>
