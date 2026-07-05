@@ -158,9 +158,15 @@ final readonly class ComputedStyle
             $width = $declarations["border-$side-width"] ?? null;
             $style = $declarations["border-$side-style"] ?? null;
             $sideColor = $declarations["border-$side-color"] ?? null;
+            $resolvedStyle = $style instanceof BorderStyle ? $style : BorderStyle::None;
+            // CSS 2.2 §8.5.3: "if the value of the border-style property is none... the
+            // computed value of the border width is 0" — el ancho USADO se calcula aquí, en
+            // origen, para que ningún consumidor (BlockFlowContext, Painter) pueda leer
+            // ->widthPx sin pasar por esta regla.
+            $widthPx = $resolvedStyle === BorderStyle::Solid && $width instanceof Length ? $width->px : 0.0;
             return new BorderSide(
-                $width instanceof Length ? $width->px : 0.0,
-                $style instanceof BorderStyle ? $style : BorderStyle::None,
+                $widthPx,
+                $resolvedStyle,
                 $sideColor instanceof Color ? $sideColor : $color,
             );
         };

@@ -174,6 +174,24 @@ it('resolves a border with no color declared to the element computed color (curr
     expect($style->borderTop->color)->toEqual(new Color(255, 0, 0));
 });
 
+it('zeroes the used border width when border-style is none (CSS 2.2 §8.5.3)', function () {
+    [$doc, $map] = resolveDoc('p { border-top-width: 10px }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->borderTop->style)->toBe(BorderStyle::None);
+    expect($style->borderTop->widthPx)->toBe(0.0);
+});
+
+it('keeps the declared border width when border-style is solid', function () {
+    [$doc, $map] = resolveDoc('p { border-top: 10px solid #000 }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->borderTop->style)->toBe(BorderStyle::Solid);
+    expect($style->borderTop->widthPx)->toBe(10.0);
+});
+
 it('defaults box-sizing to content-box and does not inherit it', function () {
     [$doc, $map] = resolveDoc('body { box-sizing: border-box }', '<body><p>x</p></body>');
     $p = $doc->querySelector('p');

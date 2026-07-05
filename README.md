@@ -66,7 +66,10 @@ renderer — images and flexbox are the milestones ahead (see
   `counter(pages)` paints directly into each page's content stream; a box
   that uses `counter(pages)` is resolved through a deferred PDF Form
   XObject per page, since the total page count isn't known until every
-  page has been laid out — both render identically in the final PDF.
+  page has been laid out — the two paths render identically only while the
+  box's text fits its column; see "Margin boxes" below for what happens
+  when it doesn't (the deferred path's Form XObject clips at the column
+  edge, the direct path doesn't).
 - **Text**: UAX #14-based line breaking (a practical subset: whitespace,
   hyphens and a mandatory break at `<br>`) instead of M0's naive
   space-splitting, measured per inline run against whichever font face
@@ -95,13 +98,19 @@ renderer — images and flexbox are the milestones ahead (see
   between them) — there is no real miter/45°-mitered corner. Different
   widths per side are supported, but two *thick*, *differently colored*
   adjacent sides will show that seam rather than a mitered diagonal.
-- **Margin boxes**: no shrink-to-fit and no clipping. css-page-3's own
-  3-box-per-row division is honored (each of `@*-left`/`@*-center`/
-  `@*-right` gets a fixed, equal third of the content width), but a box's
-  text that's wider than its own column simply overflows past the column
-  boundary and keeps drawing instead of shrinking, wrapping, or being
-  clipped — only becomes visible as overlapping glyphs when the
-  neighboring column also paints into the shared boundary region.
+- **Margin boxes**: no shrink-to-fit, and clipping depends on which path
+  painted the box. css-page-3's own 3-box-per-row division is honored (each
+  of `@*-left`/`@*-center`/`@*-right` gets a fixed, equal third of the
+  content width), but a box's text that's wider than its own column is
+  handled differently depending on whether it was painted directly or
+  deferred (see "Paged media" above): a box painted directly into the page
+  content stream has no clip applied and overflows past the column
+  boundary, keeping drawing instead of shrinking or wrapping; a box built
+  as a deferred Form XObject is clipped to its own `/BBox` (ISO 32000-1
+  §8.10.2), set to exactly the column's width and box height, so its
+  overflow is cut at the column edge instead. Either way, overflow only
+  becomes visible/lossy when the neighboring column also paints into the
+  shared boundary region.
 - No images (M3), no flexbox (M4), no tables/floats (M5+).
 - `text-decoration`/underline is treated as inheriting through the tree for
   simplicity, which isn't how real CSS decoration propagation works (see

@@ -1,6 +1,12 @@
 parameters:
 	ignoreErrors:
 		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/ItinerarySkeletonTest.php
+
+		-
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, non\-empty\-string, non\-empty\-string\}\.$#'
 			identifier: offsetAccess.notFound
 			count: 1
@@ -17,12 +23,6 @@ parameters:
 			identifier: offsetAccess.notFound
 			count: 1
 			path: tests/EndToEnd/TypographyTest.php
-
-		-
-			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
-			identifier: offsetAccess.notFound
-			count: 1
-			path: tests/EndToEnd/ItinerarySkeletonTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\Expectation\<Pliego\\Css\\Value\\Color\|null\>\:\:\$r\.$#'
@@ -75,13 +75,13 @@ parameters:
 		-
 			message: '#^Cannot access property \$height on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 3
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$rect on mixed\.$#'
 			identifier: property.nonObject
-			count: 10
+			count: 12
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
@@ -99,7 +99,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$y on mixed\.$#'
 			identifier: property.nonObject
-			count: 5
+			count: 6
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
@@ -327,7 +327,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$borderTop on mixed\.$#'
 			identifier: property.nonObject
-			count: 6
+			count: 10
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -387,7 +387,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$style on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -417,19 +417,19 @@ parameters:
 		-
 			message: '#^Cannot access property \$widthPx on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 27
+			count: 29
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 25
+			count: 27
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

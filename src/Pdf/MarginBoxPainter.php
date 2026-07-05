@@ -28,14 +28,18 @@ use Pliego\Text\FontFace;
  * here the three columns are always an equal, fixed third of the content width regardless of how
  * much (or how little) text each box carries.
  *
- * HONEST LIMITATION: there is no clipping and no shrink-to-fit. A box's text can be wider than
- * its own column, in which case it overflows past the column boundary and keeps drawing (no
- * PDF clipping path is emitted) instead of being cut off or shrunk. That overflow only becomes
- * visible as overlapping glyphs when the NEIGHBORING column also has a box painting text into the
- * shared boundary region; with a single box per row, or with realistically short label text
- * (page numbers, short running headers), the columns are wide enough in practice that this
- * doesn't happen — but nothing here enforces it. Implementing real fit (measure all boxes in the
- * row, shrink/reflow as needed) is out of scope for M2.
+ * HONEST LIMITATION: there is no shrink-to-fit, and clipping behaviour differs by path. A box's
+ * text can be wider than its own column either way, but what happens to the overflow depends on
+ * which path painted it (see "Ordering" below): a box painted directly into the page content
+ * stream (PdfCanvas::fillTextAtPage()) has no clipping path applied to it and overflows past the
+ * column boundary freely; a box built as a deferred Form XObject (PdfWriter::defer()) is clipped
+ * to its own /BBox — set to exactly the column's width and box height — per ISO 32000-1 §8.10.2,
+ * so its overflow is cut at the column edge instead of drawing past it. Either way, overflow only
+ * becomes visible/lossy when the NEIGHBORING column also has a box painting text into the shared
+ * boundary region; with a single box per row, or with realistically short label text (page
+ * numbers, short running headers), the columns are wide enough in practice that this doesn't
+ * matter — but nothing here enforces it. Implementing real fit (measure all boxes in the row,
+ * shrink/reflow as needed) is out of scope for M2.
  *
  * Ordering (the actual point of M2-T7): a box whose content includes CounterRef::Pages can't be
  * painted while streaming (the total page count is only known once every page has been laid

@@ -93,6 +93,15 @@ it('a solid border displaces the content and grows the border-box height', funct
     expect($div->rect->height)->toBe($text->rect->height + 4.0);
 });
 
+it('does not displace content when border-width is declared without a border-style (CSS 2.2 §8.5.3)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { border-top-width: 10px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    $text = textFragments($div)[0];
+    expect($text->rect->y)->toBe(0.0);
+    expect($div->rect->height)->toBe($text->rect->height);
+});
+
 it('carries the computed border set onto the fragment for painting', function () {
     $frag = layoutHtml('<body><div>x</div></body>', 'div { border: 2px solid #ff0000 }');
     $div = $frag->children[0];
