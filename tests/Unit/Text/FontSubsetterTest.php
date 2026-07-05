@@ -34,9 +34,15 @@ function sfntTableCount(string $bytes): int
  * component N + component Tilde, mirroring real 'ñ') whose components are NOT requested
  * directly by callers — only reachable via the composite's own component records.
  *
+ * @param bool $shortLoca when true, builds `head`/`loca` in the short offset format
+ *   (indexToLocFormat=0, OpenType spec §5.2/§5.3: loca stores offset/2 as uint16) instead of
+ *   the default long format. Every glyph entry built here has an even byte length, so the
+ *   short-format halving round-trips exactly — no fixture bytes need to change, only how the
+ *   offsets are packed. Used to exercise TtfFont::locaOffsets()'s short-format read path and
+ *   FontSubsetter's "always re-emit long, regardless of source format" guarantee.
  * @return array{bytes: string, aGid: int, bGid: int, componentN: int, componentTilde: int, ntildeGid: int, unusedFillerGid: int}
  */
-function buildSubsettableTtf(): array
+function buildSubsettableTtf(bool $shortLoca = false): array
 {
     $u16 = static fn(int $v): string => pack('n', $v & 0xFFFF);
     $u32 = static fn(int $v): string => pack('N', $v);
@@ -86,13 +92,13 @@ function buildSubsettableTtf(): array
 
     $loca = '';
     foreach ($locaOffsets as $offset) {
-        $loca .= $u32($offset);
+        $loca .= $shortLoca ? $u16(intdiv($offset, 2)) : $u32($offset);
     }
 
-    // head (54 bytes): unitsPerEm @+18, indexToLocFormat @+50 (1 = long offsets).
+    // head (54 bytes): unitsPerEm @+18, indexToLocFormat @+50 (1 = long offsets, 0 = short).
     $head = str_repeat("\x00", 54);
     $head = substr_replace($head, $u16(1000), 18, 2);
-    $head = substr_replace($head, $u16(1), 50, 2);
+    $head = substr_replace($head, $u16($shortLoca ? 0 : 1), 50, 2);
 
     // hhea (36 bytes): ascender @+4, descender @+6, numberOfHMetrics @+34.
     $hhea = str_repeat("\x00", 36);
@@ -259,6 +265,34 @@ it('shrinks a real 3-glyph subset well below 8% of the original using the PDF ra
     }
     sort($tags);
     expect($tags)->toBe(['cvt ', 'fpgm', 'glyf', 'head', 'hhea', 'hmtx', 'loca', 'maxp', 'prep']);
+});
+
+it('reads a short-format (indexToLocFormat=0) source loca and still emits long loca', function (): void {
+    $fixture = buildSubsettableTtf(shortLoca: true);
+    $font = TtfFont::fromString($fixture['bytes']);
+    expect($font->indexToLocFormat())->toBe(0); // sanity: the fixture really is short-format
+
+    $subsetBytes = (new FontSubsetter())->subset($font, [$fixture['aGid'], $fixture['bGid'], $fixture['ntildeGid']]);
+    $subsetFont = TtfFont::fromString($subsetBytes);
+
+    expect($subsetFont->indexToLocFormat())->toBe(1); // head updated: subsetter always emits long
+    expect($subsetFont->advanceOf($fixture['aGid']))->toBe($font->advanceOf($fixture['aGid']));
+    expect($subsetFont->advanceOf($fixture['bGid']))->toBe($font->advanceOf($fixture['bGid']));
+    expect($subsetFont->glyphDataFor($fixture['aGid']))->not->toBe('');
+    expect($subsetFont->glyphDataFor($fixture['bGid']))->not->toBe('');
+    expect($subsetFont->glyphDataFor($fixture['unusedFillerGid']))->toBe(''); // dropped, as usual
+});
+
+it('subsets 200 real glyph ids from DejaVuSans in under 500ms (locaOffsets memoization guard)', function (): void {
+    $font = TtfFont::fromFile(fontSubsetterFixturesDir() . '/DejaVuSans.ttf');
+    $gids = range(1, 200);
+
+    $start = microtime(true);
+    $subsetBytes = (new FontSubsetter())->subset($font, $gids);
+    $elapsedMs = (microtime(true) - $start) * 1000;
+
+    expect($subsetBytes)->not->toBe('');
+    expect($elapsedMs)->toBeLessThan(500.0);
 });
 
 it('skips a whitelisted table silently when the source font does not have it', function (): void {

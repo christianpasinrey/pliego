@@ -26,9 +26,10 @@ final readonly class Painter
             if ($fragment instanceof BoxFragment && $fragment->background !== null) {
                 $canvas->fillRect($fragment->rect, $fragment->background);
             } elseif ($fragment instanceof TextFragment) {
-                // TextMeasurer emite un TextFragment con text === '' y rect->width === 0.0 para
-                // la línea vacía que deja un <br> forzado — nada que pintar (ni fillText, ni
-                // underline, ni por tanto registro de cara/glifos vía Canvas::fillText()).
+                // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
+                // rect->width === 0.0 para la línea vacía que deja un <br> forzado — nada que
+                // pintar (ni fillText, ni underline, ni por tanto registro de cara/glifos vía
+                // Canvas::fillText()).
                 if ($fragment->text === '' && $fragment->rect->width === 0.0) {
                     continue;
                 }

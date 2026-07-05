@@ -93,31 +93,31 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$finder\.$#'
 			identifier: property.notFound
-			count: 9
+			count: 10
 			path: tests/Unit/Layout/BreakFinderTest.php
 
 		-
 			message: '#^Cannot access offset 0 on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
-			count: 6
+			count: 8
 			path: tests/Unit/Layout/BreakFinderTest.php
 
 		-
 			message: '#^Cannot access property \$byteOffset on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 4
 			path: tests/Unit/Layout/BreakFinderTest.php
 
 		-
 			message: '#^Cannot access property \$mandatory on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 4
 			path: tests/Unit/Layout/BreakFinderTest.php
 
 		-
 			message: '#^Cannot call method find\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 8
+			count: 9
 			path: tests/Unit/Layout/BreakFinderTest.php
 
 		-
