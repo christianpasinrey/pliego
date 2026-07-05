@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Doc — Motor HTML/CSS → PDF 100% PHP</title>
+<script src="./assets/mermaid.min.js"></script>
+<script src="./assets/chart.umd.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { curve: 'basis' } });
+</script>
+<style>
+  :root {
+    --bg: #fdfcfa; --fg: #1f2328; --muted: #59636e; --accent: #8b5e34;
+    --card: #ffffff; --border: #e3e0da; --code-bg: #f4f2ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --fg: #e6e3de; --muted: #9aa4af; --accent: #d8a878;
+            --card: #1c1f24; --border: #2c3038; --code-bg: #22262c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 980px; padding: 3rem 1.5rem 6rem;
+         font: 16px/1.65 system-ui, 'Segoe UI', sans-serif; background: var(--bg); color: var(--fg); }
+  h1 { font-size: 2rem; line-height: 1.2; margin-bottom: .25rem; }
+  h2 { margin-top: 3rem; padding-bottom: .4rem; border-bottom: 2px solid var(--accent); font-size: 1.4rem; }
+  h3 { margin-top: 1.8rem; font-size: 1.1rem; }
+  .meta { color: var(--muted); font-size: .9rem; margin-bottom: 2rem; }
+  .meta strong { color: var(--fg); }
+  code, pre { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: .88em; }
+  code { background: var(--code-bg); padding: .12em .35em; border-radius: 4px; }
+  pre:not(.mermaid) { background: var(--code-bg); border: 1px solid var(--border);
+        border-radius: 8px; padding: 1rem; overflow-x: auto; }
+  pre:not(.mermaid) code { background: none; padding: 0; }
+  pre.mermaid { display: flex; justify-content: center; background: var(--card);
+        border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .card { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+          border-radius: 8px; padding: 1rem 1.2rem; margin: 1.2rem 0; }
+  .card h4 { margin: 0 0 .4rem; }
+  .chart-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+                padding: 1.2rem; margin: 1.2rem 0; }
+  .tag { display: inline-block; font-size: .75rem; font-weight: 600; padding: .1em .6em;
+         border-radius: 999px; background: var(--accent); color: var(--bg); margin-right: .4em; }
+  ul { padding-left: 1.3rem; }
+  li { margin: .3rem 0; }
+  .toc { columns: 2; font-size: .92rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Motor HTML/CSS → PDF en PHP puro</h1>
+<p class="meta">
+  <strong>Design doc</strong> · 2026-07-05 · Estado: <strong>aprobado en brainstorming, pendiente de revisión final del spec</strong><br>
+  Package <code>pliego/pliego</code> · framework-agnostic · PHP ≥ 8.4 · Namespace <code>Pliego\</code>
+</p>
+
+<nav class="toc card">
+  <strong>Índice</strong>
+  <ol>
+    <li><a href="#vision">Visión y alcance</a></li>
+    <li><a href="#decisiones">Decisiones clave (las 4 apuestas)</a></li>
+    <li><a href="#arquitectura">Arquitectura</a></li>
+    <li><a href="#componentes">Componentes del package</a></li>
+    <li><a href="#dataflow">Flujo de datos de un render</a></li>
+    <li><a href="#estandares">Estándares de código y acoplamiento</a></li>
+    <li><a href="#errores">Manejo de errores</a></li>
+    <li><a href="#testing">Estrategia de testing</a></li>
+    <li><a href="#milestones">Milestones</a></li>
+    <li><a href="#fuera">Fuera de alcance v1</a></li>
+    <li><a href="#riesgos">Riesgos y mitigaciones</a></li>
+    <li><a href="#referencias">Referencias</a></li>
+  </ol>
+</nav>
+
+<h2 id="vision">1 · Visión y alcance</h2>
+<p>Motor de renderizado HTML/CSS→PDF <strong>100% PHP</strong>: sin binarios externos, sin Node, sin navegador headless. Instalable con <code>composer require</code> en cualquier hosting. Ambición final: renderizar páginas <strong>Bootstrap y Tailwind reales</strong>. El desarrollo es por <strong>hitos de capacidad CSS</strong>: cada milestone deja el motor útil, testeado y publicable.</p>
+<ul>
+  <li><strong>Política de dependencias:</strong> PHP 8.4+ y extensiones estándar (<code>dom</code>, <code>mbstring</code>; <code>gd</code>/<code>imagick</code> opcionales para imágenes). Una sola dependencia Composer inicial: <code>sabberworm/php-css-parser</code>, aislada tras interfaz y sustituible.</li>
+  <li><strong>Distribución:</strong> core framework-agnostic; adapter Laravel (facade, service provider, <code>->view()</code>) como package separado tras M2. Desarrollo y pruebas con un <code>index.php</code> playground + CLI.</li>
+  <li><strong>Tipografía v1:</strong> escrituras latinas con kerning. Shaping complejo (árabe, índico) explícitamente fuera hasta tener motor estable.</li>
+  <li><strong>Sin JavaScript:</strong> el motor renderiza documentos, no ejecuta scripts. Nunca en alcance.</li>
+</ul>
+
+<h2 id="decisiones">2 · Decisiones clave — las cuatro apuestas</h2>
+<p>Derivadas de primeros principios (un PDF no tiene layout: solo posiciones absolutas; lo irreducible es <em>medir</em> y <em>fragmentar</em>) y de las capacidades diferenciales de PHP frente a los incumbentes (dompdf, WeasyPrint):</p>
+
+<div class="card"><h4><span class="tag">1</span>CSS compilado a PHP, no interpretado</h4>
+En servidor, el stylesheet es estático entre deploys. Un <strong>compilador</strong> convierte CSS en un <em>matcher</em> PHP plano (selectores como condicionales generados, especificidad pre-resuelta) que opcache mantiene caliente — el modelo Blade aplicado a CSS. Bootstrap se distribuye ya precompilado dentro del package. Modo interpretado para desarrollo. La interfaz <code>StyleSource</code> asume ambos modos desde el día 1.</div>
+
+<div class="card"><h4><span class="tag">2</span>Streaming de páginas con generators</h4>
+El paginador es un generator (<code>yield Page</code>): cada página terminada se pinta, se serializa al PDF y se libera. <strong>Memoria O(página), no O(documento)</strong>. Restricción asumida: no se reabre una página emitida; los contadores hacia delante (<code>página X de Y</code>) usan placeholders parcheados al cierre del fichero.</div>
+
+<div class="card"><h4><span class="tag">3</span>Kernel mínimo + layouts como plugins</h4>
+El kernel solo conoce la interfaz <code>FormattingContext</code> (medir tamaños intrínsecos, colocar hijos, fragmentar). Block flow, inline, tablas, flex, grid: cada uno es un módulo independiente que implementa esa interfaz. Es API pública de extensión y el mapa natural para desarrollo subagent-driven con un agente por subsistema.</div>
+
+<div class="card"><h4><span class="tag">4</span>IR lista para plantillas (v2, solo diseño ahora)</h4>
+La representación intermedia entre layout y paint (display list de primitivas posicionadas) se diseña separable en parte estática + huecos dinámicos, para que una v2 pueda pre-compilar el layout de plantillas repetitivas. En v1 no se implementa: solo se evita cerrarle la puerta.</div>
+
+<div class="card"><h4>Donde deliberadamente NO se innova</h4>
+Los algoritmos de layout siguen las specs W3C al pie de la letra (line breaking, flex resolution, cascade). Las specs garantizan terminación, predictibilidad y el resultado correcto contra el que todos comparan. La innovación está en la arquitectura que los rodea.</div>
+
+<h2 id="arquitectura">3 · Arquitectura</h2>
+<p>Dos tiempos: <strong>compile time</strong> (una vez por deploy) y <strong>render time</strong> (cada documento).</p>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph CT["COMPILE TIME — una vez por deploy"]
+    css["CSS usuario / Bootstrap"] --> compiler["CssCompiler<br/>(AST → código PHP)"]
+    compiler --> matcher["matcher.php<br/>(opcache)"]
+  end
+  subgraph RT["RENDER TIME — cada documento"]
+    html["HTML"] --> dom["\Dom\HTMLDocument<br/>(parser HTML5 nativo)"]
+    dom --> resolver["StyleResolver<br/>cascade + herencia"]
+    matcher --> resolver
+    tw["TailwindJit<br/>clase → declaraciones"] --> resolver
+    resolver --> boxes["BoxTreeBuilder"]
+    boxes --> kernel["LayoutKernel"]
+    kernel <--> fc["FormattingContext plugins<br/>block · inline · table · flex · …"]
+    fc <--> text["Text/<br/>métricas · line breaking"]
+    kernel --> pag["Paginator<br/>(generator: yield Page)"]
+    pag --> paint["Painter → display list (IR)"]
+    paint --> writer["PdfWriter (streaming)"]
+    writer --> out["PDF<br/>memoria O(página)"]
+  end
+</pre>
+
+<h2 id="componentes">4 · Componentes del package</h2>
+
+<pre><code>src/
+├── Css/          Tokenizer/parser, CssCompiler (AST → matcher.php),
+│                 cascade, specificity, computed values, unidades
+├── Style/        Fuentes de estilo enchufables: RawCss, BootstrapPreset
+│                 (precompilado), TailwindJit
+├── Dom/          Envoltorio fino sobre \Dom\HTMLDocument
+├── Box/          Box tree: display, cajas anónimas, white-space collapsing
+├── Layout/       LayoutKernel + FormattingContext (interfaz pública)
+│   └── Contexts/ BlockFlow, InlineFlow, Table, Flex, … (uno por hito)
+├── Text/         Fuentes TTF/OTF, métricas, kerning, line breaking
+│                 (UAX#14 subset), subsetting
+├── Page/         Paginator (generator), @page, counters, headers/footers
+├── Paint/        Display list (IR): primitivas posicionadas
+├── Pdf/          Modelo de objetos PDF, writer streaming, embed de fuentes
+├── Image/        Decodificadores (JPEG passthrough, PNG; gd opcional)
+└── Engine.php    API pública</code></pre>
+
+<h3>API pública mínima v1</h3>
+<pre><code>$engine = Engine::make()
+    ->stylesheet('app.css')          // o ->bootstrap() o ->tailwind()
+    ->paper('a4', margins: '2cm');
+
+$engine->render($html)->save('out.pdf');   // o ->stream() para HTTP</code></pre>
+
+<h3>Interfaces en las costuras (solo donde hay &gt;1 implementación real)</h3>
+<table>
+  <tr><th>Interfaz</th><th>Implementaciones</th><th>Propósito</th></tr>
+  <tr><td><code>FormattingContext</code></td><td>BlockFlow, InlineFlow, Table, Flex…</td><td>Medir intrínsecos, colocar hijos, fragmentar</td></tr>
+  <tr><td><code>StyleSource</code></td><td>RawCss (interpretado), CompiledCss, BootstrapPreset, TailwindJit</td><td>Elemento → declaraciones aplicables</td></tr>
+  <tr><td><code>Canvas</code></td><td>PdfCanvas; futuro PngCanvas (previews)</td><td>Destino de la display list</td></tr>
+  <tr><td><code>FontLoader</code></td><td>TtfLoader; futuro WoffLoader</td><td>Fichero → métricas + programa embebible</td></tr>
+  <tr><td><code>ImageDecoder</code></td><td>JpegPassthrough, PngDecoder, GdDecoder (opcional)</td><td>Bytes → XObject PDF</td></tr>
+</table>
+
+<h2 id="dataflow">5 · Flujo de datos de un render</h2>
+
+<pre class="mermaid">
+sequenceDiagram
+  participant E as Engine
+  participant D as Dom
+  participant S as StyleResolver
+  participant B as BoxTreeBuilder
+  participant K as LayoutKernel
+  participant P as Paginator
+  participant W as PdfWriter
+  E->>D: parse del HTML, tolerante por spec HTML5
+  E->>S: resolver estilos con matcher compilado + cascade
+  S-->>E: ComputedStyle por nodo, inmutable y con unidades resueltas
+  E->>B: construir box tree con cajas anónimas y runs de texto
+  E->>K: layout delegando en cada FormattingContext
+  K-->>P: árbol de fragmentos con geometría absoluta
+  loop por cada página del generator
+    P->>P: fragmentar respetando page-break
+    P->>W: yield Page, paint y emisión de operadores PDF
+    Note over P,W: memoria de la página liberada tras el yield
+  end
+  W->>W: cierre del fichero, parcheo de placeholders y ensamblado del xref
+</pre>
+
+<h2 id="estandares">6 · Estándares de código y disciplina de acoplamiento</h2>
+<p>Requisito de primer orden: si un dev clona el repo, debe encontrar el código <em>exquisito</em> — sencillo de leer, con abstracciones sólidas y acoplamiento mínimo verificado por CI.</p>
+<ul>
+  <li><strong>PER-CS 2.0 + PSR-4</strong>, <code>declare(strict_types=1)</code> universal, PHPStan nivel máximo y php-cs-fixer en CI <em>desde el commit 1</em>.</li>
+  <li><strong>Inmutabilidad por defecto:</strong> <code>ComputedStyle</code>, geometrías, fragmentos y primitivas de paint son value objects <code>final readonly</code>. Los datos fluyen hacia delante; ninguna etapa muta lo que produjo la anterior.</li>
+  <li><strong>Dependencias explícitas por constructor, cero contenedor DI en el core</strong> (el container llega en el adapter Laravel).</li>
+  <li><strong>Regla de dependencia verificada con deptrac en CI:</strong> el acoplamiento bajo es un test que falla, no una intención.</li>
+  <li><strong>Código = spec anotada:</strong> cada algoritmo referencia en docblock la sección W3C que implementa y usa el vocabulario de la spec (<code>hypotheticalMainSize</code>, no <code>$tmp</code>).</li>
+</ul>
+
+<pre class="mermaid">
+flowchart LR
+  Css --> Style --> Box --> Layout --> Page --> Paint --> Pdf
+  Dom --> Box
+  Text --> Layout
+  Text --> Pdf
+  Image --> Paint
+  classDef mod fill:#8b5e3422,stroke:#8b5e34;
+  class Css,Style,Dom,Box,Layout,Text,Page,Paint,Pdf,Image mod
+</pre>
+<p class="meta">Flechas = flujo de datos por el pipeline. Las dependencias de código solo pueden seguir estas mismas aristas (el consumidor depende del productor, siempre contra interfaces, nunca clases concretas). <code>Layout/</code> no sabe que <code>Pdf/</code> existe; <code>Css/</code> no sabe qué es una caja. deptrac falla el build ante cualquier arista nueva.</p>
+
+<h2 id="errores">7 · Manejo de errores</h2>
+<table>
+  <tr><th>Situación</th><th>Comportamiento</th></tr>
+  <tr><td>CSS desconocido/inválido</td><td>Se descarta la declaración y sigue (per spec). Cada descarte queda en <code>RenderReport</code> (warnings estructurados). Modo <code>strict()</code>: excepción al primer descarte.</td></tr>
+  <tr><td>HTML roto</td><td>Lo absorbe el parser HTML5 por spec. Nunca es error.</td></tr>
+  <tr><td>Fuente/glifo ausente</td><td>Cadena de fallback declarativa; glifo de sustitución + warning. Nunca excepción a mitad de página.</td></tr>
+  <tr><td>HTML patológico</td><td>Límites configurables <code>maxPages</code> / <code>maxRenderTime</code>; excepción tipada al superarlos.</td></tr>
+  <tr><td>Errores internos</td><td>Excepciones propias (<code>LayoutException</code>, <code>FontException</code>…) con contexto del nodo causante.</td></tr>
+</table>
+
+<h2 id="testing">8 · Estrategia de testing</h2>
+<ol>
+  <li><strong>Unitaria por subsistema (Pest):</strong> cada <code>FormattingContext</code> se testea con árboles de cajas sintéticos, sin HTML ni PDF de por medio.</li>
+  <li><strong>Golden files de geometría:</strong> corpus HTML → volcado JSON del árbol de fragmentos comparado contra snapshot. Los bugs de layout son diffs de números.</li>
+  <li><strong>Chrome como oráculo (diferencial, solo CI):</strong> mismo corpus por Chrome print-to-PDF; se extraen posiciones de texto de ambos PDFs y se comparan con tolerancia. Chrome no es dependencia del motor.</li>
+  <li><strong>Validez y rendimiento:</strong> qpdf/verapdf sobre cada PDF generado + benchmarks de memoria que garantizan el O(página) del streaming.</li>
+</ol>
+
+<h2 id="milestones">9 · Milestones</h2>
+
+<pre class="mermaid">
+timeline
+  title Roadmap por hitos de capacidad CSS
+  M0 : Esqueleto andante — pipeline completo mínimo (bloques, texto monoestilo, 1 fuente, colores) → PDF válido
+  M1 : Texto real — inline formatting, line breaking UAX#14, estilos de texto, subsetting
+  M2 : Box model + paginación — backgrounds/borders, multi-página, "@page", headers/footers, counters · → Adapter Laravel
+  M3 : Tablas
+  M4 : Flexbox
+  M5 : Floats y positioning
+  M6 : Bootstrap — preset precompilado pasa corpus diferencial
+  M7 : Tailwind-JIT
+  M8 : Grid + imágenes avanzadas
+</pre>
+
+<div class="chart-wrap">
+  <canvas id="effortChart" height="110"></canvas>
+</div>
+<script>
+new Chart(document.getElementById('effortChart'), {
+  type: 'bar',
+  data: {
+    labels: ['M0 esqueleto','M1 texto','M2 box+pág.','M3 tablas','M4 flex','M5 float/pos','M6 bootstrap','M7 tailwind','M8 grid+img'],
+    datasets: [
+      { label: 'Esfuerzo relativo estimado', data: [3, 4, 3, 3, 4, 3, 2, 2, 4],
+        backgroundColor: '#8b5e34aa', borderColor: '#8b5e34', borderWidth: 1 },
+      { label: 'Cobertura CSS acumulada (%)', data: [10, 25, 40, 52, 68, 80, 85, 90, 100],
+        type: 'line', yAxisID: 'y2', borderColor: '#4a7c59', backgroundColor: '#4a7c5933', tension: .3, fill: true }
+    ]
+  },
+  options: {
+    scales: { y: { title: { display: true, text: 'esfuerzo (relativo)' } },
+              y2: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false },
+                    title: { display: true, text: '% cobertura' } } },
+    plugins: { legend: { position: 'bottom' } }
+  }
+});
+</script>
+<p class="meta">Estimaciones relativas para ordenar el trabajo, no compromisos de calendario. M0 valida la arquitectura entera: si algo está mal diseñado, aparece ahí, barato.</p>
+
+<h2 id="fuera">10 · Fuera de alcance v1</h2>
+<ul>
+  <li>Ejecución de JavaScript (nunca en alcance).</li>
+  <li>Shaping de escrituras complejas (árabe, índico) y bidi completo.</li>
+  <li>Pre-compilación de layout de plantillas (v2; la IR queda preparada).</li>
+  <li>SVG completo (subset básico se evaluará en M8), animaciones/transiciones, media queries distintas de <code>print</code>.</li>
+  <li>Accesibilidad PDF/UA y PDF/A (candidatas post-v1; el modelo de objetos no las bloquea).</li>
+</ul>
+
+<h2 id="riesgos">11 · Riesgos y mitigaciones</h2>
+<table>
+  <tr><th>Riesgo</th><th>Mitigación</th></tr>
+  <tr><td>Rendimiento de PHP en layout de documentos grandes</td><td>Benchmarks desde M0 en CI; value objects ligeros; streaming ya reduce memoria; opcache+JIT; los documentos tienen miles de cajas, no millones.</td></tr>
+  <tr><td>Line breaking / inline es el subsistema más difícil</td><td>M1 dedicado en exclusiva; UAX#14 tiene suite de tests oficial de Unicode reutilizable como fixture.</td></tr>
+  <tr><td><code>sabberworm</code> se queda corto para el compilador</td><td>Aislado tras interfaz en <code>Css/</code>; sustituible por tokenizer propio sin tocar otros subsistemas.</td></tr>
+  <tr><td>Scope creep hacia "ser un navegador"</td><td>Cada propiedad CSS entra solo por milestone declarado; lo no soportado se ignora con warning en <code>RenderReport</code> (nunca a medias).</td></tr>
+  <tr><td>Divergencia visual respecto a navegadores</td><td>Chrome como oráculo en CI desde M0: la divergencia se mide, no se opina.</td></tr>
+</table>
+
+<h2 id="referencias">12 · Referencias</h2>
+<ul>
+  <li>Specs W3C: CSS 2.2, css-inline-3, css-flexbox-1, css-break-3, css-page-3, css-tables-3.</li>
+  <li>Unicode UAX#14 (line breaking) — incluye test suite oficial.</li>
+  <li>PDF: ISO 32000-1 (PDF 1.7).</li>
+  <li>Prior art: WeasyPrint (arquitectura de referencia, Python), dompdf (font-lib y corpus de tests), typeset.sh (prueba de viabilidad comercial en PHP), LayoutNG de Chrome (inspiración del kernel+contexts).</li>
+  <li>Parser HTML5 nativo: <code>\Dom\HTMLDocument</code> (PHP 8.4, RFC "New DOM API").</li>
+</ul>
+
+</body>
+</html>
