@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Layout;
 
 use Pliego\Box\BlockBox;
+use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
@@ -43,6 +44,9 @@ final readonly class BlockFlowContext implements FormattingContext
                 }
                 $contentBottom = $cursorY;
                 continue;
+            }
+            if ($child instanceof LineBreakRun) {
+                continue; // T6 lo consume
             }
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;

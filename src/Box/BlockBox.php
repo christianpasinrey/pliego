@@ -8,7 +8,7 @@ use Pliego\Style\ComputedStyle;
 
 final readonly class BlockBox
 {
-    /** @param list<BlockBox|TextRun> $children */
+    /** @param list<BlockBox|TextRun|LineBreakRun> $children */
     public function __construct(
         public ComputedStyle $style,
         public array $children,
