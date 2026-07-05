@@ -22,6 +22,13 @@ const KITCHEN_SINK_CSS = <<<'CSS'
 p > span { color: red }
 p { float: left; line-height: 1.5 }
 CSS;
+// NOTA M1-T6: `p { line-height: 1.5 }` ya se parseaba desde M1-T2 pero, hasta InlineFlowContext
+// (M1-T6), el layout SIEMPRE usaba la fórmula fija 1.2×font-size ignorando el valor declarado
+// (bug conocido, no documentado explícitamente hasta ahora). InlineFlowContext lo aplica de
+// verdad (altura de línea = max(lineHeightPx declarado, 1.2×font-size)); con 140 <p> a 24px de
+// alto de línea (antes 19.2px) el contenido total crece lo suficiente como para desbordar una
+// página más: 3 -> 4. Verificado a mano: 140×24 + paddings ≈ 3458px de contenido / ≈1026.5px de
+// alto de página ≈ 3.37 -> 4 páginas (antes 140×19.2 + paddings ≈ 2786px ≈ 2.71 -> 3 páginas).
 
 function kitchenSinkHtml(int $paragraphs): string
 {
@@ -47,15 +54,15 @@ function expectedGlyphHex(string $text): string
     return $hex;
 }
 
-it('renders nested backgrounds, overflows to 3 pages, warns on exactly 3 unsupported declarations, hides display:none text and keeps accents', function () {
+it('renders nested backgrounds, overflows to 4 pages, warns on exactly 3 unsupported declarations, hides display:none text and keeps accents', function () {
     $path = sys_get_temp_dir() . '/pliego-kitchen-sink.pdf';
     $report = Engine::make()->stylesheet(KITCHEN_SINK_CSS)->render(kitchenSinkHtml(140))->save($path);
     $pdf = (string) file_get_contents($path);
 
     expect($pdf)->toStartWith('%PDF-1.7');
 
-    // Overflow a 3 páginas.
-    expect($report->pageCount)->toBe(3);
+    // Overflow a 4 páginas (subió de 3 a 4 en M1-T6, ver nota abajo).
+    expect($report->pageCount)->toBe(4);
 
     // Exactamente 3 declaraciones CSS no soportadas: selector combinador, float y width:%.
     // line-height ya no genera warning: M1-T2 le da soporte (ver p { line-height: 1.5 } arriba).

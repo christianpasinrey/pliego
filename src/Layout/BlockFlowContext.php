@@ -8,16 +8,29 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
 use Pliego\Layout\Fragment\BoxFragment;
-use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
+use Pliego\Text\FontCatalog;
 
 /**
  * CSS 2.2 §9.4.1 (block formatting) + §10.3.3 (anchos) simplificado para M0:
- * sin margin collapsing, sin floats, line breaking greedy por espacios.
+ * sin margin collapsing, sin floats.
+ *
+ * M1-T6: el line breaking multi-run/multi-cara se delega ENTERAMENTE a InlineFlowContext
+ * (M0 tenía aquí un wrapText() de una sola cara/estilo, ya eliminado). Este contexto solo se
+ * encarga de agrupar tramos consecutivos de TextRun|LineBreakRun (pueden aparecer intercalados
+ * con hijos BlockBox, ver BoxTreeBuilder::buildBlock) y pasarle cada grupo íntegro al inline
+ * context de una vez.
  */
 final readonly class BlockFlowContext implements FormattingContext
 {
-    public function __construct(private TextMeasurer $measurer) {}
+    private InlineFlowContext $inline;
+
+    public function __construct(
+        private TextMeasurer $measurer,
+        private FontCatalog $catalog,
+    ) {
+        $this->inline = new InlineFlowContext($measurer, $catalog);
+    }
 
     public function layout(BlockBox $box, Rect $containingBlock): BoxFragment
     {
@@ -36,18 +49,26 @@ final readonly class BlockFlowContext implements FormattingContext
         $contentBottom = $cursorY;
 
         $children = [];
+        /** @var list<TextRun|LineBreakRun> $pendingRuns secuencia inline contigua pendiente de layout */
+        $pendingRuns = [];
+        $flushInline = function () use (&$pendingRuns, &$children, &$cursorY, &$contentBottom, $contentX, $contentWidth, $style): void {
+            if ($pendingRuns === []) {
+                return;
+            }
+            foreach ($this->inline->layout($pendingRuns, $contentX, $cursorY, $contentWidth, $style) as $line) {
+                $children[] = $line;
+                $cursorY = $line->rect->bottom();
+            }
+            $contentBottom = $cursorY;
+            $pendingRuns = [];
+        };
+
         foreach ($box->children as $child) {
-            if ($child instanceof TextRun) {
-                foreach ($this->wrapText($child, $contentX, $cursorY, $contentWidth) as $line) {
-                    $children[] = $line;
-                    $cursorY = $line->rect->bottom();
-                }
-                $contentBottom = $cursorY;
+            if ($child instanceof TextRun || $child instanceof LineBreakRun) {
+                $pendingRuns[] = $child;
                 continue;
             }
-            if ($child instanceof LineBreakRun) {
-                continue; // T6 lo consume
-            }
+            $flushInline();
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;
             // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la
@@ -56,6 +77,7 @@ final readonly class BlockFlowContext implements FormattingContext
             $contentBottom = $childFragment->rect->bottom();
             $cursorY = $contentBottom + $child->style->marginBottom->px;
         }
+        $flushInline();
 
         $height = ($contentBottom - $y) + $style->paddingBottom->px;
         return new BoxFragment(
@@ -63,42 +85,5 @@ final readonly class BlockFlowContext implements FormattingContext
             $style->backgroundColor,
             $children,
         );
-    }
-
-    /** @return list<TextFragment> */
-    private function wrapText(TextRun $run, float $x, float $y, float $availableWidth): array
-    {
-        $fontSize = $run->style->fontSizePx;
-        $lineHeight = $this->measurer->lineHeight($fontSize);
-        $ascent = $this->measurer->ascent($fontSize);
-        $spaceWidth = $this->measurer->widthOf(' ', $fontSize);
-        $lines = [];
-        $currentWords = [];
-        $currentWidth = 0.0;
-        $flush = function () use (&$lines, &$currentWords, &$currentWidth, $x, &$y, $lineHeight, $ascent, $fontSize, $run): void {
-            $text = implode(' ', $currentWords);
-            $lines[] = new TextFragment(
-                new Rect($x, $y, $currentWidth, $lineHeight),
-                $text,
-                $y + ($lineHeight - $fontSize) / 2 + $ascent,
-                $fontSize,
-                $run->style->color,
-            );
-            $y += $lineHeight;
-            $currentWords = [];
-            $currentWidth = 0.0;
-        };
-        foreach (explode(' ', $run->text) as $word) {
-            $wordWidth = $this->measurer->widthOf($word, $fontSize);
-            $projected = $currentWords === [] ? $wordWidth : $currentWidth + $spaceWidth + $wordWidth;
-            if ($projected > $availableWidth && $currentWords !== []) {
-                $flush();
-                $projected = $wordWidth;
-            }
-            $currentWords[] = $word;
-            $currentWidth = $projected;
-        }
-        $flush();
-        return $lines;
     }
 }

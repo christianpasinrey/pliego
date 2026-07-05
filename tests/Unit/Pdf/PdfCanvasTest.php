@@ -32,14 +32,14 @@ function renderOnePage(callable $draw): string
 
 it('embeds a Type0 Identity-H font with the used glyph widths', function () {
     $pdf = renderOnePage(function (PdfCanvas $canvas): void {
-        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 0)));
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 0), 'default:400:normal', false));
     });
     expect($pdf)->toContain('/Subtype /Type0')->toContain('/Encoding /Identity-H')
         ->toContain('/Subtype /CIDFontType2')->toContain('/FontFile2');
 });
 it('writes text as hex CIDs of the glyph ids', function () {
     $pdf = renderOnePage(function (PdfCanvas $canvas): void {
-        $canvas->fillText(new TextFragment(new Rect(10, 10, 20, 19.2), 'A', 24.4, 16.0, new Color(0, 0, 0)));
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 20, 19.2), 'A', 24.4, 16.0, new Color(0, 0, 0), 'default:400:normal', false));
     });
     $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
     $expectedHex = sprintf('%04X', $font->glyphId(0x41));

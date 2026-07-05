@@ -20,7 +20,7 @@ use Pliego\Pdf\PdfCanvas;
 use Pliego\Pdf\PdfWriter;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\StyleResolver;
-use Pliego\Text\TtfFont;
+use Pliego\Text\FontCatalog;
 
 final class Engine
 {
@@ -78,17 +78,24 @@ final class Engine
             $styles = (new StyleResolver([new CssStyleSource($parseResult)]))->resolve($document);
             $boxTree = (new BoxTreeBuilder())->build($document, $styles);
 
-            $font = TtfFont::fromFile($this->fontPath);
-            $measurer = new TextMeasurer($font);
+            // fontFile() registra/sobreescribe la cara regular de la familia 'default'; el resto
+            // de caras (bold/italic/bold-italic) siguen siendo las builtin de withDefaults().
+            $catalog = FontCatalog::withDefaults();
+            $catalog->register('default', 400, false, $this->fontPath);
+            $measurer = new TextMeasurer();
             $margin = $this->margin->px;
             $contentWidth = $this->paper->widthPx() - 2 * $margin;
             $contentHeight = $this->paper->heightPx() - 2 * $margin;
-            $rootFragment = (new BlockFlowContext($measurer))
+            $rootFragment = (new BlockFlowContext($measurer, $catalog))
                 ->layout($boxTree, new Rect(0.0, 0.0, $contentWidth, INF));
 
             $writer = new PdfWriter($stream);
             $writer->begin();
-            $embedder = new FontEmbedder($writer, $font, 'PliegoDefault');
+            // PdfCanvas/FontEmbedder siguen siendo de UNA sola cara (M1-T6): se embebe solo la
+            // regular por defecto e IGNORAN faceKey; el texto en negrita se pinta temporalmente
+            // con los glifos de la regular (M1-T9 completa el embedding multi-cara).
+            $defaultFace = $catalog->select('default', 400, false);
+            $embedder = new FontEmbedder($writer, $defaultFace->font, 'PliegoDefault');
             $canvas = new PdfCanvas($writer, $embedder, $this->paper, $margin, $margin);
             $painter = new Painter();
             $pageCount = 0;

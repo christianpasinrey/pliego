@@ -127,14 +127,122 @@ parameters:
 			path: tests/Unit/Layout/BreakFinderTest.php
 
 		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
+			identifier: property.notFound
+			count: 12
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
 			identifier: property.notFound
-			count: 6
+			count: 15
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\*" between int\<0, max\> and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between \(array\|float\|int\) and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between float and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\-" between 200\.0 and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\-" between mixed and 16\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method ascent\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method lineHeight\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method select\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 3
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
+			identifier: argument.type
+			count: 9
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
+			identifier: argument.type
+			count: 9
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$bold\.$#'
+			identifier: property.notFound
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
+			identifier: property.notFound
+			count: 11
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$regular\.$#'
+			identifier: property.notFound
+			count: 9
 			path: tests/Unit/Layout/TextMeasurerTest.php
 
 		-
 			message: '#^Binary operation "\*" between mixed and 2 results in an error\.$#'
 			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Cannot call method ascent\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Cannot call method descent\(\) on mixed\.$#'
+			identifier: method.nonObject
 			count: 1
 			path: tests/Unit/Layout/TextMeasurerTest.php
 
@@ -147,13 +255,13 @@ parameters:
 		-
 			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 4
+			count: 6
 			path: tests/Unit/Layout/TextMeasurerTest.php
 
 		-
 			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeGreaterThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
 			identifier: argument.type
-			count: 1
+			count: 2
 			path: tests/Unit/Layout/TextMeasurerTest.php
 
 		-

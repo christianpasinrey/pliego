@@ -30,7 +30,7 @@ it('paints backgrounds and text in page order', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), []),
-        new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.0, 16.0, new Color(0, 0, 0)),
+        new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
     new Painter()->paint($page, $canvas);
     expect($canvas->calls)->toBe(['rect(0,0)', 'text(Hola)']);
