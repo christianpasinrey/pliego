@@ -17,6 +17,7 @@ use Pliego\Page\Paginator;
 use Pliego\Page\PaperSize;
 use Pliego\Paint\Painter;
 use Pliego\Pdf\FontRegistry;
+use Pliego\Pdf\MarginBoxPainter;
 use Pliego\Pdf\PdfCanvas;
 use Pliego\Pdf\PdfWriter;
 use Pliego\Style\CssStyleSource;
@@ -130,13 +131,32 @@ final class Engine
             $fonts = new FontRegistry($writer, $catalog);
             $canvas = new PdfCanvas($writer, $fonts, $this->paper, $marginLeft, $marginTop);
             $painter = new Painter($catalog);
+            // M2-T7: margin boxes with counter(pages) can't be painted while streaming (the total
+            // page count is only known once every page is laid out) — see MarginBoxPainter's
+            // docblock for the deferred-XObject design and PdfWriter's for the ordering contract
+            // this loop must respect (writeDeferred() BEFORE flushAll() BEFORE finish()).
+            $marginBoxPainter = new MarginBoxPainter(
+                $writer,
+                $fonts,
+                $catalog,
+                $measurer,
+                $this->paper,
+                $marginTop,
+                $marginRight,
+                $marginBottom,
+                $marginLeft,
+            );
             $pageCount = 0;
             foreach ((new Paginator($contentHeight))->paginate($rootFragment) as $page) {
                 $canvas->beginPage();
                 $painter->paint($page, $canvas);
+                if ($pageRule !== null) {
+                    $marginBoxPainter->paintPage($pageRule, $canvas, $page->number);
+                }
                 $canvas->endPage();
                 $pageCount++;
             }
+            $writer->writeDeferred($pageCount);
             $fonts->flushAll();
             $writer->finish();
             return new RenderReport($warnings, $pageCount);
