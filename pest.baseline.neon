@@ -20,3 +20,19 @@ parameters:
           path: tests/Unit/Style/*.php
         - identifier: property.nonObject
           path: tests/Unit/Style/*.php
+        - identifier: property.nonObject
+          path: tests/Unit/Layout/BlockFlowContextTest.php
+        - identifier: argument.type
+          path: tests/Unit/Layout/BlockFlowContextTest.php
+        - identifier: binaryOp.invalid
+          path: tests/Unit/Layout/BlockFlowContextTest.php
+        - identifier: missingType.iterableValue
+          path: tests/Unit/Layout/BlockFlowContextTest.php
+        - identifier: property.notFound
+          path: tests/Unit/Layout/TextMeasurerTest.php
+        - identifier: method.nonObject
+          path: tests/Unit/Layout/TextMeasurerTest.php
+        - identifier: argument.type
+          path: tests/Unit/Layout/TextMeasurerTest.php
+        - identifier: binaryOp.invalid
+          path: tests/Unit/Layout/TextMeasurerTest.php
