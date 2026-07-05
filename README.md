@@ -68,6 +68,16 @@ custom line-height, multi-face font embedding with subsetting, and
 - `text-align: justify` is reported as a warning rather than silently
   approximated.
 - Unsupported CSS is reported as non-fatal warnings, not rendering failures.
+- A unitless `line-height` is resolved to px against the declaring element's
+  own `font-size` and inherited by descendants as that already-resolved px
+  value, not as the unitless multiplier — unlike real CSS, where each
+  descendant would re-resolve the inherited multiplier against its own
+  `font-size`. A descendant with a different `font-size` than its ancestor
+  will therefore get the ancestor's resolved line-height in px, not its own
+  multiplier × its own `font-size`.
+- A declared `line-height` below `1.2 × font-size` is floored to
+  `1.2 × font-size` in M1 (the same value used for `normal`), rather than
+  allowing tighter line boxes than the font's normal metric.
 
 ## API example
 

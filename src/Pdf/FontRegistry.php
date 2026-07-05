@@ -69,13 +69,26 @@ final class FontRegistry
      * Nombre base (pre-subset-tag) para /BaseFont: el nombre del fichero TTF sin extensión
      * cuando se conoce (TtfFont::fromFile(), el caso normal vía FontCatalog), o una forma
      * saneada del faceKey en el caso raro de una cara sin ruta de origen (TtfFont::fromString()).
+     * En ambos casos se sanea el resultado (ver sanitizeName()): un /BaseFont es un nombre de
+     * PDF (ISO 32000-1 §7.3.5) y no admite espacios ni delimitadores — un fichero de fuente
+     * como "My Custom Font.ttf" produciría de otro modo un token de PDF inválido.
      */
     private function baseFontNameFor(TtfFont $font, string $faceKey): string
     {
         $path = $font->sourcePath();
         if ($path !== null) {
-            return pathinfo($path, PATHINFO_FILENAME);
+            return $this->sanitizeName(pathinfo($path, PATHINFO_FILENAME));
         }
-        return 'Font' . str_replace([':', '.'], '_', $faceKey);
+        return $this->sanitizeName('Font' . str_replace([':', '.'], '_', $faceKey));
+    }
+
+    /**
+     * Reemplaza cualquier carácter fuera de [A-Za-z0-9_-] (espacios y delimitadores de PDF
+     * como ()<>[]/%# incluidos — ISO 32000-1 §7.3.5, tabla 42) por '-', para que el resultado
+     * sea siempre un nombre de PDF válido de una sola pieza.
+     */
+    private function sanitizeName(string $name): string
+    {
+        return (string) preg_replace('/[^A-Za-z0-9_-]/', '-', $name);
     }
 }

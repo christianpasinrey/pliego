@@ -85,6 +85,18 @@ it('strokes an underline below the baseline for underlined text, using real post
     expect($canvas->calls[1])->toBe($expectedLine);
     expect($expectedY)->toBeGreaterThan($baselineY); // por debajo, no por encima
 });
+it('skips painting an empty forced-line fragment (from <br>) without touching the canvas', function () {
+    // TextMeasurer produce un TextFragment con text === '' y rect->width === 0.0 para la línea
+    // vacía que deja un <br> — no debe generar fillText (ni por tanto registrar la cara/glifos
+    // en el FontRegistry) ni strokeLine, aunque underline sea true.
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [
+        new TextFragment(new Rect(10, 20, 0.0, 19.2), '', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', true),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe([]);
+});
+
 it('falls back to -0.1em/0.05em underline metrics when the font has no post table', function () {
     $path = buildMinimalTtfWithoutPostTable();
     try {

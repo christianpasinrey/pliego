@@ -73,6 +73,20 @@ it('warns on unsupported line-height values', function () {
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
 
+it('rejects negative line-height (px length or unitless multiplier) with a warning', function () {
+    // CSS 2.2 §10.8.1 y consistente con NON_NEGATIVE_PROPERTIES: line-height negativo no
+    // tiene interpretación válida (una altura de línea negativa invertiría el flujo vertical).
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', '-5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', '-1.5');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
 it('parses text-align left/center/right and warns on justify', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('text-align', 'left'))->toBe(['text-align' => 'left']);

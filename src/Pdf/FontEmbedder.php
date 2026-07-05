@@ -108,18 +108,27 @@ final class FontEmbedder
         return $tag;
     }
 
+    /** Máximo de pares por bloque begin/endbfchar (ISO 32000-1 §9.10.3 / CMap spec §7). */
+    private const int MAX_BFCHAR_BLOCK_SIZE = 100;
+
     /**
      * Stream CMap ToUnicode (ISO 32000-1 §9.10.3): una entrada bfchar por glyph id usado,
      * <CID hex4> <UTF-16BE del codepoint>. Referenciado desde el objeto Type0 vía /ToUnicode.
+     * El CMap spec limita cada bloque begin/endbfchar a 100 pares como mucho — con más de 100
+     * glifos distintos usados se emiten varios bloques consecutivos en vez de uno solo con un
+     * header N > 100 (que algunos lectores rechazan).
      */
     private function toUnicodeCMap(): string
     {
         ksort($this->codepointOf);
-        $entries = '';
-        foreach ($this->codepointOf as $glyphId => $codepoint) {
-            $entries .= sprintf("<%04X> <%s>\n", $glyphId, $this->utf16beHex($codepoint));
+        $blocks = '';
+        foreach (array_chunk($this->codepointOf, self::MAX_BFCHAR_BLOCK_SIZE, true) as $chunk) {
+            $entries = '';
+            foreach ($chunk as $glyphId => $codepoint) {
+                $entries .= sprintf("<%04X> <%s>\n", $glyphId, $this->utf16beHex($codepoint));
+            }
+            $blocks .= count($chunk) . " beginbfchar\n" . $entries . "endbfchar\n";
         }
-        $count = count($this->codepointOf);
 
         return "/CIDInit /ProcSet findresource begin\n"
             . "12 dict begin\n"
@@ -130,9 +139,7 @@ final class FontEmbedder
             . "1 begincodespacerange\n"
             . "<0000> <FFFF>\n"
             . "endcodespacerange\n"
-            . "$count beginbfchar\n"
-            . $entries
-            . "endbfchar\n"
+            . $blocks
             . "endcmap\n"
             . "CMapName currentdict /CMap defineresource pop\n"
             . "end\n"

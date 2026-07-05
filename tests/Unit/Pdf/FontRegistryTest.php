@@ -38,6 +38,34 @@ it('emits a ToUnicode CMap with utf16be mappings', function (): void {
         ->toContain("<$gidHex> <00F1>");
 });
 
+it('chunks the ToUnicode CMap into beginbfchar blocks of at most 100 entries', function (): void {
+    // ISO 32000-1 §9.10.3 / CMap spec: cada bloque begin/endbfchar admite como mucho 100
+    // pares — un documento con >100 glifos distintos usados debe partir el CMap en varios
+    // bloques en vez de emitir uno solo con un header N > 100.
+    $catalog = FontCatalog::withDefaults();
+    $pdf = renderRegistryPdf($catalog, function (FontRegistry $registry): void {
+        $embedder = $registry->embedderFor('default:400:normal');
+        $text = '';
+        for ($cp = 0x21; $cp <= 0x7E; $cp++) { // 94 codepoints ASCII imprimibles
+            $text .= mb_chr($cp, 'UTF-8');
+        }
+        for ($cp = 0xA1; $cp <= 0xB0; $cp++) { // +16 Latin-1 Supplement -> 110 glifos distintos
+            $text .= mb_chr($cp, 'UTF-8');
+        }
+        $embedder->encode($text);
+    });
+
+    preg_match_all('/(\d+) beginbfchar/', $pdf, $matches);
+    $blockSizes = array_map('intval', $matches[1]);
+
+    expect($blockSizes)->toHaveCount(2); // 110 entradas -> bloques de 100 + 10
+    foreach ($blockSizes as $size) {
+        expect($size)->toBeLessThanOrEqual(100);
+    }
+    expect(substr_count($pdf, 'beginbfchar'))->toBe(count($blockSizes));
+    expect(substr_count($pdf, 'endbfchar'))->toBe(count($blockSizes));
+});
+
 it('embeds one font object set per used face', function (): void {
     $catalog = FontCatalog::withDefaults();
     $pdf = renderRegistryPdf($catalog, function (FontRegistry $registry): void {
@@ -67,6 +95,35 @@ it('prefixes subset tag in BaseFont', function (): void {
     });
 
     expect($pdf)->toMatch('/\/BaseFont \/[A-Z]{6}\+DejaVuSans\b/');
+});
+
+it('sanitizes non-PDF-name characters out of a BaseFont derived from a spaced filename', function (): void {
+    // Un fichero de fuente con espacios (o delimitadores PDF) en el nombre no puede volcarse
+    // tal cual en /BaseFont: un espacio termina el nombre de forma prematura y produce un
+    // token de PDF inválido (Ghostscript repara el xref sustituyendo la fuente en vez de
+    // fallar ruidosamente, lo que oculta el bug).
+    $sourcePath = __DIR__ . '/../../../resources/fonts/DejaVuSans.ttf';
+    $spacedPath = sys_get_temp_dir() . '/My Custom Font.ttf';
+    copy($sourcePath, $spacedPath);
+    try {
+        $catalog = new FontCatalog();
+        $catalog->register('spaced', 400, false, $spacedPath);
+        $pdf = renderRegistryPdf($catalog, function (FontRegistry $registry): void {
+            $registry->embedderFor('spaced:400:normal')->encode('A');
+        });
+
+        // Cada dict que lleva /BaseFont lo cierra con " /<siguienteClave>" (mismo dict, misma
+        // línea — PdfWriter no pone una clave por línea): capturar hasta ahí de forma no-greedy
+        // recupera el nombre COMPLETO tal y como quedó volcado, espacios incluidos si el bug
+        // sigue presente, en vez de truncarlo en el primer espacio.
+        $count = preg_match_all('/\/BaseFont \/(.*?) \//', $pdf, $matches);
+        expect($count)->toBeGreaterThan(0);
+        foreach ($matches[1] as $baseFontName) {
+            expect($baseFontName)->toMatch('/^[A-Z]{6}\+[A-Za-z0-9_-]+$/');
+        }
+    } finally {
+        unlink($spacedPath);
+    }
 });
 
 it('gives each face its own resource name in creation order', function (): void {

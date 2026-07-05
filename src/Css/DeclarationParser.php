@@ -114,6 +114,8 @@ final class DeclarationParser
     /**
      * CSS 2.2 §10.8.1: número unitless multiplica el font-size del propio elemento
      * (resuelto en ComputedStyle::compute); un valor en px pasa directo; 'normal' → null.
+     * Negativo (unitless o longitud) no tiene interpretación válida — igual que las
+     * propiedades en NON_NEGATIVE_PROPERTIES — así que se descarta con warning.
      *
      * @return array<string, mixed>
      */
@@ -123,11 +125,18 @@ final class DeclarationParser
         if ($keyword === 'normal') {
             return ['line-height' => null];
         }
-        if (preg_match('/^\d+(?:\.\d+)?$/', $value) === 1) {
-            return ['line-height' => (float) $value];
+        if (preg_match('/^-?\d+(?:\.\d+)?$/', $value) === 1) {
+            $multiplier = (float) $value;
+            if ($multiplier < 0.0) {
+                return $this->warn("Negative value not allowed for line-height: $value");
+            }
+            return ['line-height' => $multiplier];
         }
         $length = Length::fromCss($value);
         if ($length !== null) {
+            if ($length->px < 0.0) {
+                return $this->warn("Negative value not allowed for line-height: $value");
+            }
             return ['line-height' => $length];
         }
         return $this->warn("Unsupported line-height: $value");
