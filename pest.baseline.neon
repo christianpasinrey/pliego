@@ -1,0 +1,8 @@
+parameters:
+    ignoreErrors:
+        - identifier: property.notFound
+          path: tests/Unit/Css/*.php
+        - identifier: property.nonObject
+          path: tests/Unit/Css/*.php
+        - identifier: method.nonObject
+          path: tests/Unit/Css/*.php
