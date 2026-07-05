@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M1 — pliego: texto real</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; --ok:#4a7c59; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; --ok:#7fb08a; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.9rem }
+  th,td { border:1px solid var(--border); padding:.45rem .65rem; text-align:left; vertical-align:top }
+  th { background:var(--code-bg) }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+  .step { margin:.9rem 0 .3rem; font-weight:600 }
+  .expected { color:var(--ok); font-size:.88em }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M1 «texto real»</h1>
+<p class="meta">2026-07-05 · Spec: <a href="../design/2026-07-05-php-pdf-engine-design.html">design doc</a> · Plan previo: <a href="./2026-07-05-pliego-m0.html">M0</a> (completado, mergeado, CI verde) · Ejecución: <strong>subagent-driven</strong>, checkboxes para tracking.</p>
+
+<div class="task">
+  <strong>Goal:</strong> texto de calidad tipográfica: inline elements con estilo propio (bold/italic/color/tamaño mezclados en una línea), line breaking UAX#14 (subset), text-align, line-height, underline, subsetting de fuentes (PDFs pequeños) y ToUnicode (copy-paste real). Más el housekeeping diferido por la review final de M0.<br>
+  <strong>Arquitectura:</strong> el aplanado de inlines de M0 muere: los TextRun llevan el ComputedStyle de su elemento inline; un <code>InlineFlowContext</code> nuevo (segundo plugin FormattingContext — la arquitectura kernel+plugins del spec cobrando sentido) construye line boxes multi-run con baseline compartida; <code>FontCatalog</code> selecciona la variante (weight/style) por run; el subsetting conserva los glyph ids (vacía outlines no usados) para no romper Identity-H.<br>
+  <strong>Stack:</strong> igual que M0. Fuentes nuevas: DejaVuSans-Bold.ttf, DejaVuSans-Oblique.ttf, DejaVuSans-BoldOblique.ttf.
+</div>
+
+<h2>Restricciones globales (aplican a TODAS las tareas)</h2>
+<ul>
+  <li>Todo lo de M0 sigue vigente: strict_types, value objects <code>final readonly</code>, px→pt solo en <code>Pdf\</code>, deptrac verde, sin datos personales, commits con trailer <code>Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;</code>, identidad git ya configurada.</li>
+  <li><strong>Lecciones M0 (obligatorias)</strong>: PHP 8.4 DOM no tiene <code>-&gt;children</code> (usar firstElementChild/nextElementSibling); deptrac no parsea property hooks ni <code>new X()-&gt;m()</code> — usar <code>(new X())-&gt;m()</code> en src/ y métodos en interfaces; deptrac SALTA EN SILENCIO ficheros con sintaxis que no entiende — tras añadir ficheros nuevos comprobar que el conteo de ficheros escaneados crece; php-cs-fixer del CI puede ser más nuevo que el local — comas finales en match multilínea SIEMPRE.</li>
+  <li><strong>Pasos TDD estándar</strong> (todas las tareas, no se repiten en cada una): escribir los tests del bloque de la tarea → ejecutarlos y verlos FALLAR → implementar → verlos pasar → <code>composer test && composer analyse && composer style && composer arch</code> → commit con el mensaje indicado. Baselines Pest: entradas estrechas path+identifier SOLO en tests/, jamás src/.</li>
+  <li><strong>Compatibilidad</strong>: la API pública de M0 (<code>Engine::make()-&gt;stylesheet()-&gt;paper()-&gt;margins()-&gt;fontFile()-&gt;render()</code>) no se rompe; <code>fontFile()</code> pasa a registrar la cara "regular" de la familia por defecto. Los 54 tests de M0 deben seguir verdes en todo momento (los de BoxTree que asumen aplanado se ACTUALIZAN en M1-T4, es el único cambio de comportamiento autorizado).</li>
+  <li>Tareas SIN código de implementación verbatim (a diferencia de M0): los tests concretos del plan son el contrato; el implementer escribe la implementación guiándose por el algoritmo/spec citados. Las partes de formato binario (subset, CMap) sí llevan estructura detallada.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone (contrato entre tareas)</h2>
+<pre><code>// Style (T2)
+enum FontStyle { case Normal; case Italic; }
+enum TextAlign { case Left; case Center; case Right; }
+ComputedStyle += public int $fontWeight (400|700), public FontStyle $fontStyle,
+                 public ?float $lineHeightPx (null = normal), public TextAlign $textAlign,
+                 public bool $underline
+// Heredan: fontWeight, fontStyle, lineHeightPx, textAlign. underline NO hereda del CSS real,
+// pero M1 la trata como heredada (simplificación documentada; la propagación de decoración real es M3+).
+
+// Text (T3)
+final class FontCatalog {
+    public function register(string $family, int $weight, FontStyle $style, string $ttfPath): void;
+    public function select(string $family, int $weight, FontStyle $style): FontFace; // fallback: peso/estilo más cercano, familia 'default'
+    /** @return list&lt;FontFace&gt; caras usadas (para embedding) */
+    public function faces(): array;
+}
+final readonly class FontFace { public string $key; public TtfFont $font; } // key p.ej. "default:700:italic"
+
+// Box (T4): TextRun ya lleva el ComputedStyle del INLINE (no del bloque). <br> produce
+final readonly class LineBreakRun {} // marcador de salto obligatorio en children
+
+// Layout (T5)
+final readonly class BreakOpportunity { public int $byteOffset; public bool $mandatory; }
+final class BreakFinder { /** @return list&lt;BreakOpportunity&gt; */ public function find(string $text): array; }
+
+// Layout (T6): InlineFlowContext implements FormattingContext — recibe la secuencia de
+// TextRun|LineBreakRun de un bloque y produce line boxes; BlockFlowContext le delega todo run.
+// TextFragment += public string $faceKey, public bool $underline
+// (el Painter/PdfCanvas pintan por cara; T7/T9)
+
+// Pdf (T8/T9)
+final class FontRegistry { // sustituye al FontEmbedder único del Engine
+    public function embedderFor(string $faceKey): FontEmbedder;
+    /** @return array&lt;string,int&gt; resourceName =&gt; objectId de TODAS las caras usadas */
+    public function pageResources(): array;
+    public function flushAll(): void; // subset + ToUnicode por cara
+}</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M0"] --> T2["T2 longhands<br/>tipográficos"]
+  T2 --> T3["T3 FontCatalog<br/>+ variantes DejaVu"]
+  T2 --> T4["T4 inline runs<br/>con estilo propio"]
+  T4 --> T5["T5 BreakFinder<br/>UAX#14 subset"]
+  T3 --> T6["T6 InlineFlowContext<br/>line boxes multi-run"]
+  T5 --> T6
+  T6 --> T7["T7 paint underline<br/>+ canvas multi-cara"]
+  T3 --> T8["T8 subsetting TTF<br/>keep-gid"]
+  T8 --> T9["T9 ToUnicode CMap<br/>+ FontRegistry"]
+  T7 --> T10["T10 golden dumps +<br/>E2E + README"]
+  T9 --> T10
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M1-T1 — Housekeeping de la review final de M0</h3>
+<p><strong>Files:</strong> Modify <code>src/Layout/BlockFlowContext.php</code>, <code>src/Css/DeclarationParser.php</code>, <code>src/Text/TtfFont.php</code> (docblock), <code>pest.baseline.neon</code>+<code>phpstan.neon.dist</code> · Create <code>tests/EndToEnd/KitchenSinkTest.php</code></p>
+<p><strong>Sub-fixes</strong> (cada uno con su test donde aplique, UN commit conjunto <code>fix: apply M0 final-review housekeeping</code>):</p>
+<ol>
+  <li><strong>margin-bottom del último hijo NO se incluye en la altura del padre</strong> (CSS 2.2 §10.6.3: la altura de contenido llega hasta el borde inferior del border-box de la última caja en flujo, los márgenes se salen). Test: <code>.box{padding:10px}</code> conteniendo <code>p{margin-bottom:10px}</code> con una línea de ~19.2px → altura de .box == 19.2+20 == 39.2, no 49.2. OJO: el cursor SÍ avanza el margen para el siguiente hermano — solo cambia el cálculo de la altura final.</li>
+  <li><strong>Lengths negativos inválidos → warning</strong>: en DeclarationParser, padding-*/width/height/font-size con valor negativo se descartan con warning (margin negativo ES válido en CSS y se mantiene). Test: <code>p { padding-left: -5px }</code> → warning y sin declaración; <code>p { margin-left: -5px }</code> → aceptado.</li>
+  <li><strong>Baseline PHPStan real</strong>: sustituir las entradas manuales de pest.baseline.neon por un baseline generado (<code>vendor/bin/phpstan analyse --generate-baseline phpstan-baseline.neon</code>), incluirlo desde phpstan.neon.dist, borrar pest.baseline.neon. Verificar: <code>composer analyse</code> verde y el baseline NO contiene rutas src/.</li>
+  <li><strong>Docblock cmapCache</strong>: "lazy, per cmap segment" → "lazy, per codepoint".</li>
+  <li><strong>E2E kitchen-sink permanente</strong>: portar el probe de la review final — documento único con fondos anidados + overflow a 3 páginas + 4 CSS no soportados (warnings exactos) + display:none (su texto NO aparece en el PDF: assert que el hex de sus glifos no está) + acentos. Asserts sobre bytes del PDF y RenderReport.</li>
+</ol>
+</div>
+
+<div class="task">
+<h3>M1-T2 — Longhands tipográficos y herencia</h3>
+<p><strong>Files:</strong> Modify <code>src/Css/DeclarationParser.php</code>, <code>src/Style/ComputedStyle.php</code> · Create <code>src/Style/FontStyle.php</code>, <code>src/Style/TextAlign.php</code> · Tests en <code>tests/Unit/Css</code> y <code>tests/Unit/Style</code></p>
+<p><strong>Propiedades nuevas</strong>: <code>font-weight</code> (normal→400, bold→700, 400|700 numéricos; otros → warning), <code>font-style</code> (normal|italic; oblique→italic con warning), <code>line-height</code> (número multiplicador → px = n×font-size del PROPIO elemento, o px directo; normal → null), <code>text-align</code> (left|center|right; justify → warning M1), <code>text-decoration</code> (none|underline; otros → warning). Defaults UA: <code>b,strong→font-weight:700</code>; <code>i,em→font-style:italic</code>; <code>a→underline</code> (tabla UA en ComputedStyle::compute, misma mecánica que HIDDEN_BY_DEFAULT).</p>
+<p><strong>Tests mínimos</strong> (contrato):</p>
+<pre><code>it('computes bold for strong via UA default', ...)        // strong sin CSS → fontWeight 700
+it('inherits font-weight and text-align down the tree', ...)
+it('resolves numeric line-height against own font-size', ...) // p{font-size:20px;line-height:1.5} → 30.0
+it('warns on unsupported font-weight values', ...)         // font-weight: 550 → warning
+it('keeps M0 styles intact', ...)                          // regresión: los 54 tests M0 verdes</code></pre>
+<p><strong>Commit:</strong> <code>feat(style): add typographic longhands with UA defaults and inheritance</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T3 — FontCatalog y variantes DejaVu</h3>
+<p><strong>Files:</strong> Create <code>src/Text/FontCatalog.php</code>, <code>src/Text/FontFace.php</code>, <code>resources/fonts/DejaVuSans-{Bold,Oblique,BoldOblique}.ttf</code> · Tests <code>tests/Unit/Text/FontCatalogTest.php</code></p>
+<p><strong>Adquisición</strong> (regla local-first de M0-T4): buscar las 3 variantes en el mismo vendor/dompdf local; si faltan, del zip de dejavu-fonts 2.37. La licencia ya está en el repo.</p>
+<p><strong>Selección</strong>: clave exacta (family,weight,style) → si no, mismo family degradando: (weight,normal) → (400,style) → (400,normal) → familia 'default'. <code>FontFace-&gt;key</code> = "family:weight:estilo" (estilo 'normal'|'italic'). El catálogo cachea TtfFont por path (una carga por fichero).</p>
+<pre><code>it('selects the exact face when registered', ...)          // (default,700,italic) → BoldOblique
+it('falls back to closest face', ...)                      // sin bold-italic registrado → bold
+it('falls back to the default family', ...)                // family desconocida → default regular
+it('loads each font file once', ...)                       // 2 select() mismo path → misma instancia TtfFont
+it('exposes distinct metrics per face', ...)               // advance de 'A' bold > regular</code></pre>
+<p><strong>Commit:</strong> <code>feat(text): add font catalog with weight/style face selection</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T4 — Inline runs con estilo propio (fin del aplanado)</h3>
+<p><strong>Files:</strong> Modify <code>src/Box/BoxTreeBuilder.php</code> y <code>tests/Unit/Box/BoxTreeBuilderTest.php</code> (ÚNICA actualización autorizada de tests M0) · Create <code>src/Box/LineBreakRun.php</code></p>
+<p><strong>Comportamiento nuevo</strong>: al encontrar un elemento de INLINE_TAGS (mismos tags que M0 + <code>u</code>), recorrer sus text nodes/descendientes inline recursivamente generando TextRun con el ComputedStyle DEL INLINE (que ya hereda del bloque vía T2/T6-M0); <code>&lt;br&gt;</code> → <code>LineBreakRun</code>. El whitespace collapsing pasa a operar sobre la secuencia completa del bloque: espacios al inicio/fin de la secuencia se eliminan, colapsado entre runs conserva UN espacio en el boundary (p.ej. <code>Hola &lt;b&gt;mundo&lt;/b&gt;!</code> → runs "Hola ", "mundo", "!"). display:none dentro de inline se poda (arregla el leak menor detectado en la review final).</p>
+<pre><code>it('creates styled runs for inline elements', ...)     // <p>Hola <strong>mundo</strong></p> → 2 runs, el 2º fontWeight 700
+it('keeps a single boundary space between runs', ...)  // "Hola " + "mundo" + " feliz"
+it('nests inline styles', ...)                         // <b><i>x</i></b> → run con 700 + italic
+it('emits LineBreakRun for br', ...)
+it('prunes display:none inside inline elements', ...)  // <span>a<script>x</script>b</span> → "ab"</code></pre>
+<p><strong>Commit:</strong> <code>feat(box): styled inline runs with boundary-aware whitespace collapsing</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T5 — BreakFinder (UAX#14 subset)</h3>
+<p><strong>Files:</strong> Create <code>src/Layout/Text/BreakFinder.php</code>, <code>src/Layout/Text/BreakOpportunity.php</code> · Tests <code>tests/Unit/Layout/BreakFinderTest.php</code></p>
+<p><strong>Subset UAX#14 M1</strong> (documentar en docblock qué reglas se implementan): oportunidad DESPUÉS de espacio (clase SP, regla LB18); oportunidad después de guión U+2010 y hyphen-minus U+002D cuando va seguido de letra (LB21a simplificada); NO break en U+00A0 nbsp (GL, LB12); mandatory en U+000A (LB4/LB5 — llega de LineBreakRun, no del texto, pero el finder lo soporta); nunca oportunidad en offset 0. Los offsets son de BYTE (para substr directo). Implementación con un solo recorrido de codepoints (mb_str_split + acumulador de bytes).</p>
+<pre><code>it('breaks after spaces', ...)                 // "ab cd ef" → offsets 3,6 (tras el espacio)
+it('does not break at nbsp', ...)              // "ab\u{00A0}cd" → []
+it('breaks after hyphen followed by letter', ...) // "auto-escuela" → tras '-'
+it('does not break after trailing hyphen', ...)   // "auto- " → solo el del espacio
+it('marks LF as mandatory', ...)               // "a\nb" → offset 2 mandatory
+it('never breaks at offset zero', ...)         // " a" → sin oportunidad en 0 (espacio inicial ya colapsado igualmente)</code></pre>
+<p><strong>Commit:</strong> <code>feat(layout): add UAX#14 subset break finder</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T6 — InlineFlowContext: line boxes multi-run</h3>
+<p><strong>Files:</strong> Create <code>src/Layout/InlineFlowContext.php</code> · Modify <code>src/Layout/BlockFlowContext.php</code> (delega secuencias de TextRun|LineBreakRun al nuevo contexto), <code>src/Layout/TextMeasurer.php</code> (por cara: <code>widthOf(string, FontFace, float)</code>, <code>ascent/descent(FontFace, float)</code>), <code>src/Layout/Fragment/TextFragment.php</code> (+= <code>string $faceKey</code>, <code>bool $underline</code>) · Tests <code>tests/Unit/Layout/InlineFlowContextTest.php</code></p>
+<p><strong>Algoritmo (css-inline-3 reducido)</strong>: consumir la secuencia de runs partiéndola en line boxes contra el ancho disponible usando BreakFinder por run (greedy, mejor oportunidad que quepa); cada línea produce un TextFragment POR TRAMO de run que cae en ella. Altura de línea = max(lineHeightPx declarado del bloque, 1.2×fontSize del run mayor de la línea). Baseline compartida de la línea = y + (lineHeight − maxFontSize)/2 + maxAscent (max entre caras participantes). text-align del bloque desplaza los fragments de cada línea (center: (avail−lineWidth)/2; right: avail−lineWidth). LineBreakRun fuerza cierre de línea.</p>
+<pre><code>it('mixes faces in one line sharing the baseline', ...)   // "Hola <b>mundo</b>" → 2 fragments, mismo baselineY, faceKey distinto
+it('wraps using break opportunities across runs', ...)     // run largo + ancho estrecho → varias líneas
+it('centers and right-aligns lines', ...)                  // text-align: center/right → x calculado
+it('honours declared line-height', ...)                    // line-height:2 → altura de línea 2×font-size
+it('breaks on LineBreakRun', ...)                          // <br> → 2 líneas aunque quepan juntas
+it('keeps M0 single-style geometry stable', ...)           // texto monoestilo: misma geometría que M0 (regresión golden)</code></pre>
+<p><strong>Commit:</strong> <code>feat(layout): inline flow context with multi-face line boxes and alignment</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T7 — Paint multi-cara y underline</h3>
+<p><strong>Files:</strong> Modify <code>src/Paint/Canvas.php</code> (fillText ya lleva faceKey en el fragment; += <code>strokeLine(x1,y1,x2,y2,widthPx,Color)</code>), <code>src/Paint/Painter.php</code> (underline → strokeLine bajo baseline), <code>src/Pdf/PdfCanvas.php</code> (selecciona /F por faceKey vía FontRegistry; implementa strokeLine con operadores <code>w m l S</code>) · Tests unit con RecordingCanvas + PdfCanvas bytes</p>
+<p><strong>Underline</strong>: posición y grosor de la tabla <code>post</code> de la fuente (underlinePosition/underlineThickness escalados); si la tabla falta, fallback posición −0.1em, grosor 0.05em (documentado). TtfFont expone <code>underlineMetrics(): array{int,int}</code> (T8 la parsea — coordinar: si T8 aún no está, parsear post aquí: offset 8 int16 underlinePosition, offset 10 int16 underlineThickness).</p>
+<p><strong>Commit:</strong> <code>feat(paint): multi-face text painting with underline support</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T8 — Subsetting TTF (keep-gid)</h3>
+<p><strong>Files:</strong> Create <code>src/Text/FontSubsetter.php</code> · Modify <code>src/Text/TtfFont.php</code> (exponer <code>loca</code>/<code>glyf</code> raw + <code>indexToLocFormat</code> + composite parsing + <code>underlineMetrics()</code> de post) · Tests <code>tests/Unit/Text/FontSubsetterTest.php</code></p>
+<p><strong>Técnica keep-gid</strong> (no renumera → Identity-H intacto): dado el set de gids usados, (1) expandir el set con los COMPONENTES de glifos compuestos (glyf: numberOfContours &lt; 0 → recorrer component records: flags uint16, glyphIndex uint16; MORE_COMPONENTS bit 5, tamaño de args según ARG_1_AND_2_ARE_WORDS bit 0 y flags de escala bits 3/6/7); (2) reconstruir <code>glyf</code> copiando solo los glifos del set (los demás, 0 bytes = glifo vacío) y <code>loca</code> con los offsets nuevos (formato según indexToLocFormat de head; si los offsets caben, se puede forzar formato long y actualizar head); (3) reensamblar el sfnt con las tablas originales intactas salvo glyf/loca/head(checksumAdjustment=0) — recalcular offsets del table directory y padding a 4 bytes. El resto de tablas (cmap, hmtx, hhea, maxp, name, post, OS/2...) se copian tal cual.</p>
+<pre><code>it('produces a much smaller font for few glyphs', ...)   // subset {A,B,ñ} < 15% del original
+it('keeps glyph ids stable', ...)                        // TtfFont::fromString(subset)->glyphId('A') == original
+it('preserves metrics for kept glyphs', ...)             // advanceOf igual pre/post subset
+it('includes composite components', ...)                 // 'ñ' (compuesto: n + tilde) → sus componentes renderizables: glyf del componente NO vacío
+it('parses as a valid sfnt', ...)                        // el propio TtfFont puede releer el subset completo</code></pre>
+<p><strong>Integración</strong>: FontEmbedder usa FontSubsetter en flush() (prefijo de subset tag estándar <code>ABCDEF+</code> en BaseFont, 6 letras derivadas determinísticamente del hash del set de gids). <strong>Commit:</strong> <code>feat(text): TTF subsetting with stable glyph ids</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T9 — ToUnicode CMap y FontRegistry</h3>
+<p><strong>Files:</strong> Create <code>src/Pdf/FontRegistry.php</code> · Modify <code>src/Pdf/FontEmbedder.php</code> (+ToUnicode), <code>src/Engine.php</code> (usa FontCatalog+FontRegistry; API nueva <code>->font(family, weight, style, path)</code> manteniendo <code>->fontFile()</code> como azúcar de la regular) · Tests bytes + E2E copy-paste no verificable automático → assert estructura CMap</p>
+<p><strong>ToUnicode</strong>: stream CMap estándar (plantilla ISO 32000-1 §9.10.3): <code>/CIDInit /ProcSet findresource begin ... begincmap ... N beginbfchar &lt;gid&gt; &lt;utf16be&gt; endbfchar ... endcmap</code>, una entrada por gid usado (inverso del cmap: registrar codepoint→gid al encode y volcar gid→UTF-16BE). Referenciado desde el objeto Type0 (<code>/ToUnicode N 0 R</code>).</p>
+<p><strong>FontRegistry</strong>: crea FontEmbedder bajo demanda por FontFace usado, expone <code>pageResources()</code> (todas las caras usadas hasta el momento — recursos por página pueden incluir caras de páginas anteriores, válido y simple) y <code>flushAll()</code>. Engine deja de instanciar un único FontEmbedder.</p>
+<pre><code>it('emits a ToUnicode CMap with utf16be mappings', ...)  // 'ñ' → <gid> <00F1> en bfchar
+it('embeds one font object set per used face', ...)      // doc con bold+regular → 2 Type0
+it('does not embed unused faces', ...)                   // catálogo con 4 caras, doc usa 1 → 1 FontFile2
+it('prefixes subset tag in BaseFont', ...)               // /BaseFont /XXXXXX+DejaVuSans</code></pre>
+<p><strong>Commit:</strong> <code>feat(pdf): font registry with per-face embedding, subsetting and ToUnicode</code></p>
+</div>
+
+<div class="task">
+<h3>M1-T10 — Golden dumps, E2E tipográfico y README</h3>
+<p><strong>Files:</strong> Create <code>src/Layout/FragmentDumper.php</code> (árbol de fragments → array JSON-friendly: tipo, rect redondeado a 2 decimales, texto, faceKey), <code>tests/Unit/Layout/goldens/*.json</code>, <code>tests/EndToEnd/TypographyTest.php</code> · Modify <code>README.md</code> (subset CSS soportado actualizado, sección playground con captura de pantalla textual, roadmap re-priorizado)</p>
+<p><strong>Golden tests</strong>: 3 documentos (párrafo mixto bold/italic; text-align center+right; line-height custom con br) → dump JSON comparado contra golden commiteado (regenerable con env <code>UPDATE_GOLDENS=1</code>). E2E: documento tipográfico completo → PDF válido con 3 caras embebidas, subsets < 100KB total, ToUnicode presente.</p>
+<p><strong>Commit:</strong> <code>test: golden fragment dumps and typography e2e; update README for M1</code></p>
+</div>
+
+<h2>Roadmap re-priorizado (2026-07-05, tras el documento objetivo del usuario)</h2>
+<p>El usuario necesita generar documentos tipo <em>itinerario de viaje</em> (cabecera de marca con fondo, bloques de datos, tarjetas con FOTO + texto lado a lado, banda de sección con icono, pie repetido con «Pagina X de Y», multipágina con cabecera repetida). Eso adelanta imágenes y paged media y retrasa flex/grid:</p>
+<table>
+  <tr><th>Orden nuevo</th><th>Contenido</th><th>Por qué</th></tr>
+  <tr><td><strong>M1</strong> (este plan)</td><td>Texto real: estilos inline, UAX#14, alineación, subsetting, ToUnicode</td><td>Bold/tamaños/alineados del documento objetivo; PDFs 10× más pequeños</td></tr>
+  <tr><td><strong>M2</strong></td><td>Box model completo: <strong>borders</strong>, width/height %, min/max, overflow básico + <strong>@page, cabecera/pie repetidos, counters «Pagina X de Y»</strong></td><td>Las bandas, filas con borde y el pie numerado del objetivo</td></tr>
+  <tr><td><strong>M3</strong> (antes M8 parcial)</td><td><strong>Imágenes</strong>: &lt;img&gt; JPEG passthrough + PNG (decode a XObject), object-fit básico, medidas intrínsecas</td><td>Las fotos de las tarjetas del itinerario</td></tr>
+  <tr><td><strong>M4</strong> (antes M3)</td><td><strong>Tablas</strong> (el layout email-style del objetivo: foto izquierda + texto derecha se maqueta con tablas)</td><td>Con M1-M4 el documento objetivo se genera COMPLETO</td></tr>
+  <tr><td>M5+</td><td>Floats/position → Bootstrap → Tailwind-JIT → flex → grid</td><td>Orden original del spec a partir de aquí</td></tr>
+</table>
+
+</body>
+</html>
