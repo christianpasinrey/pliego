@@ -1,0 +1,6 @@
+includes:
+    - pest.baseline.neon
+
+parameters:
+    level: max
+    paths: [src, tests]
