@@ -32,6 +32,7 @@ final readonly class BlockFlowContext implements FormattingContext
         $contentX = $x + $style->paddingLeft->px;
         $contentWidth = $borderBoxWidth - $style->paddingLeft->px - $style->paddingRight->px;
         $cursorY = $y + $style->paddingTop->px;
+        $contentBottom = $cursorY;
 
         $children = [];
         foreach ($box->children as $child) {
@@ -40,14 +41,19 @@ final readonly class BlockFlowContext implements FormattingContext
                     $children[] = $line;
                     $cursorY = $line->rect->bottom();
                 }
+                $contentBottom = $cursorY;
                 continue;
             }
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;
-            $cursorY = $childFragment->rect->bottom() + $child->style->marginBottom->px;
+            // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la
+            // última caja en flujo; el margin-bottom avanza el cursor para el siguiente
+            // hermano pero no forma parte de la altura del padre.
+            $contentBottom = $childFragment->rect->bottom();
+            $cursorY = $contentBottom + $child->style->marginBottom->px;
         }
 
-        $height = ($cursorY - $y) + $style->paddingBottom->px;
+        $height = ($contentBottom - $y) + $style->paddingBottom->px;
         return new BoxFragment(
             new Rect($x, $y, $borderBoxWidth, $height),
             $style->backgroundColor,

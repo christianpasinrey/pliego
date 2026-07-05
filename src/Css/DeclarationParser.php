@@ -14,6 +14,11 @@ final class DeclarationParser
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
         'font-size', 'width', 'height',
     ];
+    /** CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos; margin es la única excepción. */
+    private const array NON_NEGATIVE_PROPERTIES = [
+        'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+        'font-size', 'width', 'height',
+    ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = ['display' => ['block', 'none'], 'font-family' => null];
 
@@ -32,6 +37,10 @@ final class DeclarationParser
             $length = Length::fromCss($value);
             if ($length === null) {
                 $this->warnings[] = "Unsupported length for $property: $value";
+                return [];
+            }
+            if ($length->px < 0.0 && in_array($property, self::NON_NEGATIVE_PROPERTIES, true)) {
+                $this->warnings[] = "Negative value not allowed for $property: $value";
                 return [];
             }
             return [$property => $length];

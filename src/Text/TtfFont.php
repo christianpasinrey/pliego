@@ -21,7 +21,7 @@ final class TtfFont
     private array $bbox;
     /** @var list<int> advance width per hmtx entry */
     private array $advances = [];
-    /** @var array<int, int> codepoint => glyph id (lazy, per cmap segment) */
+    /** @var array<int, int> codepoint => glyph id (lazy, per codepoint) */
     private array $cmapCache = [];
     private int $cmapOffset;
 
