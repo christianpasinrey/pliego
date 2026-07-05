@@ -3,7 +3,10 @@
 // tests/Unit/Layout/FragmentDumperTest.php
 declare(strict_types=1);
 
+use Pliego\Css\Value\BorderSide;
+use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\FragmentDumper;
@@ -30,6 +33,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
         new Rect(0.001, 0.002, 10.004, 20.006),
         new Color(255, 0, 0),
         [$text],
+        BorderSet::none(),
     );
 
     $dump = new FragmentDumper()->dump($box);
@@ -38,6 +42,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
         'type' => 'box',
         'rect' => [0.0, 0.0, 10.0, 20.01],
         'background' => '#ff0000',
+        'borders' => null,
         'children' => [
             [
                 'type' => 'text',
@@ -52,7 +57,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
 });
 
 it('dumps a box fragment with no background as null', function () {
-    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, []);
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], BorderSet::none());
 
     $dump = new FragmentDumper()->dump($box);
 
@@ -60,6 +65,34 @@ it('dumps a box fragment with no background as null', function () {
         'type' => 'box',
         'rect' => [0.0, 0.0, 100.0, 50.0],
         'background' => null,
+        'borders' => null,
+        'children' => [],
+    ]);
+});
+
+it('dumps a box fragment with visible borders (M2-T8), a hex color per solid side and null for a none side', function () {
+    $solidRedTop = new BorderSide(2.0, BorderStyle::Solid, new Color(255, 0, 0));
+    $solidBlueRight = new BorderSide(1.5, BorderStyle::Solid, new Color(0, 0, 255));
+    $noneBottom = new BorderSide(0.0, BorderStyle::None, null);
+    // Solid style but zero width: css-backgrounds-3 "computed border width is 0 for style none",
+    // and BorderSet::isVisible() already treats a zero-width solid side as invisible too — the
+    // dump must agree and show this side as null, same as an explicit style:none side.
+    $zeroWidthSolidLeft = new BorderSide(0.0, BorderStyle::Solid, new Color(0, 255, 0));
+    $borders = new BorderSet($solidRedTop, $solidBlueRight, $noneBottom, $zeroWidthSolidLeft);
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], $borders);
+
+    $dump = new FragmentDumper()->dump($box);
+
+    expect($dump)->toBe([
+        'type' => 'box',
+        'rect' => [0.0, 0.0, 100.0, 50.0],
+        'background' => null,
+        'borders' => [
+            'top' => ['widthPx' => 2.0, 'color' => '#ff0000'],
+            'right' => ['widthPx' => 1.5, 'color' => '#0000ff'],
+            'bottom' => null,
+            'left' => null,
+        ],
         'children' => [],
     ]);
 });

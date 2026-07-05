@@ -80,3 +80,24 @@ it('registers an extra font family via ->font() and embeds it only when referenc
 
     expect(substr_count($pdf2, '/Subtype /Type0'))->toBe(2);
 });
+
+it('paints solid borders as filled rects beyond the background, in css-backgrounds-3 painting order (M2-T5)', function () {
+    // Una única caja con fondo + borde uniforme visible en los 4 lados: 1 "re f" para el fondo
+    // + 4 "re f" para los lados del borde (Painter::paintBorders). Nada más en el documento
+    // pinta rects (body sin fondo, sin otras cajas con borde/background).
+    $path = sys_get_temp_dir() . '/pliego-e2e-border.pdf';
+    Engine::make()
+        ->stylesheet('.box { background-color: #eee; border: 2px solid #000; padding: 12px }')
+        ->render('<body><div class="box">Con borde</div></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect(substr_count($pdf, ' re f'))->toBe(5);
+
+    // El color de relleno del borde (negro) debe preceder a exactamente 4 operadores "re f"
+    // (los 4 lados) — el texto "Con borde" también es negro por defecto (color inicial CSS 2.2),
+    // pero eso es un bloque BT...Tj ET, no un "re f", así que no se cuela en este conteo.
+    $blackFill = sprintf('%.3F %.3F %.3F rg', 0, 0, 0);
+    $pattern = '/^' . preg_quote($blackFill, '/') . ' [\d.]+ [\d.]+ [\d.]+ [\d.]+ re f$/m';
+    expect(preg_match_all($pattern, $pdf))->toBe(4);
+});

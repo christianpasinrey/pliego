@@ -12,10 +12,12 @@ use Pliego\Dom\HtmlParser;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
+use Pliego\Page\PageRuleFactory;
 use Pliego\Page\Paginator;
 use Pliego\Page\PaperSize;
 use Pliego\Paint\Painter;
 use Pliego\Pdf\FontRegistry;
+use Pliego\Pdf\MarginBoxPainter;
 use Pliego\Pdf\PdfCanvas;
 use Pliego\Pdf\PdfWriter;
 use Pliego\Style\CssStyleSource;
@@ -97,27 +99,67 @@ final class Engine
                 $catalog->register($family, $weight, $style === FontStyle::Italic, $ttfPath);
             }
             $measurer = new TextMeasurer();
-            $margin = $this->margin->px;
-            $contentWidth = $this->paper->widthPx() - 2 * $margin;
-            $contentHeight = $this->paper->heightPx() - 2 * $margin;
+
+            // M2-T6: @page margin (Css\PageRuleData, crudo) -> Page\PageRule; sus márgenes, si
+            // se declaran, OVERRIDEAN Engine::margins() lado a lado (los lados no declarados
+            // conservan el margin uniforme del Engine). Los margin boxes de $pageRule quedan sin
+            // pintar por ahora (T7); esta tarea solo necesita que sus márgenes fluyan hasta la
+            // geometría del área de contenido y el canvas.
+            $pageRuleFactory = new PageRuleFactory();
+            $pageRule = $pageRuleFactory->fromCssData($parseResult->pageRule);
+            $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings()];
+
+            $uniformMargin = $this->margin->px;
+            // Nullsafe + ?? en la misma expresión dispara un falso positivo de PHPStan (ver
+            // BlockFlowContext::layout()); se separa en dos sentencias como allí, por lado.
+            $pageMarginTop = $pageRule?->marginTop;
+            $marginTop = $pageMarginTop !== null ? $pageMarginTop->px : $uniformMargin;
+            $pageMarginRight = $pageRule?->marginRight;
+            $marginRight = $pageMarginRight !== null ? $pageMarginRight->px : $uniformMargin;
+            $pageMarginBottom = $pageRule?->marginBottom;
+            $marginBottom = $pageMarginBottom !== null ? $pageMarginBottom->px : $uniformMargin;
+            $pageMarginLeft = $pageRule?->marginLeft;
+            $marginLeft = $pageMarginLeft !== null ? $pageMarginLeft->px : $uniformMargin;
+
+            $contentWidth = $this->paper->widthPx() - $marginLeft - $marginRight;
+            $contentHeight = $this->paper->heightPx() - $marginTop - $marginBottom;
             $rootFragment = (new BlockFlowContext($measurer, $catalog))
                 ->layout($boxTree, new Rect(0.0, 0.0, $contentWidth, INF));
 
             $writer = new PdfWriter($stream);
             $writer->begin();
             $fonts = new FontRegistry($writer, $catalog);
-            $canvas = new PdfCanvas($writer, $fonts, $this->paper, $margin, $margin);
+            $canvas = new PdfCanvas($writer, $fonts, $this->paper, $marginLeft, $marginTop);
             $painter = new Painter($catalog);
+            // M2-T7: margin boxes with counter(pages) can't be painted while streaming (the total
+            // page count is only known once every page is laid out) — see MarginBoxPainter's
+            // docblock for the deferred-XObject design and PdfWriter's for the ordering contract
+            // this loop must respect (writeDeferred() BEFORE flushAll() BEFORE finish()).
+            $marginBoxPainter = new MarginBoxPainter(
+                $writer,
+                $fonts,
+                $catalog,
+                $measurer,
+                $this->paper,
+                $marginTop,
+                $marginRight,
+                $marginBottom,
+                $marginLeft,
+            );
             $pageCount = 0;
             foreach ((new Paginator($contentHeight))->paginate($rootFragment) as $page) {
                 $canvas->beginPage();
                 $painter->paint($page, $canvas);
+                if ($pageRule !== null) {
+                    $marginBoxPainter->paintPage($pageRule, $canvas, $page->number);
+                }
                 $canvas->endPage();
                 $pageCount++;
             }
+            $writer->writeDeferred($pageCount);
             $fonts->flushAll();
             $writer->finish();
-            return new RenderReport($parseResult->warnings, $pageCount);
+            return new RenderReport($warnings, $pageCount);
         });
     }
 }

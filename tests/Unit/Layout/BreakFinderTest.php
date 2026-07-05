@@ -27,6 +27,17 @@ it('breaks after hyphen followed by letter', function () {
         ->and($opportunities[0]->mandatory)->toBeFalse();
 });
 
+it('breaks after a real U+2010 hyphen followed by a letter', function () {
+    // U+2010 (HYPHEN) is 3 bytes in UTF-8 (E2 80 90), unlike U+002D (HYPHEN-MINUS, 1 byte)
+    // already covered above — this exercises the multibyte byte-offset arithmetic for the
+    // other half of the LB21a rule. "auto" (4 bytes) + U+2010 (3 bytes) = byte offset 7.
+    $opportunities = $this->finder->find("auto\u{2010}escuela");
+
+    expect($opportunities)->toHaveCount(1)
+        ->and($opportunities[0]->byteOffset)->toBe(7)
+        ->and($opportunities[0]->mandatory)->toBeFalse();
+});
+
 it('does not break after trailing hyphen', function () {
     $opportunities = $this->finder->find('auto- ');
 

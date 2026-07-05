@@ -24,6 +24,8 @@ final class TtfFont
     /** @var array<int, int> codepoint => glyph id (lazy, per codepoint) */
     private array $cmapCache = [];
     private int $cmapOffset;
+    /** @var list<int>|null memoized locaOffsets() result — immutable font, computed once. */
+    private ?array $locaOffsetsCache = null;
 
     private function __construct(private readonly string $data, private readonly ?string $sourcePath = null)
     {
@@ -163,13 +165,16 @@ final class TtfFont
      */
     public function locaOffsets(): array
     {
+        if ($this->locaOffsetsCache !== null) {
+            return $this->locaOffsetsCache;
+        }
         $loca = $this->requireTable('loca');
         $long = $this->indexToLocFormat() === 1;
         $offsets = [];
         for ($i = 0; $i <= $this->numGlyphs; $i++) {
             $offsets[] = $long ? $this->uint32($loca + $i * 4) : $this->uint16($loca + $i * 2) * 2;
         }
-        return $offsets;
+        return $this->locaOffsetsCache = $offsets;
     }
 
     /** Raw glyf bytes for one glyph id (empty string for glyphs with no outline data). */

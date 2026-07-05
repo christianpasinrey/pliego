@@ -14,6 +14,7 @@ final readonly class BoxFragment implements Fragment
         public Rect $rect,
         public ?Color $background,
         public array $children,
+        public BorderSet $borders,
     ) {}
 
     public function rect(): Rect

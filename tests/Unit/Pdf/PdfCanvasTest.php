@@ -75,3 +75,57 @@ it('flips Y and scales px to pt for both endpoints of a diagonal stroked line', 
     expect($pdf)->toContain('1.000 0.000 0.000 RG');
     expect($pdf)->toContain(sprintf('%.2F %.2F m %.2F %.2F l S', 0.00, $expectedY1, 75.00, $expectedY2));
 });
+
+// M2-T7: margin-box painting — page-absolute placement (bypasses the content-area offset).
+
+it('draws text at page-absolute px coordinates, ignoring the canvas content offset', function () {
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $catalog = FontCatalog::withDefaults();
+    $registry = new FontRegistry($writer, $catalog);
+    // Nonzero offsetX/offsetY (simulates a real Engine content margin) must NOT shift a margin
+    // box: margin boxes live in the margin, not the content area.
+    $canvas = new PdfCanvas($writer, $registry, PaperSize::A4, 100.0, 200.0);
+    $canvas->beginPage();
+    $canvas->fillTextAtPage(10.0, 20.0, 'A', 10.0, new Color(0x55, 0x55, 0x55), 'default:400:normal');
+    $canvas->endPage();
+    $registry->flushAll();
+    $writer->finish();
+    rewind($stream);
+    $pdf = (string) stream_get_contents($stream);
+
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $expectedHex = sprintf('%04X', $font->glyphId(0x41));
+    $expectedX = 10.0 * 0.75;
+    $expectedBaseline = (PaperSize::A4->heightPx() - 20.0) * 0.75;
+
+    expect($pdf)->toContain('0.333 0.333 0.333 rg'); // #555555 = 85/255
+    expect($pdf)->toContain(sprintf('%.2F %.2F Td <%s> Tj', $expectedX, $expectedBaseline, $expectedHex));
+});
+
+it('places a deferred XObject via q/cm/Do/Q at page-absolute px coordinates and registers it as a page resource', function () {
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $catalog = FontCatalog::withDefaults();
+    $registry = new FontRegistry($writer, $catalog);
+    $canvas = new PdfCanvas($writer, $registry, PaperSize::A4, 0.0, 0.0);
+    $ref = $writer->defer(50.0, 10.0, [], fn(int $totalPages): string => '');
+
+    $canvas->beginPage();
+    $canvas->placeXObject($ref, 20.0, 40.0); // x=20px, bottom edge y=40px (page-absolute, top-left origin)
+    $canvas->endPage();
+    $writer->writeDeferred(1);
+    $registry->flushAll();
+    $writer->finish();
+    rewind($stream);
+    $pdf = (string) stream_get_contents($stream);
+
+    $expectedX = 20.0 * 0.75;
+    $expectedY = (PaperSize::A4->heightPx() - 40.0) * 0.75;
+    expect($pdf)->toContain(sprintf('q 1 0 0 1 %.2F %.2F cm /%s Do Q', $expectedX, $expectedY, $ref->name));
+    expect($pdf)->toContain("/XObject << /{$ref->name} {$ref->objectId} 0 R >>");
+});

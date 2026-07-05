@@ -51,8 +51,10 @@ final readonly class Paginator
      */
     private function flatten(BoxFragment $box): \Generator
     {
-        if ($box->background !== null) {
-            yield new BoxFragment($box->rect, $box->background, []);
+        // T5: una caja sin fondo pero con borde visible también necesita una hoja paintable
+        // (antes de T5 solo se emitía por background !== null y el borde se perdía).
+        if ($box->background !== null || $box->borders->isVisible()) {
+            yield new BoxFragment($box->rect, $box->background, [], $box->borders);
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -76,7 +78,7 @@ final readonly class Paginator
                 $leaf->faceKey,
                 $leaf->underline,
             ),
-            $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, []),
+            $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, [], $leaf->borders),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };
     }
