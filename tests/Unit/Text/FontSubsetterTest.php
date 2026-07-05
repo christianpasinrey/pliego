@@ -283,7 +283,7 @@ it('reads a short-format (indexToLocFormat=0) source loca and still emits long l
     expect($subsetFont->glyphDataFor($fixture['unusedFillerGid']))->toBe(''); // dropped, as usual
 });
 
-it('subsets 200 real glyph ids from DejaVuSans in under 500ms (locaOffsets memoization guard)', function (): void {
+it('subsets 200 real glyph ids from DejaVuSans in under 150ms (locaOffsets memoization guard)', function (): void {
     $font = TtfFont::fromFile(fontSubsetterFixturesDir() . '/DejaVuSans.ttf');
     $gids = range(1, 200);
 
@@ -292,7 +292,9 @@ it('subsets 200 real glyph ids from DejaVuSans in under 500ms (locaOffsets memoi
     $elapsedMs = (microtime(true) - $start) * 1000;
 
     expect($subsetBytes)->not->toBe('');
-    expect($elapsedMs)->toBeLessThan(500.0);
+    // 150ms: ~7× de margen sobre lo medido con memoización (~20ms) y falla con
+    // seguridad si la memoización de locaOffsets se pierde (~300ms medidos).
+    expect($elapsedMs)->toBeLessThan(150.0);
 });
 
 it('skips a whitelisted table silently when the source font does not have it', function (): void {
