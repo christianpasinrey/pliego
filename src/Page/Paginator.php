@@ -52,7 +52,7 @@ final readonly class Paginator
     private function flatten(BoxFragment $box): \Generator
     {
         if ($box->background !== null) {
-            yield new BoxFragment($box->rect, $box->background, []);
+            yield new BoxFragment($box->rect, $box->background, [], $box->borders);
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -76,7 +76,7 @@ final readonly class Paginator
                 $leaf->faceKey,
                 $leaf->underline,
             ),
-            $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, []),
+            $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, [], $leaf->borders),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };
     }

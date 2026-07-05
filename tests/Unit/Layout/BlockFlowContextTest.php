@@ -80,3 +80,94 @@ it('excludes the last child margin-bottom from the parent content height', funct
     $lineHeight = $p->rect->height;
     expect($box->rect->height)->toBe($lineHeight + 20.0);
 });
+
+// --- M2-T4: bordes en la geometría y % contra el ancho del containing block --------------
+
+it('a solid border displaces the content and grows the border-box height', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { border: 2px solid #000 }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    $text = textFragments($div)[0];
+    expect($text->rect->x)->toBe(2.0);
+    expect($text->rect->y)->toBe(2.0);
+    expect($div->rect->height)->toBe($text->rect->height + 4.0);
+});
+
+it('carries the computed border set onto the fragment for painting', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { border: 2px solid #ff0000 }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->borders->top->widthPx)->toBe(2.0);
+    expect($div->borders->isVisible())->toBeTrue();
+});
+
+it('reports no visible border when none is declared', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', '');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->borders->isVisible())->toBeFalse();
+});
+
+it('box-sizing: border-box subtracts padding and border from the content width', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="inner">x</div></div></body>',
+        '.outer { width: 100px; padding: 10px; border: 5px solid #000; box-sizing: border-box }',
+    );
+    $outer = $frag->children[0];
+    assert($outer instanceof BoxFragment);
+    expect($outer->rect->width)->toBe(100.0);
+    $inner = $outer->children[0];
+    assert($inner instanceof BoxFragment);
+    // content width = 100 - 2*10 (padding) - 2*5 (border) = 70; inner width:auto fills it fully.
+    expect($inner->rect->width)->toBe(70.0);
+});
+
+it('content-box (default) adds padding and border on top of the declared width', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="inner">x</div></div></body>',
+        '.outer { width: 100px; padding: 10px; border: 5px solid #000 }',
+    );
+    $outer = $frag->children[0];
+    assert($outer instanceof BoxFragment);
+    // border box = declared content width (100) + paddings (20) + borders (10) = 130
+    expect($outer->rect->width)->toBe(130.0);
+    $inner = $outer->children[0];
+    assert($inner instanceof BoxFragment);
+    expect($inner->rect->width)->toBe(100.0);
+});
+
+it('resolves width % against the containing block width', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 50% }', 400.0);
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(200.0);
+});
+
+it('resolves nested percentages against each ancestor\'s own content width', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="inner">x</div></div></body>',
+        '.outer { width: 50% } .inner { width: 50% }',
+        400.0,
+    );
+    $outer = $frag->children[0];
+    assert($outer instanceof BoxFragment);
+    expect($outer->rect->width)->toBe(200.0);
+    $inner = $outer->children[0];
+    assert($inner instanceof BoxFragment);
+    expect($inner->rect->width)->toBe(100.0);
+});
+
+it('resolves margin % against the containing block WIDTH, never height', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { margin-left: 10% }', 400.0);
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->x)->toBe(40.0);
+});
+
+it('resolves padding-top % against the containing block WIDTH, not any height', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { padding-top: 10% }', 300.0);
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    $text = textFragments($div)[0];
+    expect($text->rect->y)->toBe(30.0);
+});

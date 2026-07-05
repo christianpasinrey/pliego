@@ -4,6 +4,7 @@
 declare(strict_types=1);
 
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\FragmentDumper;
@@ -30,6 +31,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
         new Rect(0.001, 0.002, 10.004, 20.006),
         new Color(255, 0, 0),
         [$text],
+        BorderSet::none(),
     );
 
     $dump = new FragmentDumper()->dump($box);
@@ -52,7 +54,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
 });
 
 it('dumps a box fragment with no background as null', function () {
-    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, []);
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], BorderSet::none());
 
     $dump = new FragmentDumper()->dump($box);
 
