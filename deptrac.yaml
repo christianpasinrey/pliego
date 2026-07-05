@@ -22,6 +22,6 @@ deptrac:
     Text: []
     Page: [Layout, Css]
     Paint: [Layout, Page, Css, Text]
-    Pdf: [Paint, Text, Css, Layout, Page]
+    Pdf: [Paint, Text, Css, Layout, Page, Image]
     Image: [Css]
     Engine: [Css, Style, Dom, Box, Layout, Text, Page, Paint, Pdf, Image]

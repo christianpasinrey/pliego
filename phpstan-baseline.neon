@@ -22,6 +22,12 @@ parameters:
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
 			identifier: offsetAccess.notFound
 			count: 1
+			path: tests/EndToEnd/RenderTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
 			path: tests/EndToEnd/TypographyTest.php
 
 		-
@@ -317,6 +323,18 @@ parameters:
 			identifier: argument.type
 			count: 2
 			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/Unit/Pdf/ImageRegistryTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<int\<0, max\>\|false\|null\>\:\:toBeLessThan\(\) expects DateTimeInterface\|float\|int\|string, int\<0, max\>\|false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Pdf/ImageRegistryTest.php
 
 		-
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'

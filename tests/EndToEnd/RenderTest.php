@@ -104,6 +104,37 @@ it('reports a missing/remote <img> src as a soft warning, PDF still valid (M3-T2
     expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
 });
 
+it('paints a <img src="..."> JPEG as an image XObject, in a structurally valid PDF (M3-T4)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-paint.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny.jpg"></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($report->warnings)->toBe([]);
+    // Structurally valid PDF: header + a well-formed xref/trailer (same technique as RenderTest's
+    // other structural checks / PdfWriterTest).
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/startxref\n(\d+)\n%%EOF\s*$/', $pdf, $m))->toBe(1);
+    expect(substr($pdf, (int) $m[1], 4))->toBe('xref');
+
+    expect($pdf)->toContain('/Type /XObject')->toContain('/Subtype /Image')->toContain('/Filter /DCTDecode');
+    expect($pdf)->toContain(' cm /Im1 Do Q');
+});
+
+it('dedups the same <img src> referenced 3 times into a single image XObject (M3-T4)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-dedup.pdf';
+    Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny.jpg"><img src="tiny.jpg"><img src="tiny.jpg"></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect(substr_count($pdf, '/Subtype /Image'))->toBe(1); // one XObject definition...
+    expect(substr_count($pdf, '/Im1 Do'))->toBe(3);          // ...Do-ed 3 times
+});
+
 it('paints solid borders as filled rects beyond the background, in css-backgrounds-3 painting order (M2-T5)', function () {
     // Una única caja con fondo + borde uniforme visible en los 4 lados: 1 "re f" para el fondo
     // + 4 "re f" para los lados del borde (Painter::paintBorders). Nada más en el documento

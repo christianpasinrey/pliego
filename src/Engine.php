@@ -19,6 +19,7 @@ use Pliego\Page\Paginator;
 use Pliego\Page\PaperSize;
 use Pliego\Paint\Painter;
 use Pliego\Pdf\FontRegistry;
+use Pliego\Pdf\ImageRegistry;
 use Pliego\Pdf\MarginBoxPainter;
 use Pliego\Pdf\PdfCanvas;
 use Pliego\Pdf\PdfWriter;
@@ -100,7 +101,8 @@ final class Engine
             $document = HtmlParser::parse($html);
             $styles = (new StyleResolver([new CssStyleSource($parseResult)]))->resolve($document);
             $imageWarnings = new WarningCollector();
-            $boxTree = (new BoxTreeBuilder(new ImageLoader(), $imageWarnings, $this->basePath))->build($document, $styles);
+            $imageLoader = new ImageLoader();
+            $boxTree = (new BoxTreeBuilder($imageLoader, $imageWarnings, $this->basePath))->build($document, $styles);
 
             // fontFile() registra/sobreescribe la cara regular de la familia 'default'; el resto
             // de caras (bold/italic/bold-italic) siguen siendo las builtin de withDefaults().
@@ -141,7 +143,8 @@ final class Engine
             $writer = new PdfWriter($stream);
             $writer->begin();
             $fonts = new FontRegistry($writer, $catalog);
-            $canvas = new PdfCanvas($writer, $fonts, $this->paper, $marginLeft, $marginTop);
+            $images = new ImageRegistry($writer, $imageLoader);
+            $canvas = new PdfCanvas($writer, $fonts, $images, $this->paper, $marginLeft, $marginTop);
             $painter = new Painter($catalog);
             // M2-T7: margin boxes with counter(pages) can't be painted while streaming (the total
             // page count is only known once every page is laid out) — see MarginBoxPainter's
@@ -169,6 +172,10 @@ final class Engine
                 $pageCount++;
             }
             $writer->writeDeferred($pageCount);
+            // M3-T4: images' flushAll() can run in either order relative to fonts' — neither
+            // depends on the other, both just need to finish before finish() (see PdfWriter's
+            // ordering-contract docblock, extended for ImageRegistry).
+            $images->flushAll();
             $fonts->flushAll();
             $writer->finish();
             return new RenderReport($warnings, $pageCount);

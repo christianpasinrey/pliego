@@ -43,6 +43,11 @@ final class RecordingCanvas implements Canvas
     {
         $this->calls[] = sprintf('line(%.2F,%.2F,%.2F,%.2F,%.2F)', $x1, $y1, $x2, $y2, $widthPx);
     }
+
+    public function drawImage(Rect $rect, string $imageKey): void
+    {
+        $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey);
+    }
 }
 
 it('paints backgrounds and text in page order', function () {
@@ -221,7 +226,7 @@ it('skips border painting entirely when the box has no visible border side', fun
     expect($canvas->calls)->toBe([]);
 });
 
-it('skips ImageFragment for now (M3-T4 paints it)', function () {
+it('paints an ImageFragment via Canvas::drawImage(), in document order between backgrounds and text (M3-T4)', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none()),
@@ -229,5 +234,9 @@ it('skips ImageFragment for now (M3-T4 paints it)', function () {
         new TextFragment(new Rect(10, 50, 50, 19.2), 'Hola', 60.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
     new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
-    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)', 'text(Hola)']);
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)',
+        'image(10.00,10.00,40.00,30.00,/tmp/tiny.jpg)',
+        'text(Hola)',
+    ]);
 });

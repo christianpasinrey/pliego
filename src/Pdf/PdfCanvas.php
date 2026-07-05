@@ -21,6 +21,7 @@ final class PdfCanvas implements Canvas
     public function __construct(
         private readonly PdfWriter $writer,
         private readonly FontRegistry $fonts,
+        private readonly ImageRegistry $images,
         private readonly PaperSize $paper,
         private readonly float $offsetX,
         private readonly float $offsetY,
@@ -34,12 +35,15 @@ final class PdfCanvas implements Canvas
 
     public function endPage(): void
     {
+        // M2-T7's deferred-form XObjects (XO*, from placeXObject()) and M3-T4's image XObjects
+        // (Im*, from drawImage()) share this page's /Resources /XObject dict — distinct name
+        // prefixes, so the merge can never collide.
         $this->writer->addPage(
             $this->paper->widthPx() * self::PX_TO_PT,
             $this->paper->heightPx() * self::PX_TO_PT,
             $this->ops,
             $this->fonts->pageResources(),
-            $this->xobjectRefs,
+            [...$this->xobjectRefs, ...$this->images->pageResources()],
         );
     }
 
@@ -127,6 +131,27 @@ final class PdfCanvas implements Canvas
         $y = ($this->paper->heightPx() - $bottomYPx) * self::PX_TO_PT;
         $this->ops .= sprintf("q 1 0 0 1 %.2F %.2F cm /%s Do Q\n", $x, $y, $xobject->name);
         $this->xobjectRefs[$xobject->name] = $xobject->objectId;
+    }
+
+    /**
+     * M3-T4: draws the image XObject for $imageKey (ImageRegistry::xobjectFor(), lazy + memoized
+     * — the same imageKey drawn twice reuses the same XObject) scaled to fill $rectPx (content
+     * box px, same coordinate space as fillRect/fillText: offsetX/offsetY-relative, top-left
+     * origin) — `q wPt 0 0 hPt xPt yPt cm /ImN Do Q` (ISO 32000-1 §8.10.2: the image's own
+     * (0,0)-(1,1) unit square is remapped to the destination rect by the `cm` matrix; no
+     * translation/rotation needed beyond the width/height scale + origin offset). $xPt/$yPt are
+     * the DESTINATION rect's bottom-left corner in PDF space (Y grows up): the same flip used by
+     * fillRect (y = pageHeightPx - rectPx.y - rectPx.height, offset-adjusted, then ×0.75).
+     */
+    public function drawImage(Rect $rectPx, string $imageKey): void
+    {
+        $ref = $this->images->xobjectFor($imageKey);
+        $xPt = ($rectPx->x + $this->offsetX) * self::PX_TO_PT;
+        $yPt = ($this->paper->heightPx() - ($rectPx->y + $this->offsetY) - $rectPx->height) * self::PX_TO_PT;
+        $wPt = $rectPx->width * self::PX_TO_PT;
+        $hPt = $rectPx->height * self::PX_TO_PT;
+        $this->ops .= sprintf("q %.2F 0 0 %.2F %.2F %.2F cm /%s Do Q\n", $wPt, $hPt, $xPt, $yPt, $ref->name);
+        $this->xobjectRefs[$ref->name] = $ref->objectId;
     }
 
     private function rg(Color $color): string

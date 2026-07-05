@@ -45,7 +45,7 @@ final readonly class Painter
                     $this->paintUnderline($fragment, $canvas);
                 }
             } elseif ($fragment instanceof ImageFragment) {
-                continue; // M3-T4 lo consume
+                $canvas->drawImage($fragment->rect, $fragment->imageKey);
             }
         }
     }
