@@ -1,0 +1,24 @@
+deptrac:
+  paths: [src]
+  layers:
+    - { name: Css,    collectors: [{ type: directory, value: src/Css }] }
+    - { name: Style,  collectors: [{ type: directory, value: src/Style }] }
+    - { name: Dom,    collectors: [{ type: directory, value: src/Dom }] }
+    - { name: Box,    collectors: [{ type: directory, value: src/Box }] }
+    - { name: Layout, collectors: [{ type: directory, value: src/Layout }] }
+    - { name: Text,   collectors: [{ type: directory, value: src/Text }] }
+    - { name: Page,   collectors: [{ type: directory, value: src/Page }] }
+    - { name: Paint,  collectors: [{ type: directory, value: src/Paint }] }
+    - { name: Pdf,    collectors: [{ type: directory, value: src/Pdf }] }
+    - { name: Engine, collectors: [{ type: classLike, value: 'Pliego\\(Engine|RenderResult|RenderReport)' }] }
+  ruleset:
+    Css: []
+    Style: [Css]
+    Dom: []
+    Box: [Dom, Style, Css]
+    Layout: [Box, Style, Css, Text]
+    Text: []
+    Page: [Layout, Css]
+    Paint: [Layout, Page, Css, Text]
+    Pdf: [Paint, Text, Css, Layout]
+    Engine: [Css, Style, Dom, Box, Layout, Text, Page, Paint, Pdf]

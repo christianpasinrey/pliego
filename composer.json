@@ -1,0 +1,30 @@
+{
+    "name": "pliego/pliego",
+    "description": "Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless browser.",
+    "license": "MIT",
+    "type": "library",
+    "keywords": ["pdf", "html", "css", "renderer"],
+    "require": {
+        "php": ">=8.4",
+        "ext-dom": "*",
+        "ext-mbstring": "*",
+        "sabberworm/php-css-parser": "^8.9"
+    },
+    "require-dev": {
+        "pestphp/pest": "^4.0",
+        "phpstan/phpstan": "^2.1",
+        "friendsofphp/php-cs-fixer": "^3.75",
+        "qossmic/deptrac": "^2.0"
+    },
+    "autoload": { "psr-4": { "Pliego\\": "src/" } },
+    "autoload-dev": { "psr-4": { "Pliego\\Tests\\": "tests/" } },
+    "scripts": {
+        "test": "pest",
+        "analyse": "phpstan analyse",
+        "style": "php-cs-fixer fix --dry-run --diff",
+        "style:fix": "php-cs-fixer fix",
+        "arch": "deptrac analyse --fail-on-uncovered"
+    },
+    "config": { "allow-plugins": { "pestphp/pest-plugin": true }, "sort-packages": true },
+    "minimum-stability": "stable"
+}
