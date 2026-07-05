@@ -14,3 +14,9 @@ parameters:
           path: tests/Unit/Text/TtfFontTest.php
         - identifier: argument.type
           path: tests/Unit/Text/TtfFontTest.php
+        - identifier: missingType.iterableValue
+          path: tests/Unit/Style/*.php
+        - identifier: method.nonObject
+          path: tests/Unit/Style/*.php
+        - identifier: property.nonObject
+          path: tests/Unit/Style/*.php

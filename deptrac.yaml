@@ -14,7 +14,7 @@ deptrac:
     - { name: Vendor, collectors: [{ type: classLike, value: '^(Sabberworm\\CSS\\.*|Dom\\.*)$' }] }
   ruleset:
     Css: [Vendor]
-    Style: [Css]
+    Style: [Css, Vendor]
     Dom: []
     Box: [Dom, Style, Css]
     Layout: [Box, Style, Css, Text]
