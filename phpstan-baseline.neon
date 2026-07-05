@@ -19,6 +19,12 @@ parameters:
 			path: tests/EndToEnd/TypographyTest.php
 
 		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/ItinerarySkeletonTest.php
+
+		-
 			message: '#^Access to an undefined property Pest\\Expectation\<Pliego\\Css\\Value\\Color\|null\>\:\:\$r\.$#'
 			identifier: property.notFound
 			count: 3

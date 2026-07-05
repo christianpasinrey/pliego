@@ -108,9 +108,14 @@ h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .band { background-color: #ffd500; padding: 10px; font-size: 18px; margin: 0 0 10px 0 }
 .card { background-color: #f4f4f4; padding: 12px; margin: 0 0 10px 0 }
 .day { margin: 0 0 4px 0; font-size: 16px }
-.data { color: #555555; font-size: 12px; margin: 0 0 6px 0 }
+.data { border: 1px solid #cccccc; padding: 6px; color: #555555; font-size: 12px; margin: 0 0 6px 0 }
 .price { text-align: right }
 p { line-height: 1.45 }
+@page {
+  margin: 48px;
+  @bottom-left { content: "tubuencamino.com"; }
+  @bottom-right { content: "Pagina " counter(page) " de " counter(pages); }
+}
 CSS;
 ?>
 <!DOCTYPE html>

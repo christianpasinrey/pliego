@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Pliego\Layout;
 
+use Pliego\Css\Value\BorderSide;
+use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\TextFragment;
@@ -40,7 +43,31 @@ final class FragmentDumper
             'type' => 'box',
             'rect' => $this->rect($fragment->rect),
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
+            'borders' => $fragment->borders->isVisible() ? $this->borders($fragment->borders) : null,
             'children' => array_map($this->dump(...), $fragment->children),
+        ];
+    }
+
+    /** @return array<string, array{widthPx: float, color: string}|null> */
+    private function borders(BorderSet $borders): array
+    {
+        return [
+            'top' => $this->side($borders->top),
+            'right' => $this->side($borders->right),
+            'bottom' => $this->side($borders->bottom),
+            'left' => $this->side($borders->left),
+        ];
+    }
+
+    /** @return array{widthPx: float, color: string}|null */
+    private function side(BorderSide $side): ?array
+    {
+        if ($side->style !== BorderStyle::Solid || $side->widthPx <= 0.0) {
+            return null;
+        }
+        return [
+            'widthPx' => round($side->widthPx, 2),
+            'color' => $side->color === null ? '#000000' : $this->hex($side->color),
         ];
     }
 

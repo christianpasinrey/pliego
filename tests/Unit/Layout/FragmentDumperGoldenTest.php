@@ -92,3 +92,15 @@ it('golden: custom line-height paragraph broken by <br>', function () {
 
     assertMatchesGolden('line-height-br', new FragmentDumper()->dump($fragment));
 });
+
+it('golden: bordered box with a percentage border-box width (M2-T8)', function () {
+    // Exercises M2's box model together in one fixture: a solid border on every side (T4/T5,
+    // now visible in FragmentDumper's dump too), width:50% resolved against the 300px containing
+    // block (T2/T4), and box-sizing:border-box (T3/T4) — the declared width IS the border-box
+    // width, so content width = 150 - 2*2 (border) - 2*10 (padding) = 126px.
+    $html = '<body><div class="box">Contenido con borde y ancho porcentual</div></body>';
+    $css = '.box { width: 50%; box-sizing: border-box; border: 2px solid #000000; padding: 10px }';
+    $fragment = goldenLayoutHtml($html, $css, 300.0);
+
+    assertMatchesGolden('border-percent-box-sizing', new FragmentDumper()->dump($fragment));
+});

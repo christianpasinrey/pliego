@@ -1,0 +1,82 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        81.6
+    ],
+    "background": null,
+    "borders": null,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                150.0,
+                81.6
+            ],
+            "background": null,
+            "borders": {
+                "top": {
+                    "widthPx": 2.0,
+                    "color": "#000000"
+                },
+                "right": {
+                    "widthPx": 2.0,
+                    "color": "#000000"
+                },
+                "bottom": {
+                    "widthPx": 2.0,
+                    "color": "#000000"
+                },
+                "left": {
+                    "widthPx": 2.0,
+                    "color": "#000000"
+                }
+            },
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        12.0,
+                        12.0,
+                        115.56,
+                        19.2
+                    ],
+                    "text": "Contenido con ",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 28.45
+                },
+                {
+                    "type": "text",
+                    "rect": [
+                        12.0,
+                        31.2,
+                        114.84,
+                        19.2
+                    ],
+                    "text": "borde y ancho ",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 47.65
+                },
+                {
+                    "type": "text",
+                    "rect": [
+                        12.0,
+                        50.4,
+                        85.97,
+                        19.2
+                    ],
+                    "text": "porcentual",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 66.85
+                }
+            ]
+        }
+    ]
+}

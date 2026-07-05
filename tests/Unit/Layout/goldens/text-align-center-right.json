@@ -7,6 +7,7 @@
         38.4
     ],
     "background": null,
+    "borders": null,
     "children": [
         {
             "type": "box",
@@ -17,6 +18,7 @@
                 19.2
             ],
             "background": null,
+            "borders": null,
             "children": [
                 {
                     "type": "text",
@@ -42,6 +44,7 @@
                 19.2
             ],
             "background": null,
+            "borders": null,
             "children": [
                 {
                     "type": "text",
