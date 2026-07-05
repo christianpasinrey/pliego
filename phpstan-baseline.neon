@@ -1,6 +1,12 @@
 parameters:
 	ignoreErrors:
 		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/TypographyTest.php
+
+		-
 			message: '#^Access to an undefined property Pest\\Expectation\<Pliego\\Css\\Value\\Color\|null\>\:\:\$r\.$#'
 			identifier: property.notFound
 			count: 3
@@ -35,12 +41,6 @@ parameters:
 			identifier: method.nonObject
 			count: 2
 			path: tests/Unit/Css/LengthTest.php
-
-		-
-			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
-			identifier: offsetAccess.notFound
-			count: 1
-			path: tests/EndToEnd/TypographyTest.php
 
 		-
 			message: '#^Binary operation "\+" between mixed and 40\.0 results in an error\.$#'
@@ -325,12 +325,6 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
-			message: '#^Cannot access property \$px on mixed\.$#'
-			identifier: property.nonObject
-			count: 2
-			path: tests/Unit/Style/StyleResolverTest.php
-
-		-
 			message: '#^Cannot access property \$textAlign on mixed\.$#'
 			identifier: property.nonObject
 			count: 2
@@ -340,6 +334,12 @@ parameters:
 			message: '#^Cannot access property \$underline on mixed\.$#'
 			identifier: property.nonObject
 			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$value on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

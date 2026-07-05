@@ -6,6 +6,7 @@ namespace Pliego\Style;
 
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Length;
+use Pliego\Css\Value\LengthPercentage;
 
 final readonly class ComputedStyle
 {
@@ -19,15 +20,15 @@ final readonly class ComputedStyle
 
     public function __construct(
         public Display $display,
-        public Length $marginTop,
-        public Length $marginRight,
-        public Length $marginBottom,
-        public Length $marginLeft,
-        public Length $paddingTop,
-        public Length $paddingRight,
-        public Length $paddingBottom,
-        public Length $paddingLeft,
-        public ?Length $width,
+        public LengthPercentage $marginTop,
+        public LengthPercentage $marginRight,
+        public LengthPercentage $marginBottom,
+        public LengthPercentage $marginLeft,
+        public LengthPercentage $paddingTop,
+        public LengthPercentage $paddingRight,
+        public LengthPercentage $paddingBottom,
+        public LengthPercentage $paddingLeft,
+        public ?LengthPercentage $width,
         public ?Color $backgroundColor,
         public Color $color,
         public float $fontSizePx,
@@ -41,7 +42,7 @@ final readonly class ComputedStyle
 
     public static function root(): self
     {
-        $zero = Length::zero();
+        $zero = LengthPercentage::zero();
         return new self(
             Display::Block,
             $zero,
@@ -72,16 +73,20 @@ final readonly class ComputedStyle
      */
     public static function compute(array $declarations, self $parent, string $tagName): self
     {
-        $zero = Length::zero();
+        $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
         $display = in_array($tag, self::HIDDEN_BY_DEFAULT, true) ? Display::None : Display::Block;
         if (($declarations['display'] ?? null) === 'none') {
             $display = Display::None;
         }
-        $length = static fn(string $key): Length => $declarations[$key] instanceof Length ? $declarations[$key] : $zero;
-        $has = static fn(string $key): bool => ($declarations[$key] ?? null) instanceof Length;
+        $length = static fn(string $key): ?Length => ($declarations[$key] ?? null) instanceof Length ? $declarations[$key] : null;
+        $lengthPercentage = static fn(string $key): LengthPercentage => ($declarations[$key] ?? null) instanceof LengthPercentage ? $declarations[$key] : $zero;
+        $hasLengthPercentage = static fn(string $key): bool => ($declarations[$key] ?? null) instanceof LengthPercentage;
 
-        $fontSizePx = $has('font-size') ? $length('font-size')->px : $parent->fontSizePx;
+        // Nullsafe + ?? en la misma expresión dispara un falso positivo de PHPStan (ver
+        // BlockFlowContext::layout()); se separa en dos sentencias como allí.
+        $fontSizeLength = $length('font-size');
+        $fontSizePx = $fontSizeLength !== null ? $fontSizeLength->px : $parent->fontSizePx;
 
         $fontWeightValue = $declarations['font-weight'] ?? null;
         $fontWeight = match (true) {
@@ -131,15 +136,15 @@ final readonly class ComputedStyle
 
         return new self(
             $display,
-            $has('margin-top') ? $length('margin-top') : $zero,
-            $has('margin-right') ? $length('margin-right') : $zero,
-            $has('margin-bottom') ? $length('margin-bottom') : $zero,
-            $has('margin-left') ? $length('margin-left') : $zero,
-            $has('padding-top') ? $length('padding-top') : $zero,
-            $has('padding-right') ? $length('padding-right') : $zero,
-            $has('padding-bottom') ? $length('padding-bottom') : $zero,
-            $has('padding-left') ? $length('padding-left') : $zero,
-            $has('width') ? $length('width') : null,
+            $lengthPercentage('margin-top'),
+            $lengthPercentage('margin-right'),
+            $lengthPercentage('margin-bottom'),
+            $lengthPercentage('margin-left'),
+            $lengthPercentage('padding-top'),
+            $lengthPercentage('padding-right'),
+            $lengthPercentage('padding-bottom'),
+            $lengthPercentage('padding-left'),
+            $hasLengthPercentage('width') ? $lengthPercentage('width') : null,
             ($declarations['background-color'] ?? null) instanceof \Pliego\Css\Value\Color ? $declarations['background-color'] : null,
             ($declarations['color'] ?? null) instanceof \Pliego\Css\Value\Color ? $declarations['color'] : $parent->color,
             $fontSizePx,

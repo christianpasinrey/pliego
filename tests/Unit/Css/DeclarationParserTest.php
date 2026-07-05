@@ -3,7 +3,10 @@
 declare(strict_types=1);
 
 use Pliego\Css\DeclarationParser;
+use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Length;
+use Pliego\Css\Value\LengthPercentage;
 
 it('rejects negative padding as an invalid length with a warning', function () {
     $parser = new DeclarationParser();
@@ -22,7 +25,7 @@ it('rejects negative width/height/font-size with a warning', function () {
 it('accepts negative margin (valid per CSS 2.2)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('margin-left', '-5px');
-    expect($result)->toEqual(['margin-left' => Length::px(-5.0)]);
+    expect($result)->toEqual(['margin-left' => LengthPercentage::px(-5.0)]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
@@ -102,6 +105,128 @@ it('parses text-decoration none/underline and warns on unsupported values', func
     expect($parser->parse('text-decoration', 'none'))->toBe(['text-decoration' => false]);
     expect($parser->parse('text-decoration', 'underline'))->toBe(['text-decoration' => true]);
     $result = $parser->parse('text-decoration', 'line-through');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M2-T2: % en width/margin-*/padding-* -----------------------------------------------
+
+it('accepts % on width/margin-*/padding-* as LengthPercentage', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('width', '50%'))->toEqual(['width' => LengthPercentage::percent(50.0)]);
+    expect($parser->parse('margin-left', '10%'))->toEqual(['margin-left' => LengthPercentage::percent(10.0)]);
+    expect($parser->parse('padding-top', '5%'))->toEqual(['padding-top' => LengthPercentage::percent(5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still accepts plain px for width/margin-*/padding-* as LengthPercentage', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('width', '200px'))->toEqual(['width' => LengthPercentage::px(200.0)]);
+});
+
+it('expands mixed px/percent margin shorthand values', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', '10px 5%');
+    expect($result)->toEqual([
+        'margin-top' => LengthPercentage::px(10.0),
+        'margin-right' => LengthPercentage::percent(5.0),
+        'margin-bottom' => LengthPercentage::px(10.0),
+        'margin-left' => LengthPercentage::percent(5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on % for font-size (unsupported until M3+)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', '150%');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns on % for line-height (unsupported until M3+)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', '150%');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M2-T2: bordes (longhands + shorthands) ---------------------------------------------
+
+it('parses border-{side}-width in px and as thin/medium/thick keywords', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-top-width', '2px'))->toEqual(['border-top-width' => Length::px(2.0)]);
+    expect($parser->parse('border-top-width', 'thin'))->toEqual(['border-top-width' => Length::px(1.0)]);
+    expect($parser->parse('border-top-width', 'medium'))->toEqual(['border-top-width' => Length::px(3.0)]);
+    expect($parser->parse('border-top-width', 'thick'))->toEqual(['border-top-width' => Length::px(5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects negative border-{side}-width with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-top-width', '-2px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses border-{side}-style solid/none and warns on unsupported styles', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-top-style', 'solid'))->toBe(['border-top-style' => BorderStyle::Solid]);
+    expect($parser->parse('border-top-style', 'none'))->toBe(['border-top-style' => BorderStyle::None]);
+    $result = $parser->parse('border-top-style', 'dashed');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses border-{side}-color reusing Color::fromCss', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-top-color', '#ccc'))->toEqual(['border-top-color' => new Color(204, 204, 204)]);
+    $result = $parser->parse('border-top-color', 'not-a-color');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('expands the border shorthand for all 3 component orders', function () {
+    $expected = [
+        'border-top-width' => Length::px(1.0),
+        'border-top-style' => BorderStyle::Solid,
+        'border-top-color' => new Color(204, 204, 204),
+        'border-right-width' => Length::px(1.0),
+        'border-right-style' => BorderStyle::Solid,
+        'border-right-color' => new Color(204, 204, 204),
+        'border-bottom-width' => Length::px(1.0),
+        'border-bottom-style' => BorderStyle::Solid,
+        'border-bottom-color' => new Color(204, 204, 204),
+        'border-left-width' => Length::px(1.0),
+        'border-left-style' => BorderStyle::Solid,
+        'border-left-color' => new Color(204, 204, 204),
+    ];
+    foreach (['1px solid #ccc', 'solid #ccc 1px', '#ccc 1px solid'] as $value) {
+        $parser = new DeclarationParser();
+        expect($parser->parse('border', $value))->toEqual($expected);
+        expect($parser->drainWarnings())->toBeEmpty();
+    }
+});
+
+it('expands border-{side} shorthand to only that side longhands', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-top', '2px solid #000');
+    expect($result)->toEqual([
+        'border-top-width' => Length::px(2.0),
+        'border-top-style' => BorderStyle::Solid,
+        'border-top-color' => new Color(0, 0, 0),
+    ]);
+});
+
+it('allows each border shorthand component to be omitted', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border', 'solid'))->toEqual(['border-top-style' => BorderStyle::Solid,
+        'border-right-style' => BorderStyle::Solid, 'border-bottom-style' => BorderStyle::Solid,
+        'border-left-style' => BorderStyle::Solid]);
+});
+
+it('warns on an unrecognized border shorthand component', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border', '1px dotted #ccc');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });

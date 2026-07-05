@@ -28,7 +28,7 @@ it('does not inherit box properties', function () {
     [$doc, $map] = resolveDoc('body { padding-left: 40px }', '<body><p>x</p></body>');
     $p = $doc->querySelector('p');
     assert($p !== null);
-    expect($map->get($p)->paddingLeft->px)->toBe(0.0);
+    expect($map->get($p)->paddingLeft->value)->toBe(0.0);
 });
 it('applies specificity: class beats type', function () {
     [$doc, $map] = resolveDoc('.note { color: #00f } p { color: #f00 }', '<body><p class="note">x</p></body>');
@@ -132,7 +132,7 @@ it('keeps M0 styles intact', function () {
     expect($style->color)->toEqual(new Color(255, 0, 0));
     expect($style->fontSizePx)->toBe(20.0);
     expect($style->display)->toBe(Display::Block);
-    expect($style->paddingLeft->px)->toBe(0.0);
+    expect($style->paddingLeft->value)->toBe(0.0);
     expect($style->fontWeight)->toBe(400);
     expect($style->fontStyle)->toBe(FontStyle::Normal);
     expect($style->textAlign)->toBe(TextAlign::Left);
