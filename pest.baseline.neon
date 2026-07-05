@@ -6,3 +6,5 @@ parameters:
           path: tests/Unit/Css/*.php
         - identifier: method.nonObject
           path: tests/Unit/Css/*.php
+        - identifier: offsetAccess.notFound
+          path: tests/Unit/Pdf/PdfWriterTest.php
