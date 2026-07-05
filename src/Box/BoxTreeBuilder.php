@@ -31,7 +31,13 @@ final class BoxTreeBuilder
     {
         $style = $styles->get($element);
         $children = [];
-        /** @var list<TextRun|LineBreakRun> $pending secuencia inline pendiente de colapsar (M1-T4) */
+        /**
+         * @var list<TextRun|LineBreakRun|ImageBox> $pending secuencia inline pendiente de
+         *     colapsar (M1-T4). Puede incluir ImageBox (M3-T2 defect fix): una <img> anidada
+         *     dentro de un elemento inline se "hoistea" aquí como token de la secuencia — ver
+         *     collectInline() — y collapse() la trata como separador de secuencia, igual que un
+         *     LineBreakRun.
+         */
         $pending = [];
         $flush = function () use (&$children, &$pending): void {
             foreach (self::collapse($pending) as $run) {
@@ -131,7 +137,22 @@ final class BoxTreeBuilder
      * descendiente con display:none se poda (arregla el leak de M0). Los tags anidados no
      * necesitan estar en INLINE_TAGS: se recorren igualmente, con permisividad heredada de M0.
      *
-     * @param list<TextRun|LineBreakRun> $pending
+     * M3-T2 defect fix — aproximación documentada: una <img> anidada dentro de un inline
+     * (`<a href><img></a>`, `<span><img></span>`) NO tiene layout inline en M3 (los "replaced
+     * inline boxes" con wrapping de línea llegarán más adelante). En vez de descartarla en
+     * silencio (bug original: se recorría como elemento sin hijos y no producía nada), se
+     * "hoistea" a nivel de bloque: se emite como token ImageBox dentro de la MISMA secuencia
+     * `$pending` que los TextRun/LineBreakRun de alrededor (preservando el ORDEN relativo:
+     * texto-antes → ImageBox → texto-después), reusando el mismo buildImage() con sus mismos
+     * warnings de fallo suave (src remoto, fichero ausente, formato no soportado). `collapse()`
+     * trata el token ImageBox como separador de secuencia (igual que un LineBreakRun): no se le
+     * aplica el whitespace-collapsing propio de texto, y no imprime a la caja padre bordes que
+     * espacio de frontera con el texto adyacente. SIEMPRE se añade un warning adicional
+     * (independiente del éxito/fallo de buildImage) para que la aproximación quede visible en
+     * RenderReport — el consumidor del reporte necesita saber que el layout aquí no es fiel al
+     * documento fuente.
+     *
+     * @param list<TextRun|LineBreakRun|ImageBox> $pending
      */
     private function collectInline(\Dom\Element $element, StyleMap $styles, array &$pending): void
     {
@@ -147,8 +168,20 @@ final class BoxTreeBuilder
             if ($styles->get($node)->display === Display::None) {
                 continue;
             }
-            if (strtolower($node->tagName) === 'br') {
+            $tag = strtolower($node->tagName);
+            if ($tag === 'br') {
                 $pending[] = new LineBreakRun();
+                continue;
+            }
+            if ($tag === 'img') {
+                $src = $node->getAttribute('src') ?? '';
+                $this->warnings->addWarning(
+                    "inline image hoisted to block level (inline replaced boxes not supported yet): $src",
+                );
+                $imageBox = $this->buildImage($node, $styles->get($node));
+                if ($imageBox !== null) {
+                    $pending[] = $imageBox;
+                }
                 continue;
             }
             $this->collectInline($node, $styles, $pending);
@@ -173,8 +206,15 @@ final class BoxTreeBuilder
      * Runs adyacentes con el mismo ComputedStyle (p.ej. texto partido por un display:none
      * podado en medio) se fusionan en un único TextRun.
      *
-     * @param list<TextRun|LineBreakRun> $tokens
-     * @return list<TextRun|LineBreakRun>
+     * M3-T2 defect fix: un token ImageBox (imagen inline "hoisteada" por collectInline()) se
+     * trata como separador de secuencia exactamente igual que un LineBreakRun — corta el
+     * recorte de inicio/fin y no participa del whitespace-collapsing de texto — pero, a
+     * diferencia de LineBreakRun, no es un marcador: es la propia caja de imagen, que queda
+     * intercalada en el mismo orden en que apareció en el DOM entre el texto anterior y el
+     * posterior.
+     *
+     * @param list<TextRun|LineBreakRun|ImageBox> $tokens
+     * @return list<TextRun|LineBreakRun|ImageBox>
      */
     private static function collapse(array $tokens): array
     {
@@ -184,7 +224,7 @@ final class BoxTreeBuilder
         $lastText = null;
         $pendingSpace = false;
         foreach ($tokens as $token) {
-            if ($token instanceof LineBreakRun) {
+            if ($token instanceof LineBreakRun || $token instanceof ImageBox) {
                 $result[] = $token;
                 $lastText = null;
                 $pendingSpace = false;

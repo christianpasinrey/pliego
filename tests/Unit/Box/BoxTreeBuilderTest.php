@@ -209,3 +209,53 @@ it('warns and skips an img without a src attribute', function () {
     expect($root->children)->toHaveCount(0);
     expect($warnings)->toHaveCount(1);
 });
+
+// M3-T2 defect fix: <img> nested inside an inline element (<a>, <span>, ...) used to recurse
+// into a childless node and vanish silently — no ImageBox, no warning. collectInline now hoists
+// it to block level (same buildImage() soft-failure path) and ALWAYS reports the approximation
+// via a dedicated warning, so the drop is never silent again.
+
+it('hoists an inline image (nested in <a>) to block level with a visible warning', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><a href="x"><img src="tiny.jpg"></a> texto</p></body>',
+        IMAGE_FIXTURES_DIR,
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    expect($p->children)->toHaveCount(2);
+    [$img, $text] = $p->children;
+    assert($img instanceof ImageBox && $text instanceof TextRun);
+    expect($text->text)->toBe('texto');
+    expect($warnings)->toHaveCount(1);
+    expect($warnings[0])->toContain('inline image hoisted to block level');
+    expect($warnings[0])->toContain('tiny.jpg');
+});
+
+it('preserves ordering when hoisting: text before, image, text after', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>antes <a href="x"><img src="tiny.jpg"></a> despues</p></body>',
+        IMAGE_FIXTURES_DIR,
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    expect($p->children)->toHaveCount(3);
+    [$first, $img, $last] = $p->children;
+    assert($first instanceof TextRun && $last instanceof TextRun);
+    assert($img instanceof ImageBox);
+    // El separador de secuencia (ImageBox, igual que LineBreakRun ya documentado en collapse())
+    // recorta el espacio de frontera pendiente en vez de arrastrarlo, igual que un límite de bloque.
+    expect($first->text)->toBe('antes');
+    expect($last->text)->toBe('despues');
+    expect($warnings)->toHaveCount(1);
+});
+
+it('hoists a failing inline image (nested in <span>): no ImageBox, both warnings reported', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><span><img src="no-existe.png"></span></body>',
+        IMAGE_FIXTURES_DIR,
+    );
+    expect($root->children)->toHaveCount(0);
+    expect($warnings)->toHaveCount(2);
+    expect($warnings[0])->toContain('inline image hoisted to block level');
+    expect($warnings[1])->toContain('Could not load image');
+});
