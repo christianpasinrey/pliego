@@ -191,6 +191,16 @@ final readonly class BlockFlowContext implements FormattingContext
      * ancho del containing block si lo exceden — regla práctica de los navegadores, no está en
      * el texto de la spec CSS 2.2 pero es el comportamiento observable universal.
      *
+     * box-sizing (CSS 2.2 §8.3 + css-sizing-3): reinterpreta SOLO el width/height DECLARADO EN
+     * CSS — los atributos HTML width/height y las dimensiones intrínsecas son SIEMPRE medidas de
+     * content-box (nunca pasan por box-sizing, igual que en HTML puro sin CSS). Por eso la resta
+     * de padding+border se aplica aquí mismo, ANTES de mezclar con attr/intrínseco, y solo al
+     * valor declarado en CSS. El ratio de aspecto, cuando hace falta derivar el eje que falta, se
+     * aplica siempre sobre el content box ya resuelto (css-images-3 §4: el "used value" que
+     * produce el ratio es una dimensión de content box), así que da igual si $width/$height ya
+     * traen border-box restado o no: en el momento en que se usan para derivar el otro eje, ya
+     * son valores de content box.
+     *
      * @return array{0: float, 1: float} content width/height en px
      */
     private function resolveReplacedSize(ImageBox $box, float $cbWidth): array
@@ -207,6 +217,19 @@ final readonly class BlockFlowContext implements FormattingContext
         $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
         $declaredHeight = $style->height;
         $declaredHeightPx = $declaredHeight?->px;
+
+        if ($style->boxSizing === 'border-box') {
+            $paddingBorderX = $style->paddingLeft->resolve($cbWidth) + $style->paddingRight->resolve($cbWidth)
+                + $style->borderLeft->widthPx + $style->borderRight->widthPx;
+            $paddingBorderY = $style->paddingTop->resolve($cbWidth) + $style->paddingBottom->resolve($cbWidth)
+                + $style->borderTop->widthPx + $style->borderBottom->widthPx;
+            if ($declaredWidthPx !== null) {
+                $declaredWidthPx = max(0.0, $declaredWidthPx - $paddingBorderX);
+            }
+            if ($declaredHeightPx !== null) {
+                $declaredHeightPx = max(0.0, $declaredHeightPx - $paddingBorderY);
+            }
+        }
 
         $width = $declaredWidthPx ?? $box->attrWidth;
         $height = $declaredHeightPx ?? $box->attrHeight;

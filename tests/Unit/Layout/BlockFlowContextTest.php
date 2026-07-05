@@ -337,6 +337,67 @@ it('paints the image background on the wrapping BoxFragment', function () {
     expect($img->background?->r)->toBe(255);
 });
 
+// --- M3-T3 fix: box-sizing: border-box on replaced elements (<img>) --------------------------
+// Bug: resolveReplacedSize() ignored box-sizing entirely, treating declared CSS width/height as
+// content-box always. Per CSS 2.2 §8.3 + css-sizing-3, box-sizing reinterprets ONLY the declared
+// CSS width/height — HTML attrs and intrinsic dims are always content-box measures — so the
+// padding+border subtraction happens BEFORE the ratio derivation, on the declared value only.
+
+it('box-sizing: border-box subtracts padding+border from BOTH declared CSS dimensions on an image', function () {
+    // width:50 height:40, padding:5 (both sides=10), border:2 solid (both sides=4) -> per axis
+    // subtract 14: content 50-14=36, 40-14=26. Border-box stays exactly the declared 50x40.
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg"></body>',
+        'img { width: 50px; height: 40px; padding: 5px; border: 2px solid #000; box-sizing: border-box }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    expect($img->rect->width)->toBe(50.0);
+    expect($img->rect->height)->toBe(40.0);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(36.0);
+    expect($content->rect->height)->toBe(26.0);
+});
+
+it('box-sizing: border-box with only width declared derives height from the RATIO OF THE CONTENT box', function () {
+    // Only width:50 declared; height is undeclared (auto) so it must be derived from the
+    // intrinsic aspect ratio (tiny.jpg: 0.75) applied to the CONTENT width (36, i.e. AFTER
+    // subtracting padding+border), not to the declared 50 — the ratio is a content-box relation
+    // (css-images-3 §4: the "used value" the ratio produces is a content-box dimension).
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg"></body>',
+        'img { width: 50px; padding: 5px; border: 2px solid #000; box-sizing: border-box }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(36.0);
+    expect($content->rect->height)->toBe(27.0); // 36 * 0.75
+    expect($img->rect->width)->toBe(50.0);
+    expect($img->rect->height)->toBe(41.0); // 27 + 14 (padding+border)
+});
+
+it('content-box (default) on an image is unaffected by the border-box fix (regression)', function () {
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg"></body>',
+        'img { width: 50px; height: 40px; padding: 5px; border: 2px solid #000 }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(50.0);
+    expect($content->rect->height)->toBe(40.0);
+    // border-box = declared content (50x40) + padding (10) + border (4) = 64x54.
+    expect($img->rect->width)->toBe(64.0);
+    expect($img->rect->height)->toBe(54.0);
+});
+
 it('advances the cursor for the next sibling using the image margin-bottom, like a normal block', function () {
     $frag = layoutImageHtml(
         '<body><img src="tiny.jpg" width="10" height="20"><p>after</p></body>',
