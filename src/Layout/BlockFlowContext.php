@@ -66,16 +66,6 @@ final readonly class BlockFlowContext implements FormattingContext
         $currentWords = [];
         $currentWidth = 0.0;
         $flush = function () use (&$lines, &$currentWords, &$currentWidth, $x, &$y, $lineHeight, $ascent, $fontSize, $run): void {
-            // Falso positivo verificado (ver task-8-report.md): PHPStan tipa $currentWords
-            // capturada por referencia con el tipo del punto de captura del closure (array{})
-            // e ignora las mutaciones posteriores hechas fuera del closure antes de invocarlo,
-            // así que cree erróneamente que esta condición es siempre true.
-            // @phpstan-ignore identical.alwaysTrue
-            if ($currentWords === []) {
-                return;
-            }
-            // Consecuencia directa del falso positivo anterior.
-            // @phpstan-ignore deadCode.unreachable
             $text = implode(' ', $currentWords);
             $lines[] = new TextFragment(
                 new Rect($x, $y, $currentWidth, $lineHeight),
