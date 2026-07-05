@@ -18,16 +18,24 @@ use Pliego\Text\FontFace;
  * PdfCanvas::beginPage() and endPage(). M2 defaults (font-size/color from the @page rule itself
  * is a later milestone): the default regular face, FONT_SIZE_PX (10px), TEXT_COLOR (#555555).
  *
- * Layout, per box position ("top-left".."bottom-right"): the box spans the FULL content width
- * (marginLeftPx..paperWidthPx-marginRightPx) and the WHOLE margin strip it belongs to (the top
- * margin for "top-*", the bottom margin for "bottom-*") — a deliberate simplification of
- * css-page-3's three-box-per-row model (which reserves a third of the row to each of
- * left/center/right so they never overlap): with only one box per row in the M2 test fixtures
- * this produces identical visible output (a box's TEXT is aligned left/center/right within that
- * full width) while keeping the math for the common single-box-per-row case a single formula.
- * Multiple boxes sharing a row (e.g. both bottom-left and bottom-right present) still render
- * correctly since each aligns its own text independently within the shared width — only the
- * (invisible) box bounds would overlap, which has no visual effect.
+ * Layout, per box position ("top-left".."bottom-right"): each margin strip (the top margin for
+ * "top-*", the bottom margin for "bottom-*") is divided into COLUMN_COUNT (3) equal-width columns
+ * of contentWidth/3 — left/center/right, in that order. A box only ever paints inside ITS OWN
+ * column: the left box aligns its text to the start of column 0, the center box centers its text
+ * within column 1, the right box aligns its text to the end of column 2. This is css-page-3's own
+ * three-box-per-row division (§6.5.3), just without its §5.3 flex-fit sizing: real css-page-3
+ * lets each box shrink, grow or wrap to fit whatever the OTHER boxes in the row actually need;
+ * here the three columns are always an equal, fixed third of the content width regardless of how
+ * much (or how little) text each box carries.
+ *
+ * HONEST LIMITATION: there is no clipping and no shrink-to-fit. A box's text can be wider than
+ * its own column, in which case it overflows past the column boundary and keeps drawing (no
+ * PDF clipping path is emitted) instead of being cut off or shrunk. That overflow only becomes
+ * visible as overlapping glyphs when the NEIGHBORING column also has a box painting text into the
+ * shared boundary region; with a single box per row, or with realistically short label text
+ * (page numbers, short running headers), the columns are wide enough in practice that this
+ * doesn't happen — but nothing here enforces it. Implementing real fit (measure all boxes in the
+ * row, shrink/reflow as needed) is out of scope for M2.
  *
  * Ordering (the actual point of M2-T7): a box whose content includes CounterRef::Pages can't be
  * painted while streaming (the total page count is only known once every page has been laid
@@ -41,6 +49,8 @@ final class MarginBoxPainter
 {
     private const string FACE_KEY = 'default:400:normal';
     private const float FONT_SIZE_PX = 10.0;
+    /** left/center/right — css-page-3 §6.5.3's fixed 3-box-per-row division (see class docblock). */
+    private const int COLUMN_COUNT = 3;
     /**
      * Duplicated from PdfCanvas::PX_TO_PT (same px->pt factor, ISO 32000-1 §7.9.5 doesn't apply
      * here): a deferred XObject's own content stream is built independently of any PdfCanvas
@@ -72,23 +82,35 @@ final class MarginBoxPainter
     private function paintBox(string $position, MarginBoxContent $content, PdfCanvas $canvas, int $pageNumber): void
     {
         [$vertical, $horizontal] = explode('-', $position, 2);
-        $boxWidthPx = $this->paper->widthPx() - $this->marginLeftPx - $this->marginRightPx;
+        $contentWidthPx = $this->paper->widthPx() - $this->marginLeftPx - $this->marginRightPx;
+        $columnWidthPx = $contentWidthPx / self::COLUMN_COUNT;
+        $columnXPx = $this->marginLeftPx + $this->columnIndex($horizontal) * $columnWidthPx;
         $boxHeightPx = $vertical === 'top' ? $this->marginTopPx : $this->marginBottomPx;
         $boxTopPx = $vertical === 'top' ? 0.0 : $this->paper->heightPx() - $this->marginBottomPx;
-        $boxXPx = $this->marginLeftPx;
 
         if ($this->hasPagesCounter($content)) {
-            $this->deferBox($content, $canvas, $pageNumber, $horizontal, $boxXPx, $boxTopPx, $boxWidthPx, $boxHeightPx);
+            $this->deferBox($content, $canvas, $pageNumber, $horizontal, $columnXPx, $boxTopPx, $columnWidthPx, $boxHeightPx);
             return;
         }
 
         $face = $this->catalog->faceByKey(self::FACE_KEY);
         $text = $this->assembleText($content->parts, $pageNumber, 0);
         $textWidthPx = $this->measurer->widthOf($text, $face, self::FONT_SIZE_PX);
-        $localXPx = $this->horizontalOffset($horizontal, $boxWidthPx, $textWidthPx);
+        $localXPx = $this->horizontalOffset($horizontal, $columnWidthPx, $textWidthPx);
         $baselinePx = $boxTopPx + $this->centeredBaselineFromTop($face, $boxHeightPx);
 
-        $canvas->fillTextAtPage($boxXPx + $localXPx, $baselinePx, $text, self::FONT_SIZE_PX, $this->color(), self::FACE_KEY);
+        $canvas->fillTextAtPage($columnXPx + $localXPx, $baselinePx, $text, self::FONT_SIZE_PX, $this->color(), self::FACE_KEY);
+    }
+
+    /** Column of the 3-column row this box's horizontal position belongs to: left=0, center=1, right=2. */
+    private function columnIndex(string $horizontal): int
+    {
+        return match ($horizontal) {
+            'left' => 0,
+            'center' => 1,
+            'right' => 2,
+            default => 0, // unreachable: PageRuleFactory only lets left|center|right suffixes through
+        };
     }
 
     private function deferBox(
@@ -96,9 +118,9 @@ final class MarginBoxPainter
         PdfCanvas $canvas,
         int $pageNumber,
         string $horizontal,
-        float $boxXPx,
+        float $columnXPx,
         float $boxTopPx,
-        float $boxWidthPx,
+        float $columnWidthPx,
         float $boxHeightPx,
     ): void {
         $faceKey = self::FACE_KEY;
@@ -119,7 +141,7 @@ final class MarginBoxPainter
             $parts,
             $pageNumber,
             $horizontal,
-            $boxWidthPx,
+            $columnWidthPx,
             $face,
             $measurer,
             $fontSizePx,
@@ -128,7 +150,7 @@ final class MarginBoxPainter
         ): string {
             $text = $this->assembleText($parts, $pageNumber, $totalPages);
             $textWidthPx = $measurer->widthOf($text, $face, $fontSizePx);
-            $localXPx = $this->horizontalOffset($horizontal, $boxWidthPx, $textWidthPx);
+            $localXPx = $this->horizontalOffset($horizontal, $columnWidthPx, $textWidthPx);
             $hex = $embedder->encode($text);
             return sprintf(
                 "BT /%s %.2F Tf %s %.2F %.2F Td <%s> Tj ET\n",
@@ -141,8 +163,8 @@ final class MarginBoxPainter
             );
         };
 
-        $xobject = $this->writer->defer($boxWidthPx * self::PX_TO_PT, $boxHeightPx * self::PX_TO_PT, $fontRefs, $opsBuilder);
-        $canvas->placeXObject($xobject, $boxXPx, $boxTopPx + $boxHeightPx);
+        $xobject = $this->writer->defer($columnWidthPx * self::PX_TO_PT, $boxHeightPx * self::PX_TO_PT, $fontRefs, $opsBuilder);
+        $canvas->placeXObject($xobject, $columnXPx, $boxTopPx + $boxHeightPx);
     }
 
     private function hasPagesCounter(MarginBoxContent $content): bool
@@ -167,12 +189,13 @@ final class MarginBoxPainter
         return $text;
     }
 
-    private function horizontalOffset(string $horizontal, float $boxWidthPx, float $textWidthPx): float
+    /** Offset from the START of the box's OWN column (not the full content width — see class docblock). */
+    private function horizontalOffset(string $horizontal, float $columnWidthPx, float $textWidthPx): float
     {
         return match ($horizontal) {
             'left' => 0.0,
-            'center' => ($boxWidthPx - $textWidthPx) / 2,
-            'right' => $boxWidthPx - $textWidthPx,
+            'center' => ($columnWidthPx - $textWidthPx) / 2,
+            'right' => $columnWidthPx - $textWidthPx,
             default => 0.0, // unreachable: PageRuleFactory only lets left|center|right suffixes through
         };
     }
