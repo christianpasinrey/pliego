@@ -1,0 +1,2434 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M0 — pliego: esqueleto andante</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; --ok:#4a7c59; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; --ok:#7fb08a; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  h3 { margin-top:1.6rem; font-size:1.05rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.9rem }
+  th,td { border:1px solid var(--border); padding:.45rem .65rem; text-align:left; vertical-align:top }
+  th { background:var(--code-bg) }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+  .step { margin:.9rem 0 .3rem; font-weight:600 }
+  .step input { accent-color:var(--accent) }
+  .expected { color:var(--ok); font-size:.88em }
+  .warn { border-left-color:#b3592e }
+  .chart-wrap { background:var(--card); border:1px solid var(--border); border-radius:8px;
+                padding:1.2rem; margin:1.2rem 0 }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M0 «esqueleto andante»</h1>
+<p class="meta">2026-07-05 · Spec: <a href="../design/2026-07-05-php-pdf-engine-design.html">design doc</a> · Ejecución: <strong>subagent-driven</strong> (superpowers:subagent-driven-development), un subagent por tarea con revisión entre tareas. Los pasos usan checkboxes para tracking.</p>
+
+<div class="task">
+  <strong>Goal:</strong> repo listo con gates de calidad + pipeline completo mínimo que convierte HTML con bloques, texto monoestilo, colores y una fuente TTF embebida en un PDF válido multi-página, en streaming.<br>
+  <strong>Arquitectura:</strong> pipeline del spec de punta a punta en su versión mínima: DOM (PHP 8.4) → resolver de estilos (subset CSS interpretado) → box tree → block flow con line wrapping greedy → paginador generator → painter → writer PDF propio. Cada subsistema nace ya en su módulo definitivo con sus interfaces del spec.<br>
+  <strong>Stack:</strong> PHP 8.4 · sabberworm/php-css-parser · Pest 4 · PHPStan max · php-cs-fixer (PER-CS 2.0) · deptrac · GitHub Actions.
+</div>
+
+<h2>Restricciones globales (aplican a TODAS las tareas)</h2>
+<ul>
+  <li>PHP <strong>≥ 8.4</strong>; extensiones: <code>ext-dom</code>, <code>ext-mbstring</code>. Package <code>pliego/pliego</code>, namespace raíz <code>Pliego\</code> (PSR-4 → <code>src/</code>), licencia MIT.</li>
+  <li><code>declare(strict_types=1);</code> en todo fichero PHP. Value objects <code>final readonly</code>. Sin contenedor DI: dependencias por constructor.</li>
+  <li>Ninguna clase de un subsistema referencia clases concretas de otro subsistema — solo interfaces según el grafo de dependencias del spec (deptrac lo verifica, Tarea 1).</li>
+  <li>Unidades: <strong>px CSS en todo el motor</strong>; conversión a puntos PDF (<code>pt = px * 0.75</code>) exclusivamente en <code>Pdf\</code>.</li>
+  <li>Docblocks de algoritmos referencian la sección de spec W3C correspondiente. Vocabulario de las specs en nombres de variables.</li>
+  <li>NADA de datos personales (nombre real, email, empresa, apps de origen) en código, composer.json ni commits. Identidad git ya configurada en el repo: <code>christianpasinrey &lt;christianpasinrey@users.noreply.github.com&gt;</code>. Los commits terminan con <code>Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;</code>.</li>
+  <li>TDD: test primero, verlo fallar, implementación mínima, verlo pasar, commit. Comandos desde la raíz del repo (<code>C:\laragon\www\php-pdf-engine</code>; ejecutar con Git Bash paths tipo <code>./vendor/bin/pest</code>).</li>
+  <li>Simplificaciones M0 asumidas y documentadas (NO "arreglarlas" en M0): sin collapsing de márgenes, line breaking greedy por espacios (UAX#14 es M1), sin combinadores de selectores (solo <code>tipo</code>, <code>.clase</code>, <code>#id</code> y compuestos tipo <code>p.nota</code>), background que cruza página se queda en su página inicial, fuente completa embebida sin subsetting (M1), sin ToUnicode (M1).</li>
+</ul>
+
+<h2>Mapa de ficheros y grafo de tareas</h2>
+
+<pre class="mermaid">
+flowchart TB
+  T1["T1 bootstrap<br/>composer + gates + CI"] --> T2["T2 Css\Value<br/>Color, Length"]
+  T2 --> T3["T3 Pdf\<br/>writer + xref"]
+  T2 --> T5["T5 Css\<br/>parse + specificity"]
+  T1 --> T4["T4 Text\<br/>TtfFont metrics"]
+  T5 --> T6["T6 Style\<br/>resolver + herencia"]
+  T6 --> T7["T7 Dom\ + Box\<br/>box tree"]
+  T4 --> T8["T8 Layout\<br/>block flow + wrap"]
+  T7 --> T8
+  T8 --> T9["T9 Page\<br/>paginator generator"]
+  T3 --> T10["T10 Pdf\ fonts<br/>Type0 embedding"]
+  T4 --> T10
+  T9 --> T11["T11 Paint\<br/>fragment a canvas"]
+  T10 --> T11
+  T11 --> T12["T12 Engine + E2E<br/>playground index.php"]
+</pre>
+
+<table>
+<tr><th>Fichero (src/)</th><th>Responsabilidad</th><th>Tarea</th></tr>
+<tr><td><code>Css/Value/Color.php</code>, <code>Css/Value/Length.php</code></td><td>Value objects compartidos de valores CSS</td><td>T2</td></tr>
+<tr><td><code>Pdf/PdfWriter.php</code>, <code>Pdf/ObjectAllocator.php</code></td><td>Objetos PDF, xref, escritura streaming a un resource</td><td>T3</td></tr>
+<tr><td><code>Text/TtfFont.php</code>, <code>Text/FontMetrics.php</code></td><td>Parseo TTF (head/hhea/hmtx/cmap4/maxp), métricas y bytes embebibles</td><td>T4</td></tr>
+<tr><td><code>Css/Selector.php</code>, <code>Css/StyleRule.php</code>, <code>Css/StylesheetParser.php</code>, <code>Css/DeclarationParser.php</code></td><td>CSS → reglas tipadas; especificidad; warnings de propiedades no soportadas</td><td>T5</td></tr>
+<tr><td><code>Style/StyleSource.php</code> (interfaz), <code>Style/CssStyleSource.php</code>, <code>Style/StyleResolver.php</code>, <code>Style/ComputedStyle.php</code>, <code>Style/Display.php</code></td><td>Cascade M0 + herencia + defaults UA → ComputedStyle inmutable por elemento</td><td>T6</td></tr>
+<tr><td><code>Dom/HtmlParser.php</code>, <code>Box/BlockBox.php</code>, <code>Box/TextRun.php</code>, <code>Box/BoxTreeBuilder.php</code></td><td>DOM 8.4 → árbol de cajas (display:none fuera, texto en runs)</td><td>T7</td></tr>
+<tr><td><code>Layout/FormattingContext.php</code> (interfaz), <code>Layout/BlockFlowContext.php</code>, <code>Layout/TextMeasurer.php</code>, <code>Layout/Fragment/BoxFragment.php</code>, <code>Layout/Fragment/TextFragment.php</code>, <code>Layout/Geometry/Rect.php</code></td><td>Geometría absoluta: block flow, wrapping greedy, fragmentos</td><td>T8</td></tr>
+<tr><td><code>Page/Paginator.php</code>, <code>Page/Page.php</code>, <code>Page/PaperSize.php</code></td><td>Generator de páginas con push-down entre hojas</td><td>T9</td></tr>
+<tr><td><code>Pdf/FontEmbedder.php</code>, <code>Pdf/PdfCanvas.php</code></td><td>Type0/CIDFontType2 Identity-H; implementación de Canvas (px→pt, flip Y)</td><td>T10</td></tr>
+<tr><td><code>Paint/Canvas.php</code> (interfaz), <code>Paint/Painter.php</code></td><td>Fragmentos → llamadas Canvas (rects de fondo, runs de texto)</td><td>T11</td></tr>
+<tr><td><code>Engine.php</code>, <code>RenderResult.php</code>, <code>RenderReport.php</code></td><td>API pública y cableado del pipeline</td><td>T12</td></tr>
+<tr><td><code>resources/fonts/DejaVuSans.ttf</code></td><td>Fuente por defecto (licencia libre, se verifica en local antes de descargar)</td><td>T4</td></tr>
+<tr><td><code>index.php</code> (raíz, fuera de src/)</td><td>Playground de desarrollo</td><td>T12</td></tr>
+</table>
+
+<div class="chart-wrap"><canvas id="effortChart" height="90"></canvas></div>
+<script>
+addEventListener('load', () => new Chart(document.getElementById('effortChart'), {
+  type:'bar',
+  data:{ labels:['T1','T2','T3','T4','T5','T6','T7','T8','T9','T10','T11','T12'],
+    datasets:[{ label:'Esfuerzo relativo estimado (1-5)', data:[2,1,4,4,2,3,2,5,3,4,2,3],
+      backgroundColor:'#8b5e34aa', borderColor:'#8b5e34', borderWidth:1 }] },
+  options:{ plugins:{ legend:{ position:'bottom' } }, scales:{ y:{ min:0, max:5 } } }
+}));
+</script>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>Tarea 1 — Bootstrap del repo y gates de calidad</h3>
+<p><strong>Files:</strong> Create <code>composer.json</code>, <code>.gitignore</code>, <code>.gitattributes</code>, <code>phpunit.xml.dist</code>, <code>phpstan.neon.dist</code>, <code>.php-cs-fixer.dist.php</code>, <code>deptrac.yaml</code>, <code>.github/workflows/ci.yml</code>, <code>tests/Pest.php</code>, <code>tests/Unit/.gitkeep</code>, <code>src/.gitkeep</code></p>
+<p><strong>Interfaces — Produces:</strong> autoload <code>Pliego\ → src/</code>, <code>Pliego\Tests\ → tests/</code>; comandos <code>composer test</code>, <code>composer analyse</code>, <code>composer style</code>, <code>composer arch</code> que las demás tareas ejecutan.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: crear <code>composer.json</code></p>
+<pre><code>{
+    "name": "pliego/pliego",
+    "description": "Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless browser.",
+    "license": "MIT",
+    "type": "library",
+    "keywords": ["pdf", "html", "css", "renderer"],
+    "require": {
+        "php": ">=8.4",
+        "ext-dom": "*",
+        "ext-mbstring": "*",
+        "sabberworm/php-css-parser": "^8.9"
+    },
+    "require-dev": {
+        "pestphp/pest": "^4.0",
+        "phpstan/phpstan": "^2.1",
+        "friendsofphp/php-cs-fixer": "^3.75",
+        "qossmic/deptrac": "^2.0"
+    },
+    "autoload": { "psr-4": { "Pliego\\": "src/" } },
+    "autoload-dev": { "psr-4": { "Pliego\\Tests\\": "tests/" } },
+    "scripts": {
+        "test": "pest",
+        "analyse": "phpstan analyse",
+        "style": "php-cs-fixer fix --dry-run --diff",
+        "style:fix": "php-cs-fixer fix",
+        "arch": "deptrac analyse --fail-on-uncovered"
+    },
+    "config": { "allow-plugins": { "pestphp/pest-plugin": true }, "sort-packages": true },
+    "minimum-stability": "stable"
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: <code>.gitattributes</code> (evita el ruido CRLF ya visto en el primer commit) y <code>.gitignore</code></p>
+<pre><code># .gitattributes
+* text=auto eol=lf
+*.ttf binary
+*.png binary
+
+# .gitignore
+/vendor/
+/.phpunit.cache/
+/.php-cs-fixer.cache
+/out.pdf
+/composer.lock</code></pre>
+<p class="meta">Nota: <code>composer.lock</code> fuera porque es una librería (los lockfiles Windows además rompen CI linux — learning previo del usuario).</p>
+
+<p class="step"><input type="checkbox"> Paso 3: configs de calidad</p>
+<pre><code># phpstan.neon.dist
+parameters:
+    level: max
+    paths: [src, tests]
+
+# .php-cs-fixer.dist.php
+&lt;?php
+declare(strict_types=1);
+$finder = PhpCsFixer\Finder::create()->in([__DIR__ . '/src', __DIR__ . '/tests']);
+return (new PhpCsFixer\Config())
+    ->setRiskyAllowed(true)
+    ->setRules([
+        '@PER-CS2.0' => true,
+        'declare_strict_types' => true,
+        'ordered_imports' => true,
+        'no_unused_imports' => true,
+    ])
+    ->setFinder($finder);
+
+# deptrac.yaml — el grafo del spec §6 como build gate
+deptrac:
+  paths: [src]
+  layers:
+    - { name: Css,    collectors: [{ type: directory, value: src/Css }] }
+    - { name: Style,  collectors: [{ type: directory, value: src/Style }] }
+    - { name: Dom,    collectors: [{ type: directory, value: src/Dom }] }
+    - { name: Box,    collectors: [{ type: directory, value: src/Box }] }
+    - { name: Layout, collectors: [{ type: directory, value: src/Layout }] }
+    - { name: Text,   collectors: [{ type: directory, value: src/Text }] }
+    - { name: Page,   collectors: [{ type: directory, value: src/Page }] }
+    - { name: Paint,  collectors: [{ type: directory, value: src/Paint }] }
+    - { name: Pdf,    collectors: [{ type: directory, value: src/Pdf }] }
+    - { name: Engine, collectors: [{ type: classLike, value: 'Pliego\\(Engine|RenderResult|RenderReport)' }] }
+  ruleset:
+    Css: []
+    Style: [Css]
+    Dom: []
+    Box: [Dom, Style, Css]
+    Layout: [Box, Style, Css, Text]
+    Text: []
+    Page: [Layout, Css]
+    Paint: [Layout, Page, Css, Text]
+    Pdf: [Paint, Text, Css, Layout]
+    Engine: [Css, Style, Dom, Box, Layout, Text, Page, Paint, Pdf]</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>phpunit.xml.dist</code> (con bloque <code>&lt;php&gt;</code> — gotcha de CI conocido) y <code>tests/Pest.php</code></p>
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" bootstrap="vendor/autoload.php" colors="true" cacheDirectory=".phpunit.cache"&gt;
+  &lt;testsuites&gt;
+    &lt;testsuite name="Unit"&gt;&lt;directory&gt;tests/Unit&lt;/directory&gt;&lt;/testsuite&gt;
+    &lt;testsuite name="EndToEnd"&gt;&lt;directory&gt;tests/EndToEnd&lt;/directory&gt;&lt;/testsuite&gt;
+  &lt;/testsuites&gt;
+  &lt;php&gt;
+    &lt;env name="CACHE_DRIVER" value="array"/&gt;
+  &lt;/php&gt;
+&lt;/phpunit&gt;
+
+# tests/Pest.php
+&lt;?php
+declare(strict_types=1);</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 5: CI <code>.github/workflows/ci.yml</code> (sin YAML flow-style en expresiones — learning previo)</p>
+<pre><code>name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, mbstring
+          coverage: none
+      - run: composer install --no-interaction --no-progress
+      - run: composer style
+      - run: composer analyse
+      - run: composer arch
+      - run: composer test</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 6: verificar y commitear</p>
+<pre><code>composer validate --strict        # Expected: "./composer.json is valid"
+composer install                  # Expected: instala sin conflictos de versiones
+./vendor/bin/pest --version       # Expected: Pest 4.x</code></pre>
+<pre><code>git add -A && git commit -m "chore: bootstrap pliego package with quality gates
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;"</code></pre>
+</div>
+
+<div class="task">
+<h3>Tarea 2 — Value objects CSS: <code>Color</code> y <code>Length</code></h3>
+<p><strong>Files:</strong> Create <code>src/Css/Value/Color.php</code>, <code>src/Css/Value/Length.php</code> · Test <code>tests/Unit/Css/ColorTest.php</code>, <code>tests/Unit/Css/LengthTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>Color::fromCss(string): ?self</code> (hex 3/6 y 16 keywords básicos; null si no reconoce), propiedades <code>int $r,$g,$b</code>; <code>Length::px(float): self</code>, <code>Length::fromCss(string): ?self</code> (px y <code>0</code> sin unidad), <code>float $px</code>, <code>Length::zero(): self</code>.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: tests que fallan</p>
+<pre><code>&lt;?php // tests/Unit/Css/ColorTest.php
+declare(strict_types=1);
+
+use Pliego\Css\Value\Color;
+
+it('parses 6-digit hex', fn () => expect(Color::fromCss('#8b5e34'))
+    ->r->toBe(139)->g->toBe(94)->b->toBe(52));
+it('parses 3-digit hex', fn () => expect(Color::fromCss('#f00'))
+    ->r->toBe(255)->g->toBe(0)->b->toBe(0));
+it('parses keywords case-insensitively', fn () => expect(Color::fromCss('White'))
+    ->r->toBe(255)->g->toBe(255)->b->toBe(255));
+it('returns null for unsupported values', fn () => expect(Color::fromCss('rgb(1,2,3)'))->toBeNull());
+
+&lt;?php // tests/Unit/Css/LengthTest.php
+declare(strict_types=1);
+
+use Pliego\Css\Value\Length;
+
+it('parses px values', fn () => expect(Length::fromCss('16px'))->px->toBe(16.0));
+it('parses unitless zero', fn () => expect(Length::fromCss('0'))->px->toBe(0.0));
+it('returns null for unsupported units', fn () => expect(Length::fromCss('2em'))->toBeNull());</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL «Class "Pliego\Css\Value\Color" not found»</span></p>
+<pre><code>./vendor/bin/pest tests/Unit/Css</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación mínima</p>
+<pre><code>&lt;?php // src/Css/Value/Color.php
+declare(strict_types=1);
+
+namespace Pliego\Css\Value;
+
+final readonly class Color
+{
+    private const array KEYWORDS = [
+        'black' => [0, 0, 0], 'white' => [255, 255, 255], 'red' => [255, 0, 0],
+        'green' => [0, 128, 0], 'blue' => [0, 0, 255], 'yellow' => [255, 255, 0],
+        'gray' => [128, 128, 128], 'grey' => [128, 128, 128], 'silver' => [192, 192, 192],
+        'maroon' => [128, 0, 0], 'navy' => [0, 0, 128], 'olive' => [128, 128, 0],
+        'purple' => [128, 0, 128], 'teal' => [0, 128, 128], 'aqua' => [0, 255, 255],
+        'fuchsia' => [255, 0, 255],
+    ];
+
+    public function __construct(public int $r, public int $g, public int $b) {}
+
+    public static function fromCss(string $value): ?self
+    {
+        $value = strtolower(trim($value));
+        if (isset(self::KEYWORDS[$value])) {
+            [$r, $g, $b] = self::KEYWORDS[$value];
+            return new self($r, $g, $b);
+        }
+        if (preg_match('/^#([0-9a-f]{3}|[0-9a-f]{6})$/', $value, $m) === 1) {
+            $hex = $m[1];
+            if (strlen($hex) === 3) {
+                $hex = $hex[0] . $hex[0] . $hex[1] . $hex[1] . $hex[2] . $hex[2];
+            }
+            return new self((int) hexdec(substr($hex, 0, 2)), (int) hexdec(substr($hex, 2, 2)), (int) hexdec(substr($hex, 4, 2)));
+        }
+        return null;
+    }
+}
+
+&lt;?php // src/Css/Value/Length.php
+declare(strict_types=1);
+
+namespace Pliego\Css\Value;
+
+final readonly class Length
+{
+    private function __construct(public float $px) {}
+
+    public static function px(float $px): self
+    {
+        return new self($px);
+    }
+
+    public static function zero(): self
+    {
+        return new self(0.0);
+    }
+
+    public static function fromCss(string $value): ?self
+    {
+        $value = strtolower(trim($value));
+        if ($value === '0') {
+            return self::zero();
+        }
+        if (preg_match('/^(-?\d+(?:\.\d+)?)px$/', $value, $m) === 1) {
+            return new self((float) $m[1]);
+        }
+        return null;
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: verificar — <span class="expected">Expected: 7 passed</span> — y gates: <code>composer analyse && composer style</code> sin errores.</p>
+
+<p class="step"><input type="checkbox"> Paso 5: commit</p>
+<pre><code>git add src/Css tests/Unit/Css && git commit -m "feat(css): add Color and Length value objects
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;"</code></pre>
+</div>
+
+<div class="task">
+<h3>Tarea 3 — <code>Pdf\</code>: writer streaming con xref válido</h3>
+<p><strong>Files:</strong> Create <code>src/Pdf/PdfWriter.php</code> · Test <code>tests/Unit/Pdf/PdfWriterTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>new PdfWriter($stream)</code> (resource escribible) · <code>begin(): void</code> · <code>allocateObjectId(): int</code> · <code>writeObject(int $id, string $body): void</code> · <code>addPage(float $widthPt, float $heightPt, string $contentStream, array&lt;string,int&gt; $fontRefs): void</code> · <code>finish(): void</code>. T10 escribirá sus objetos de fuente vía <code>allocateObjectId()</code>+<code>writeObject()</code> y pasará las referencias a <code>addPage()</code>.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test que falla</p>
+<pre><code>&lt;?php // tests/Unit/Pdf/PdfWriterTest.php
+declare(strict_types=1);
+
+use Pliego\Pdf\PdfWriter;
+
+function renderEmptyPdf(): string
+{
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $writer->addPage(595.28, 841.89, "1 0 0 RG\n", []);
+    $writer->finish();
+    rewind($stream);
+    return (string) stream_get_contents($stream);
+}
+
+it('starts with the PDF 1.7 header', fn () => expect(renderEmptyPdf())->toStartWith('%PDF-1.7'));
+
+it('contains catalog, page tree and one page', function () {
+    $pdf = renderEmptyPdf();
+    expect($pdf)->toContain('/Type /Catalog')
+        ->toContain('/Type /Pages')->toContain('/Count 1')
+        ->toContain('/Type /Page')->toContain('/MediaBox [0 0 595.28 841.89]');
+});
+
+it('writes a startxref offset that points at the xref table', function () {
+    $pdf = renderEmptyPdf();
+    expect(preg_match('/startxref\n(\d+)\n%%EOF\s*$/', $pdf, $m))->toBe(1);
+    expect(substr($pdf, (int) $m[1], 4))->toBe('xref');
+});
+
+it('registers every object offset correctly in the xref', function () {
+    $pdf = renderEmptyPdf();
+    preg_match('/startxref\n(\d+)/', $pdf, $m);
+    $xref = substr($pdf, (int) $m[1]);
+    preg_match('/xref\n0 (\d+)\n/', $xref, $head);
+    $count = (int) $head[1];
+    preg_match_all('/^(\d{10}) \d{5} n ?$/m', $xref, $entries);
+    expect($entries[1])->toHaveCount($count - 1);
+    foreach ($entries[1] as $i => $offset) {
+        $objectNumber = $i + 1;
+        expect(substr($pdf, (int) $offset, strlen("$objectNumber 0 obj")))->toBe("$objectNumber 0 obj");
+    }
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar <code>./vendor/bin/pest tests/Unit/Pdf</code> — <span class="expected">Expected: FAIL «Class "Pliego\Pdf\PdfWriter" not found»</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Pdf/PdfWriter.php
+declare(strict_types=1);
+
+namespace Pliego\Pdf;
+
+/**
+ * Streaming PDF writer (ISO 32000-1 §7.5). Objects are written to the output
+ * stream as soon as they are complete; only object ids, byte offsets and page
+ * references are retained, so memory stays O(page).
+ */
+final class PdfWriter
+{
+    private int $nextObjectId = 1;
+    private int $bytesWritten = 0;
+    /** @var array&lt;int, int&gt; object id => byte offset */
+    private array $offsets = [];
+    /** @var list&lt;int&gt; */
+    private array $pageIds = [];
+    private int $pagesTreeId = 0;
+
+    /** @param resource $stream */
+    public function __construct(private readonly mixed $stream) {}
+
+    public function begin(): void
+    {
+        $this->emit("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        $this->pagesTreeId = $this->allocateObjectId();
+    }
+
+    public function allocateObjectId(): int
+    {
+        return $this->nextObjectId++;
+    }
+
+    public function writeObject(int $id, string $body): void
+    {
+        $this->offsets[$id] = $this->bytesWritten;
+        $this->emit("$id 0 obj\n$body\nendobj\n");
+    }
+
+    /** @param array&lt;string, int&gt; $fontRefs resource name (e.g. "F1") => font object id */
+    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs): void
+    {
+        $contentId = $this->allocateObjectId();
+        $length = strlen($contentStream);
+        $this->writeObject($contentId, "&lt;&lt; /Length $length &gt;&gt;\nstream\n$contentStream\nendstream");
+
+        $fonts = '';
+        foreach ($fontRefs as $name => $objectId) {
+            $fonts .= "/$name $objectId 0 R ";
+        }
+        $resources = $fonts === '' ? '&lt;&lt; &gt;&gt;' : "&lt;&lt; /Font &lt;&lt; $fonts&gt;&gt; &gt;&gt;";
+
+        $pageId = $this->allocateObjectId();
+        $mediaBox = sprintf('[0 0 %.2F %.2F]', $widthPt, $heightPt);
+        $this->writeObject($pageId, "&lt;&lt; /Type /Page /Parent {$this->pagesTreeId} 0 R /MediaBox $mediaBox /Resources $resources /Contents $contentId 0 R &gt;&gt;");
+        $this->pageIds[] = $pageId;
+    }
+
+    public function finish(): void
+    {
+        $kids = implode(' ', array_map(static fn (int $id): string => "$id 0 R", $this->pageIds));
+        $count = count($this->pageIds);
+        $this->writeObject($this->pagesTreeId, "&lt;&lt; /Type /Pages /Kids [$kids] /Count $count &gt;&gt;");
+
+        $catalogId = $this->allocateObjectId();
+        $this->writeObject($catalogId, "&lt;&lt; /Type /Catalog /Pages {$this->pagesTreeId} 0 R &gt;&gt;");
+
+        $xrefOffset = $this->bytesWritten;
+        $size = $this->nextObjectId;
+        $xref = "xref\n0 $size\n0000000000 65535 f \n";
+        for ($id = 1; $id &lt; $size; $id++) {
+            $xref .= sprintf("%010d 00000 n \n", $this->offsets[$id]);
+        }
+        $this->emit($xref);
+        $this->emit("trailer\n&lt;&lt; /Size $size /Root $catalogId 0 R &gt;&gt;\nstartxref\n$xrefOffset\n%%EOF\n");
+    }
+
+    private function emit(string $bytes): void
+    {
+        fwrite($this->stream, $bytes);
+        $this->bytesWritten += strlen($bytes);
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Pdf</code> — <span class="expected">Expected: 4 passed</span>. Además, volcar un PDF a disco y abrirlo en un visor real (Edge/Acrobat): página A4 en blanco sin errores.</p>
+<pre><code>php -r "require 'vendor/autoload.php'; \$s=fopen('out.pdf','wb'); \$w=new Pliego\Pdf\PdfWriter(\$s); \$w->begin(); \$w->addPage(595.28,841.89,'',[]); \$w->finish(); fclose(\$s);"</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 5: gates (<code>composer analyse && composer style && composer arch</code>) y commit <code>feat(pdf): add streaming PDF writer with valid xref</code> (+ trailer Co-Authored-By).</p>
+</div>
+
+<div class="task">
+<h3>Tarea 4 — <code>Text\</code>: parser TTF de métricas + fuente por defecto</h3>
+<p><strong>Files:</strong> Create <code>src/Text/TtfFont.php</code>, <code>resources/fonts/DejaVuSans.ttf</code> (+ su licencia <code>resources/fonts/LICENSE-DejaVu.txt</code>) · Test <code>tests/Unit/Text/TtfFontTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>TtfFont::fromFile(string $path): self</code> · <code>unitsPerEm(): int</code> · <code>ascender(): int</code> · <code>descender(): int</code> (negativo) · <code>glyphId(int $codepoint): int</code> (0 = .notdef) · <code>advanceOf(int $glyphId): int</code> (unidades em) · <code>glyphCount(): int</code> · <code>boundingBox(): array{int,int,int,int}</code> · <code>bytes(): string</code>.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: conseguir la fuente — VERIFICAR LOCAL PRIMERO (regla del usuario), solo descargar si no existe</p>
+<pre><code>find /c/laragon/www -name "DejaVuSans.ttf" -not -path "*/php-pdf-engine/*" 2>/dev/null | head -3
+# Si aparece (típico en vendor/dompdf de otros proyectos): cp &lt;ruta&gt; resources/fonts/DejaVuSans.ttf
+# Si NO aparece:
+curl -sL -o /tmp/dejavu.zip https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip
+unzip -j /tmp/dejavu.zip "dejavu-fonts-ttf-2.37/ttf/DejaVuSans.ttf" -d resources/fonts/
+unzip -j /tmp/dejavu.zip "dejavu-fonts-ttf-2.37/LICENSE" -d resources/fonts/ && mv resources/fonts/LICENSE resources/fonts/LICENSE-DejaVu.txt</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: test que falla (propiedades estructurales, no constantes frágiles)</p>
+<pre><code>&lt;?php // tests/Unit/Text/TtfFontTest.php
+declare(strict_types=1);
+
+use Pliego\Text\TtfFont;
+
+beforeEach(function (): void {
+    $this->font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+});
+
+it('reads unitsPerEm from the head table', fn () => expect($this->font->unitsPerEm())->toBe(2048));
+it('reads vertical metrics from hhea', function () {
+    expect($this->font->ascender())->toBeGreaterThan(0);
+    expect($this->font->descender())->toBeLessThan(0);
+});
+it('maps codepoints to glyphs via cmap format 4', function () {
+    expect($this->font->glyphId(0x41))->toBeGreaterThan(0);   // 'A'
+    expect($this->font->glyphId(0xF1))->toBeGreaterThan(0);   // 'ñ'
+    expect($this->font->glyphId(0x10FFFD))->toBe(0);          // fuera de BMP => .notdef
+});
+it('exposes wider advances for wider glyphs', function () {
+    $narrow = $this->font->advanceOf($this->font->glyphId(0x69)); // 'i'
+    $wide = $this->font->advanceOf($this->font->glyphId(0x57));   // 'W'
+    expect($narrow)->toBeGreaterThan(0);
+    expect($wide)->toBeGreaterThan($narrow);
+});
+it('returns the raw file bytes for embedding', function () {
+    expect(strlen($this->font->bytes()))->toBe(filesize(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf'));
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 3: ejecutar — <span class="expected">Expected: FAIL «Class "Pliego\Text\TtfFont" not found»</span></p>
+
+<p class="step"><input type="checkbox"> Paso 4: implementación</p>
+<pre><code>&lt;?php // src/Text/TtfFont.php
+declare(strict_types=1);
+
+namespace Pliego\Text;
+
+/**
+ * Minimal TrueType parser: sfnt table directory plus the head, hhea, maxp,
+ * hmtx and cmap (format 4) tables. Reference: OpenType spec §5 (sfnt) and
+ * Apple TrueType Reference Manual. Whole-file embedding; subsetting is M1.
+ */
+final class TtfFont
+{
+    /** @var array&lt;string, array{offset: int, length: int}&gt; */
+    private array $tables = [];
+    private int $unitsPerEm;
+    private int $ascender;
+    private int $descender;
+    private int $numGlyphs;
+    /** @var array{int, int, int, int} xMin, yMin, xMax, yMax */
+    private array $bbox;
+    /** @var list&lt;int&gt; advance width per hmtx entry */
+    private array $advances = [];
+    /** @var array&lt;int, int&gt; codepoint => glyph id (lazy, per cmap segment) */
+    private array $cmapCache = [];
+    private int $cmapOffset;
+
+    private function __construct(private readonly string $data)
+    {
+        $numTables = $this->uint16(4);
+        for ($i = 0; $i &lt; $numTables; $i++) {
+            $record = 12 + $i * 16;
+            $tag = substr($this->data, $record, 4);
+            $this->tables[$tag] = [
+                'offset' => $this->uint32($record + 8),
+                'length' => $this->uint32($record + 12),
+            ];
+        }
+        $head = $this->require('head');
+        $this->unitsPerEm = $this->uint16($head + 18);
+        $this->bbox = [
+            $this->int16($head + 36), $this->int16($head + 38),
+            $this->int16($head + 40), $this->int16($head + 42),
+        ];
+        $hhea = $this->require('hhea');
+        $this->ascender = $this->int16($hhea + 4);
+        $this->descender = $this->int16($hhea + 6);
+        $numberOfHMetrics = $this->uint16($hhea + 34);
+        $this->numGlyphs = $this->uint16($this->require('maxp') + 4);
+        $hmtx = $this->require('hmtx');
+        for ($i = 0; $i &lt; $numberOfHMetrics; $i++) {
+            $this->advances[] = $this->uint16($hmtx + $i * 4);
+        }
+        $this->cmapOffset = $this->findCmapFormat4();
+    }
+
+    public static function fromFile(string $path): self
+    {
+        $data = file_get_contents($path);
+        if ($data === false) {
+            throw new FontException("Cannot read font file: $path");
+        }
+        return new self($data);
+    }
+
+    public function unitsPerEm(): int { return $this->unitsPerEm; }
+    public function ascender(): int { return $this->ascender; }
+    public function descender(): int { return $this->descender; }
+    public function glyphCount(): int { return $this->numGlyphs; }
+    /** @return array{int, int, int, int} */
+    public function boundingBox(): array { return $this->bbox; }
+    public function bytes(): string { return $this->data; }
+
+    public function advanceOf(int $glyphId): int
+    {
+        // hmtx: glyphs beyond numberOfHMetrics reuse the last advance width.
+        return $this->advances[min($glyphId, count($this->advances) - 1)];
+    }
+
+    /** cmap format 4 lookup (OpenType spec, "Segment mapping to delta values"). */
+    public function glyphId(int $codepoint): int
+    {
+        if ($codepoint &gt; 0xFFFF) {
+            return 0;
+        }
+        if (isset($this->cmapCache[$codepoint])) {
+            return $this->cmapCache[$codepoint];
+        }
+        $t = $this->cmapOffset;
+        $segCount = intdiv($this->uint16($t + 6), 2);
+        $endCodes = $t + 14;
+        $startCodes = $endCodes + $segCount * 2 + 2;
+        $idDeltas = $startCodes + $segCount * 2;
+        $idRangeOffsets = $idDeltas + $segCount * 2;
+        for ($seg = 0; $seg &lt; $segCount; $seg++) {
+            if ($this->uint16($endCodes + $seg * 2) &lt; $codepoint) {
+                continue;
+            }
+            $start = $this->uint16($startCodes + $seg * 2);
+            if ($start &gt; $codepoint) {
+                return $this->cmapCache[$codepoint] = 0;
+            }
+            $rangeOffset = $this->uint16($idRangeOffsets + $seg * 2);
+            if ($rangeOffset === 0) {
+                $glyph = ($codepoint + $this->int16($idDeltas + $seg * 2)) &amp; 0xFFFF;
+            } else {
+                $addr = $idRangeOffsets + $seg * 2 + $rangeOffset + ($codepoint - $start) * 2;
+                $glyph = $this->uint16($addr);
+                if ($glyph !== 0) {
+                    $glyph = ($glyph + $this->int16($idDeltas + $seg * 2)) &amp; 0xFFFF;
+                }
+            }
+            return $this->cmapCache[$codepoint] = $glyph;
+        }
+        return $this->cmapCache[$codepoint] = 0;
+    }
+
+    private function findCmapFormat4(): int
+    {
+        $cmap = $this->require('cmap');
+        $numSubtables = $this->uint16($cmap + 2);
+        for ($i = 0; $i &lt; $numSubtables; $i++) {
+            $rec = $cmap + 4 + $i * 8;
+            $platform = $this->uint16($rec);
+            $encoding = $this->uint16($rec + 2);
+            $offset = $cmap + $this->uint32($rec + 4);
+            if ($platform === 3 &amp;&amp; $encoding === 1 &amp;&amp; $this->uint16($offset) === 4) {
+                return $offset;
+            }
+        }
+        throw new FontException('No Windows Unicode BMP (format 4) cmap subtable found');
+    }
+
+    private function require(string $tag): int
+    {
+        return $this->tables[$tag]['offset'] ?? throw new FontException("Missing required table: $tag");
+    }
+
+    private function uint16(int $offset): int
+    {
+        /** @var array{1: int} $v */
+        $v = unpack('n', substr($this->data, $offset, 2));
+        return $v[1];
+    }
+
+    private function int16(int $offset): int
+    {
+        $v = $this->uint16($offset);
+        return $v &gt;= 0x8000 ? $v - 0x10000 : $v;
+    }
+
+    private function uint32(int $offset): int
+    {
+        /** @var array{1: int} $v */
+        $v = unpack('N', substr($this->data, $offset, 4));
+        return $v[1];
+    }
+}
+
+&lt;?php // src/Text/FontException.php
+declare(strict_types=1);
+
+namespace Pliego\Text;
+
+final class FontException extends \RuntimeException {}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 5: <code>./vendor/bin/pest tests/Unit/Text</code> — <span class="expected">Expected: 5 passed</span>; gates verdes; commit <code>feat(text): add minimal TTF metrics parser and bundled default font</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 5 — <code>Css\</code>: parser de stylesheet, selectores y especificidad</h3>
+<p><strong>Files:</strong> Create <code>src/Css/Selector.php</code>, <code>src/Css/StyleRule.php</code>, <code>src/Css/DeclarationParser.php</code>, <code>src/Css/StylesheetParser.php</code>, <code>src/Css/ParseResult.php</code> · Test <code>tests/Unit/Css/SelectorTest.php</code>, <code>tests/Unit/Css/StylesheetParserTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>Selector::fromString(string): ?self</code> con <code>matches(\Dom\Element): bool</code> y <code>specificity(): int</code> (entero comparable: id*100 + class*10 + type) · <code>StyleRule</code> readonly con <code>Selector $selector</code>, <code>array&lt;string, mixed&gt; $declarations</code> (claves canónicas: <code>display</code>, <code>margin-top|right|bottom|left</code>, <code>padding-*</code>, <code>background-color</code>, <code>color</code>, <code>font-size</code>, <code>font-family</code>; valores <code>Length|Color|string</code>), <code>int $order</code> · <code>StylesheetParser::parse(string $css): ParseResult</code> con <code>list&lt;StyleRule&gt; $rules</code> y <code>list&lt;string&gt; $warnings</code>.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: tests que fallan</p>
+<pre><code>&lt;?php // tests/Unit/Css/SelectorTest.php
+declare(strict_types=1);
+
+use Pliego\Css\Selector;
+
+it('parses compound selectors', function () {
+    $s = Selector::fromString('p.note');
+    assert($s !== null);
+    expect($s->specificity())->toBe(11);
+});
+it('orders specificity id > class > type', function () {
+    $id = Selector::fromString('#top');
+    $class = Selector::fromString('.note');
+    $type = Selector::fromString('p');
+    assert($id !== null &amp;&amp; $class !== null &amp;&amp; $type !== null);
+    expect($id->specificity())->toBeGreaterThan($class->specificity());
+    expect($class->specificity())->toBeGreaterThan($type->specificity());
+});
+it('rejects combinators in M0', fn () => expect(Selector::fromString('p > span'))->toBeNull());
+it('matches elements by tag, class and id', function () {
+    $doc = \Dom\HTMLDocument::createFromString('&lt;p id="top" class="note big"&gt;x&lt;/p&gt;', LIBXML_NOERROR);
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $matching = Selector::fromString('p.note');
+    $failing = Selector::fromString('div.note');
+    assert($matching !== null &amp;&amp; $failing !== null);
+    expect($matching->matches($p))->toBeTrue();
+    expect($failing->matches($p))->toBeFalse();
+});
+
+&lt;?php // tests/Unit/Css/StylesheetParserTest.php
+declare(strict_types=1);
+
+use Pliego\Css\StylesheetParser;
+use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Length;
+
+it('parses rules into typed declarations', function () {
+    $result = new StylesheetParser()->parse('p { color: #f00; margin: 8px; font-size: 14px }');
+    expect($result->rules)->toHaveCount(1);
+    $d = $result->rules[0]->declarations;
+    expect($d['color'])->toEqual(new Color(255, 0, 0));
+    expect($d['margin-top'])->toEqual(Length::px(8.0));
+    expect($d['margin-left'])->toEqual(Length::px(8.0));
+    expect($d['font-size'])->toEqual(Length::px(14.0));
+});
+it('expands two-value margin shorthand', function () {
+    $d = new StylesheetParser()->parse('div { margin: 4px 12px }')->rules[0]->declarations;
+    expect($d['margin-top'])->toEqual(Length::px(4.0));
+    expect($d['margin-right'])->toEqual(Length::px(12.0));
+    expect($d['margin-bottom'])->toEqual(Length::px(4.0));
+    expect($d['margin-left'])->toEqual(Length::px(12.0));
+});
+it('keeps rule order for the cascade', function () {
+    $rules = new StylesheetParser()->parse('p { color: red } p { color: blue }')->rules;
+    expect($rules[0]->order)->toBeLessThan($rules[1]->order);
+});
+it('warns on unsupported properties and selectors without failing', function () {
+    $result = new StylesheetParser()->parse('p &gt; span { float: left; color: red }');
+    expect($result->rules)->toHaveCount(0);
+    expect($result->warnings)->not->toBeEmpty();
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL (clases no existen)</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Css/Selector.php
+declare(strict_types=1);
+
+namespace Pliego\Css;
+
+/** M0 subset: un único selector compuesto (tipo, .clase, #id). Sin combinadores. */
+final readonly class Selector
+{
+    private function __construct(
+        public ?string $type,
+        public ?string $class,
+        public ?string $id,
+    ) {}
+
+    public static function fromString(string $selector): ?self
+    {
+        $selector = trim($selector);
+        if (preg_match('/^(?&lt;type&gt;[a-zA-Z][\w-]*)?(?:\.(?&lt;class&gt;[\w-]+))?(?:#(?&lt;id&gt;[\w-]+))?$/', $selector, $m) !== 1) {
+            return null;
+        }
+        $type = ($m['type'] ?? '') !== '' ? strtolower($m['type']) : null;
+        $class = ($m['class'] ?? '') !== '' ? $m['class'] : null;
+        $id = ($m['id'] ?? '') !== '' ? $m['id'] : null;
+        if ($type === null &amp;&amp; $class === null &amp;&amp; $id === null) {
+            return null;
+        }
+        return new self($type, $class, $id);
+    }
+
+    /** CSS 2.2 §6.4.3 colapsado a un entero (sin !important ni inline en M0). */
+    public function specificity(): int
+    {
+        return ($this->id !== null ? 100 : 0)
+            + ($this->class !== null ? 10 : 0)
+            + ($this->type !== null ? 1 : 0);
+    }
+
+    public function matches(\Dom\Element $element): bool
+    {
+        if ($this->type !== null &amp;&amp; strtolower($element->tagName) !== $this->type) {
+            return false;
+        }
+        if ($this->class !== null &amp;&amp; !$element->classList->contains($this->class)) {
+            return false;
+        }
+        return $this->id === null || $element->getAttribute('id') === $this->id;
+    }
+}
+
+&lt;?php // src/Css/StyleRule.php
+declare(strict_types=1);
+
+namespace Pliego\Css;
+
+final readonly class StyleRule
+{
+    /** @param array&lt;string, mixed&gt; $declarations claves canónicas => Length|Color|string */
+    public function __construct(
+        public Selector $selector,
+        public array $declarations,
+        public int $order,
+    ) {}
+}
+
+&lt;?php // src/Css/ParseResult.php
+declare(strict_types=1);
+
+namespace Pliego\Css;
+
+final readonly class ParseResult
+{
+    /**
+     * @param list&lt;StyleRule&gt; $rules
+     * @param list&lt;string&gt; $warnings
+     */
+    public function __construct(public array $rules, public array $warnings) {}
+}
+
+&lt;?php // src/Css/DeclarationParser.php
+declare(strict_types=1);
+
+namespace Pliego\Css;
+
+use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Length;
+
+final class DeclarationParser
+{
+    private const array LENGTH_PROPERTIES = [
+        'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+        'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+        'font-size', 'width', 'height',
+    ];
+    private const array COLOR_PROPERTIES = ['color', 'background-color'];
+    private const array KEYWORD_PROPERTIES = ['display' => ['block', 'none'], 'font-family' => null];
+
+    /** @var list&lt;string&gt; */
+    private array $warnings = [];
+
+    /** @return array&lt;string, mixed&gt; */
+    public function parse(string $property, string $value): array
+    {
+        $property = strtolower(trim($property));
+        $value = trim($value);
+        if ($property === 'margin' || $property === 'padding') {
+            return $this->expandShorthand($property, $value);
+        }
+        if (in_array($property, self::LENGTH_PROPERTIES, true)) {
+            $length = Length::fromCss($value);
+            if ($length === null) {
+                $this->warnings[] = "Unsupported length for $property: $value";
+                return [];
+            }
+            return [$property => $length];
+        }
+        if (in_array($property, self::COLOR_PROPERTIES, true)) {
+            $color = Color::fromCss($value);
+            if ($color === null) {
+                $this->warnings[] = "Unsupported color for $property: $value";
+                return [];
+            }
+            return [$property => $color];
+        }
+        if (array_key_exists($property, self::KEYWORD_PROPERTIES)) {
+            $allowed = self::KEYWORD_PROPERTIES[$property];
+            $keyword = strtolower($value);
+            if ($allowed !== null &amp;&amp; !in_array($keyword, $allowed, true)) {
+                $this->warnings[] = "Unsupported keyword for $property: $value";
+                return [];
+            }
+            return [$property => $property === 'font-family' ? trim($value, '"\' ') : $keyword];
+        }
+        $this->warnings[] = "Unsupported property: $property";
+        return [];
+    }
+
+    /** @return list&lt;string&gt; */
+    public function drainWarnings(): array
+    {
+        $warnings = $this->warnings;
+        $this->warnings = [];
+        return $warnings;
+    }
+
+    /** CSS 2.2 §8.3: expansión 1/2/4 valores (3 valores: top, right+left, bottom). @return array&lt;string, mixed&gt; */
+    private function expandShorthand(string $property, string $value): array
+    {
+        $parts = preg_split('/\s+/', $value) ?: [];
+        $lengths = array_map(Length::fromCss(...), $parts);
+        if (in_array(null, $lengths, true) || $lengths === []) {
+            $this->warnings[] = "Unsupported shorthand for $property: $value";
+            return [];
+        }
+        /** @var list&lt;Length&gt; $lengths */
+        [$top, $right, $bottom, $left] = match (count($lengths)) {
+            1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
+            2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],
+            3 => [$lengths[0], $lengths[1], $lengths[2], $lengths[1]],
+            default => [$lengths[0], $lengths[1], $lengths[2], $lengths[3]],
+        };
+        return [
+            "$property-top" => $top, "$property-right" => $right,
+            "$property-bottom" => $bottom, "$property-left" => $left,
+        ];
+    }
+}
+
+&lt;?php // src/Css/StylesheetParser.php
+declare(strict_types=1);
+
+namespace Pliego\Css;
+
+use Sabberworm\CSS\Parser as SabberwormParser;
+use Sabberworm\CSS\RuleSet\DeclarationBlock;
+
+final class StylesheetParser
+{
+    public function parse(string $css): ParseResult
+    {
+        $document = new SabberwormParser($css)->parse();
+        $declarationParser = new DeclarationParser();
+        $rules = [];
+        $warnings = [];
+        $order = 0;
+        foreach ($document->getAllDeclarationBlocks() as $block) {
+            if (!$block instanceof DeclarationBlock) {
+                continue;
+            }
+            $declarations = [];
+            foreach ($block->getRules() as $rule) {
+                $declarations += $declarationParser->parse($rule->getRule(), (string) $rule->getValue());
+            }
+            $warnings = [...$warnings, ...$declarationParser->drainWarnings()];
+            foreach ($block->getSelectors() as $sabberwormSelector) {
+                $selector = Selector::fromString($sabberwormSelector->getSelector());
+                if ($selector === null) {
+                    $warnings[] = 'Unsupported selector in M0: ' . $sabberwormSelector->getSelector();
+                    continue;
+                }
+                if ($declarations !== []) {
+                    $rules[] = new StyleRule($selector, $declarations, $order++);
+                }
+            }
+        }
+        return new ParseResult($rules, $warnings);
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Css</code> — <span class="expected">Expected: todos passed (incluye los de T2)</span>; gates verdes.</p>
+<p class="step"><input type="checkbox"> Paso 5: commit <code>feat(css): add stylesheet parser with typed declarations and M0 selectors</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 6 — <code>Style\</code>: cascade M0, herencia y <code>ComputedStyle</code></h3>
+<p><strong>Files:</strong> Create <code>src/Style/Display.php</code>, <code>src/Style/ComputedStyle.php</code>, <code>src/Style/StyleSource.php</code>, <code>src/Style/CssStyleSource.php</code>, <code>src/Style/StyleMap.php</code>, <code>src/Style/StyleResolver.php</code> · Test <code>tests/Unit/Style/StyleResolverTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>enum Display: string { case Block = 'block'; case None = 'none'; }</code> · <code>ComputedStyle</code> readonly: <code>Display $display</code>, <code>Length $marginTop|Right|Bottom|Left</code>, <code>Length $paddingTop|Right|Bottom|Left</code>, <code>?Length $width</code>, <code>?Color $backgroundColor</code>, <code>Color $color</code>, <code>float $fontSizePx</code>, <code>string $fontFamily</code>; <code>ComputedStyle::root(): self</code> (block, márgenes 0, negro, 16px); <code>ComputedStyle::compute(array $declarations, self $parent, string $tagName): self</code> · <code>interface StyleSource { /** @return list&lt;StyleRule&gt; */ public function rules(): array; }</code> · <code>StyleResolver::resolve(\Dom\HTMLDocument): StyleMap</code> · <code>StyleMap::get(\Dom\Element): ComputedStyle</code>.</p>
+<p><strong>Reglas de cómputo</strong> (CSS 2.2 §6): heredan <code>color</code>, <code>font-size</code>, <code>font-family</code>; el resto resetea a initial. Defaults UA M0: <code>head|script|style|title → Display::None</code>; resto block. Cascade: reglas coincidentes ordenadas por <code>(specificity, order)</code> ascendente, la última gana por propiedad.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test que falla</p>
+<pre><code>&lt;?php // tests/Unit/Style/StyleResolverTest.php
+declare(strict_types=1);
+
+use Pliego\Css\StylesheetParser;
+use Pliego\Css\Value\Color;
+use Pliego\Style\CssStyleSource;
+use Pliego\Style\Display;
+use Pliego\Style\StyleResolver;
+
+function resolveDoc(string $css, string $html): array
+{
+    $doc = \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+    $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
+    return [$doc, $map];
+}
+
+it('inherits color and font-size down the tree', function () {
+    [$doc, $map] = resolveDoc('body { color: #f00; font-size: 20px }', '&lt;body&gt;&lt;p&gt;x&lt;/p&gt;&lt;/body&gt;');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+    expect($map->get($p)->fontSizePx)->toBe(20.0);
+});
+it('does not inherit box properties', function () {
+    [$doc, $map] = resolveDoc('body { padding-left: 40px }', '&lt;body&gt;&lt;p&gt;x&lt;/p&gt;&lt;/body&gt;');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->px)->toBe(0.0);
+});
+it('applies specificity: class beats type', function () {
+    [$doc, $map] = resolveDoc('.note { color: #00f } p { color: #f00 }', '&lt;body&gt;&lt;p class="note"&gt;x&lt;/p&gt;&lt;/body&gt;');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 255));
+});
+it('breaks specificity ties by source order', function () {
+    [$doc, $map] = resolveDoc('p { color: #f00 } p { color: #00f }', '&lt;body&gt;&lt;p&gt;x&lt;/p&gt;&lt;/body&gt;');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 255));
+});
+it('defaults head-content elements to display none', function () {
+    [$doc, $map] = resolveDoc('', '&lt;html&gt;&lt;head&gt;&lt;title&gt;t&lt;/title&gt;&lt;/head&gt;&lt;body&gt;&lt;/body&gt;&lt;/html&gt;');
+    $title = $doc->querySelector('title');
+    assert($title !== null);
+    expect($map->get($title)->display)->toBe(Display::None);
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Style/Display.php
+declare(strict_types=1);
+
+namespace Pliego\Style;
+
+enum Display: string
+{
+    case Block = 'block';
+    case None = 'none';
+}
+
+&lt;?php // src/Style/ComputedStyle.php
+declare(strict_types=1);
+
+namespace Pliego\Style;
+
+use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Length;
+
+final readonly class ComputedStyle
+{
+    private const array HIDDEN_BY_DEFAULT = ['head', 'script', 'style', 'title', 'meta', 'link'];
+
+    public function __construct(
+        public Display $display,
+        public Length $marginTop, public Length $marginRight,
+        public Length $marginBottom, public Length $marginLeft,
+        public Length $paddingTop, public Length $paddingRight,
+        public Length $paddingBottom, public Length $paddingLeft,
+        public ?Length $width,
+        public ?Color $backgroundColor,
+        public Color $color,
+        public float $fontSizePx,
+        public string $fontFamily,
+    ) {}
+
+    public static function root(): self
+    {
+        $zero = Length::zero();
+        return new self(
+            Display::Block, $zero, $zero, $zero, $zero, $zero, $zero, $zero, $zero,
+            null, null, new Color(0, 0, 0), 16.0, 'default',
+        );
+    }
+
+    /**
+     * CSS 2.2 §6.1-6.2: propiedades heredadas toman el computed value del padre;
+     * el resto parte del initial value. Las declaraciones ganadoras sobrescriben.
+     * @param array&lt;string, mixed&gt; $declarations
+     */
+    public static function compute(array $declarations, self $parent, string $tagName): self
+    {
+        $zero = Length::zero();
+        $display = in_array(strtolower($tagName), self::HIDDEN_BY_DEFAULT, true) ? Display::None : Display::Block;
+        if (($declarations['display'] ?? null) === 'none') {
+            $display = Display::None;
+        }
+        $length = static fn (string $key): Length => $declarations[$key] instanceof Length ? $declarations[$key] : $zero;
+        $has = static fn (string $key): bool => ($declarations[$key] ?? null) instanceof Length;
+        return new self(
+            $display,
+            $has('margin-top') ? $length('margin-top') : $zero,
+            $has('margin-right') ? $length('margin-right') : $zero,
+            $has('margin-bottom') ? $length('margin-bottom') : $zero,
+            $has('margin-left') ? $length('margin-left') : $zero,
+            $has('padding-top') ? $length('padding-top') : $zero,
+            $has('padding-right') ? $length('padding-right') : $zero,
+            $has('padding-bottom') ? $length('padding-bottom') : $zero,
+            $has('padding-left') ? $length('padding-left') : $zero,
+            $has('width') ? $length('width') : null,
+            ($declarations['background-color'] ?? null) instanceof \Pliego\Css\Value\Color ? $declarations['background-color'] : null,
+            ($declarations['color'] ?? null) instanceof \Pliego\Css\Value\Color ? $declarations['color'] : $parent->color,
+            $has('font-size') ? $length('font-size')->px : $parent->fontSizePx,
+            is_string($declarations['font-family'] ?? null) ? $declarations['font-family'] : $parent->fontFamily,
+        );
+    }
+}
+
+&lt;?php // src/Style/StyleSource.php
+declare(strict_types=1);
+
+namespace Pliego\Style;
+
+use Pliego\Css\StyleRule;
+
+interface StyleSource
+{
+    /** @return list&lt;StyleRule&gt; */
+    public function rules(): array;
+}
+
+&lt;?php // src/Style/CssStyleSource.php
+declare(strict_types=1);
+
+namespace Pliego\Style;
+
+use Pliego\Css\ParseResult;
+use Pliego\Css\StyleRule;
+
+final readonly class CssStyleSource implements StyleSource
+{
+    public function __construct(private ParseResult $result) {}
+
+    /** @return list&lt;StyleRule&gt; */
+    public function rules(): array
+    {
+        return $this->result->rules;
+    }
+}
+
+&lt;?php // src/Style/StyleMap.php
+declare(strict_types=1);
+
+namespace Pliego\Style;
+
+final class StyleMap
+{
+    /** @var \SplObjectStorage&lt;\Dom\Element, ComputedStyle&gt; */
+    private \SplObjectStorage $styles;
+
+    public function __construct()
+    {
+        $this->styles = new \SplObjectStorage();
+    }
+
+    public function set(\Dom\Element $element, ComputedStyle $style): void
+    {
+        $this->styles[$element] = $style;
+    }
+
+    public function get(\Dom\Element $element): ComputedStyle
+    {
+        return $this->styles[$element];
+    }
+}
+
+&lt;?php // src/Style/StyleResolver.php
+declare(strict_types=1);
+
+namespace Pliego\Style;
+
+use Pliego\Css\StyleRule;
+
+final readonly class StyleResolver
+{
+    /** @param list&lt;StyleSource&gt; $sources */
+    public function __construct(private array $sources) {}
+
+    public function resolve(\Dom\HTMLDocument $document): StyleMap
+    {
+        $map = new StyleMap();
+        $root = $document->documentElement;
+        if ($root !== null) {
+            $this->resolveElement($root, ComputedStyle::root(), $map);
+        }
+        return $map;
+    }
+
+    private function resolveElement(\Dom\Element $element, ComputedStyle $parent, StyleMap $map): void
+    {
+        $matching = array_values(array_filter(
+            $this->allRules(),
+            static fn (StyleRule $rule): bool => $rule->selector->matches($element),
+        ));
+        usort($matching, static fn (StyleRule $a, StyleRule $b): int =>
+            [$a->selector->specificity(), $a->order] &lt;=&gt; [$b->selector->specificity(), $b->order]);
+        $declarations = [];
+        foreach ($matching as $rule) {
+            $declarations = [...$declarations, ...$rule->declarations];
+        }
+        $style = ComputedStyle::compute($declarations, $parent, $element->tagName);
+        $map->set($element, $style);
+        foreach ($element->children as $child) {
+            $this->resolveElement($child, $style, $map);
+        }
+    }
+
+    /** @return list&lt;StyleRule&gt; */
+    private function allRules(): array
+    {
+        $rules = [];
+        foreach ($this->sources as $source) {
+            $rules = [...$rules, ...$source->rules()];
+        }
+        return $rules;
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Style</code> — <span class="expected">Expected: 5 passed</span>; gates verdes (deptrac: Style→Css únicamente).</p>
+<p class="step"><input type="checkbox"> Paso 5: commit <code>feat(style): add M0 cascade with inheritance and computed styles</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 7 — <code>Dom\</code> + <code>Box\</code>: del DOM al árbol de cajas</h3>
+<p><strong>Files:</strong> Create <code>src/Dom/HtmlParser.php</code>, <code>src/Box/BlockBox.php</code>, <code>src/Box/TextRun.php</code>, <code>src/Box/BoxTreeBuilder.php</code> · Test <code>tests/Unit/Box/BoxTreeBuilderTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>HtmlParser::parse(string $html): \Dom\HTMLDocument</code> · <code>BlockBox</code> readonly: <code>ComputedStyle $style</code>, <code>list&lt;BlockBox|TextRun&gt; $children</code>, <code>string $tag</code> · <code>TextRun</code> readonly: <code>string $text</code>, <code>ComputedStyle $style</code> · <code>BoxTreeBuilder::build(\Dom\HTMLDocument, StyleMap): BlockBox</code> (raíz = <code>body</code>).</p>
+<p><strong>Reglas M0:</strong> <code>display:none</code> poda el subárbol. Nodos de texto e hijos inline (cualquier elemento de la lista <code>INLINE_TAGS</code>: span, strong, em, b, i, a, small, code) se aplanan vía <code>textContent</code> en <code>TextRun</code> con el estilo del bloque padre (texto monoestilo — los estilos del inline se ignoran con conocimiento de causa hasta M1). Whitespace collapsing: <code>\s+ → ' '</code>, trim por run; runs vacíos fuera (CSS 2.2 §16.6.1 simplificado).</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test que falla</p>
+<pre><code>&lt;?php // tests/Unit/Box/BoxTreeBuilderTest.php
+declare(strict_types=1);
+
+use Pliego\Box\BlockBox;
+use Pliego\Box\BoxTreeBuilder;
+use Pliego\Box\TextRun;
+use Pliego\Css\StylesheetParser;
+use Pliego\Dom\HtmlParser;
+use Pliego\Style\CssStyleSource;
+use Pliego\Style\StyleResolver;
+
+function buildTree(string $html, string $css = ''): BlockBox
+{
+    $doc = HtmlParser::parse($html);
+    $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
+    return new BoxTreeBuilder()->build($doc, $map);
+}
+
+it('builds nested block boxes with text runs', function () {
+    $root = buildTree('&lt;body&gt;&lt;h1&gt;Hola&lt;/h1&gt;&lt;p&gt;Mundo cruel&lt;/p&gt;&lt;/body&gt;');
+    expect($root->tag)->toBe('body');
+    expect($root->children)->toHaveCount(2);
+    $h1 = $root->children[0];
+    assert($h1 instanceof BlockBox);
+    expect($h1->children[0])->toBeInstanceOf(TextRun::class);
+});
+it('prunes display none subtrees', function () {
+    $root = buildTree('&lt;body&gt;&lt;p&gt;a&lt;/p&gt;&lt;p class="x"&gt;b&lt;/p&gt;&lt;/body&gt;', '.x { display: none }');
+    expect($root->children)->toHaveCount(1);
+});
+it('flattens inline elements into the parent text run', function () {
+    $root = buildTree('&lt;body&gt;&lt;p&gt;Hola &lt;strong&gt;mundo&lt;/strong&gt; feliz&lt;/p&gt;&lt;/body&gt;');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hola mundo feliz');
+});
+it('collapses whitespace', function () {
+    $root = buildTree("&lt;body&gt;&lt;p&gt;  Hola \n\t mundo  &lt;/p&gt;&lt;/body&gt;");
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hola mundo');
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Dom/HtmlParser.php
+declare(strict_types=1);
+
+namespace Pliego\Dom;
+
+final class HtmlParser
+{
+    public static function parse(string $html): \Dom\HTMLDocument
+    {
+        return \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+    }
+}
+
+&lt;?php // src/Box/BlockBox.php
+declare(strict_types=1);
+
+namespace Pliego\Box;
+
+use Pliego\Style\ComputedStyle;
+
+final readonly class BlockBox
+{
+    /** @param list&lt;BlockBox|TextRun&gt; $children */
+    public function __construct(
+        public ComputedStyle $style,
+        public array $children,
+        public string $tag,
+    ) {}
+}
+
+&lt;?php // src/Box/TextRun.php
+declare(strict_types=1);
+
+namespace Pliego\Box;
+
+use Pliego\Style\ComputedStyle;
+
+final readonly class TextRun
+{
+    public function __construct(public string $text, public ComputedStyle $style) {}
+}
+
+&lt;?php // src/Box/BoxTreeBuilder.php
+declare(strict_types=1);
+
+namespace Pliego\Box;
+
+use Pliego\Style\ComputedStyle;
+use Pliego\Style\Display;
+use Pliego\Style\StyleMap;
+
+final class BoxTreeBuilder
+{
+    private const array INLINE_TAGS = ['span', 'strong', 'em', 'b', 'i', 'a', 'small', 'code'];
+
+    public function build(\Dom\HTMLDocument $document, StyleMap $styles): BlockBox
+    {
+        $body = $document->body ?? throw new \InvalidArgumentException('Document has no body');
+        return $this->buildBlock($body, $styles);
+    }
+
+    private function buildBlock(\Dom\Element $element, StyleMap $styles): BlockBox
+    {
+        $style = $styles->get($element);
+        $children = [];
+        $pendingText = '';
+        $flush = function () use (&amp;$children, &amp;$pendingText, $style): void {
+            $text = trim(preg_replace('/\s+/', ' ', $pendingText) ?? '');
+            if ($text !== '') {
+                $children[] = new TextRun($text, $style);
+            }
+            $pendingText = '';
+        };
+        foreach ($element->childNodes as $node) {
+            if ($node instanceof \Dom\Text) {
+                $pendingText .= $node->textContent;
+                continue;
+            }
+            if (!$node instanceof \Dom\Element) {
+                continue;
+            }
+            if ($styles->get($node)->display === Display::None) {
+                continue;
+            }
+            if (in_array(strtolower($node->tagName), self::INLINE_TAGS, true)) {
+                $pendingText .= $node->textContent; // M0: inline aplanado, estilo del bloque padre
+                continue;
+            }
+            $flush();
+            $children[] = $this->buildBlock($node, $styles);
+        }
+        $flush();
+        return new BlockBox($style, $children, strtolower($element->tagName));
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Box</code> — <span class="expected">Expected: 4 passed</span>; gates verdes.</p>
+<p class="step"><input type="checkbox"> Paso 5: commit <code>feat(box): build box tree from DOM with inline flattening</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 8 — <code>Layout\</code>: block flow, wrapping y fragmentos</h3>
+<p><strong>Files:</strong> Create <code>src/Layout/Geometry/Rect.php</code>, <code>src/Layout/Fragment/Fragment.php</code>, <code>src/Layout/Fragment/BoxFragment.php</code>, <code>src/Layout/Fragment/TextFragment.php</code>, <code>src/Layout/TextMeasurer.php</code>, <code>src/Layout/FormattingContext.php</code>, <code>src/Layout/BlockFlowContext.php</code> · Test <code>tests/Unit/Layout/BlockFlowContextTest.php</code>, <code>tests/Unit/Layout/TextMeasurerTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>Rect</code> readonly (<code>float $x,$y,$width,$height</code>, métodos <code>bottom(): float</code>, <code>right(): float</code>) · <code>interface Fragment { public Rect $rect { get; } }</code> (property hook en interfaz, PHP 8.4) · <code>BoxFragment</code> readonly: <code>Rect $rect</code>, <code>?Color $background</code>, <code>list&lt;Fragment&gt; $children</code> · <code>TextFragment</code> readonly: <code>Rect $rect</code>, <code>string $text</code>, <code>float $baselineY</code> (absoluto), <code>float $fontSizePx</code>, <code>Color $color</code> · <code>TextMeasurer</code> (constructor <code>TtfFont</code>): <code>widthOf(string $text, float $fontSizePx): float</code>, <code>lineHeight(float $fontSizePx): float</code> (= 1.2 × fontSize), <code>ascent(float $fontSizePx): float</code> · <code>interface FormattingContext { public function layout(BlockBox $box, Rect $containingBlock): BoxFragment; }</code> · <code>BlockFlowContext implements FormattingContext</code> (constructor <code>TextMeasurer</code>).</p>
+<p><strong>Algoritmo</strong> (CSS 2.2 §10.3.3 y §9.4.1 simplificados, sin margin collapsing): ancho del border box = <code>width</code> declarado o <code>containingBlock.width − marginLeft − marginRight</code>; los hijos se apilan verticalmente con cursor Y; cada <code>TextRun</code> se parte greedy por palabras contra el ancho de contenido; la altura del bloque = suma de hijos + paddings.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: tests que fallan</p>
+<pre><code>&lt;?php // tests/Unit/Layout/TextMeasurerTest.php
+declare(strict_types=1);
+
+use Pliego\Layout\TextMeasurer;
+use Pliego\Text\TtfFont;
+
+beforeEach(function (): void {
+    $this->measurer = new TextMeasurer(TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf'));
+});
+
+it('measures longer text as wider', function () {
+    expect($this->measurer->widthOf('Hola mundo', 16.0))
+        ->toBeGreaterThan($this->measurer->widthOf('Hola', 16.0));
+});
+it('scales width linearly with font size', function () {
+    $w16 = $this->measurer->widthOf('Hola', 16.0);
+    expect($this->measurer->widthOf('Hola', 32.0))->toEqualWithDelta($w16 * 2, 0.001);
+});
+it('computes line height as 1.2 times the font size', fn () =>
+    expect($this->measurer->lineHeight(20.0))->toBe(24.0));
+
+&lt;?php // tests/Unit/Layout/BlockFlowContextTest.php
+declare(strict_types=1);
+
+use Pliego\Box\BlockBox;
+use Pliego\Box\BoxTreeBuilder;
+use Pliego\Css\StylesheetParser;
+use Pliego\Dom\HtmlParser;
+use Pliego\Layout\BlockFlowContext;
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Layout\TextMeasurer;
+use Pliego\Style\CssStyleSource;
+use Pliego\Style\StyleResolver;
+use Pliego\Text\TtfFont;
+
+function layoutHtml(string $html, string $css, float $width = 500.0): BoxFragment
+{
+    $doc = HtmlParser::parse($html);
+    $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
+    $root = new BoxTreeBuilder()->build($doc, $map);
+    $measurer = new TextMeasurer(TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf'));
+    return new BlockFlowContext($measurer)->layout($root, new Rect(0.0, 0.0, $width, INF));
+}
+
+function textFragments(BoxFragment $box): array
+{
+    $out = [];
+    foreach ($box->children as $child) {
+        if ($child instanceof TextFragment) {
+            $out[] = $child;
+        } elseif ($child instanceof BoxFragment) {
+            $out = [...$out, ...textFragments($child)];
+        }
+    }
+    return $out;
+}
+
+it('stacks blocks vertically honouring margins', function () {
+    $frag = layoutHtml('&lt;body&gt;&lt;p&gt;a&lt;/p&gt;&lt;p&gt;b&lt;/p&gt;&lt;/body&gt;', 'p { margin: 10px 0 10px 0 }');
+    $first = $frag->children[0];
+    $second = $frag->children[1];
+    assert($first instanceof BoxFragment &amp;&amp; $second instanceof BoxFragment);
+    expect($first->rect->y)->toBe(10.0);
+    expect($second->rect->y)->toBe($first->rect->bottom() + 20.0);
+});
+it('wraps text greedily into multiple lines', function () {
+    $frag = layoutHtml('&lt;body&gt;&lt;p&gt;uno dos tres cuatro cinco seis siete ocho&lt;/p&gt;&lt;/body&gt;', '', 120.0);
+    $lines = textFragments($frag);
+    expect(count($lines))->toBeGreaterThan(1);
+    foreach ($lines as $line) {
+        expect($line->rect->width)->toBeLessThanOrEqual(120.0);
+    }
+    expect($lines[1]->rect->y)->toBeGreaterThan($lines[0]->rect->y);
+});
+it('applies padding to content position and box height', function () {
+    $frag = layoutHtml('&lt;body&gt;&lt;div&gt;x&lt;/div&gt;&lt;/body&gt;', 'div { padding: 20px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    $text = textFragments($div)[0];
+    expect($text->rect->x)->toBe(20.0);
+    expect($text->rect->y)->toBe(20.0);
+    expect($div->rect->height)->toBe($text->rect->height + 40.0);
+});
+it('honours declared width', function () {
+    $frag = layoutHtml('&lt;body&gt;&lt;div&gt;x&lt;/div&gt;&lt;/body&gt;', 'div { width: 200px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(200.0);
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Layout/Geometry/Rect.php
+declare(strict_types=1);
+
+namespace Pliego\Layout\Geometry;
+
+final readonly class Rect
+{
+    public function __construct(
+        public float $x, public float $y,
+        public float $width, public float $height,
+    ) {}
+
+    public function bottom(): float { return $this->y + $this->height; }
+    public function right(): float { return $this->x + $this->width; }
+}
+
+&lt;?php // src/Layout/Fragment/Fragment.php
+declare(strict_types=1);
+
+namespace Pliego\Layout\Fragment;
+
+use Pliego\Layout\Geometry\Rect;
+
+interface Fragment
+{
+    public Rect $rect { get; }
+}
+
+&lt;?php // src/Layout/Fragment/BoxFragment.php
+declare(strict_types=1);
+
+namespace Pliego\Layout\Fragment;
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Geometry\Rect;
+
+final readonly class BoxFragment implements Fragment
+{
+    /** @param list&lt;Fragment&gt; $children */
+    public function __construct(
+        public Rect $rect,
+        public ?Color $background,
+        public array $children,
+    ) {}
+}
+
+&lt;?php // src/Layout/Fragment/TextFragment.php
+declare(strict_types=1);
+
+namespace Pliego\Layout\Fragment;
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Geometry\Rect;
+
+final readonly class TextFragment implements Fragment
+{
+    public function __construct(
+        public Rect $rect,
+        public string $text,
+        public float $baselineY,
+        public float $fontSizePx,
+        public Color $color,
+    ) {}
+}
+
+&lt;?php // src/Layout/TextMeasurer.php
+declare(strict_types=1);
+
+namespace Pliego\Layout;
+
+use Pliego\Text\TtfFont;
+
+final readonly class TextMeasurer
+{
+    private const float NORMAL_LINE_HEIGHT = 1.2; // CSS 2.2 §10.8: 'normal' recomendado 1.0-1.2
+
+    public function __construct(private TtfFont $font) {}
+
+    public function widthOf(string $text, float $fontSizePx): float
+    {
+        $units = 0;
+        foreach (mb_str_split($text) as $char) {
+            $units += $this->font->advanceOf($this->font->glyphId(mb_ord($char)));
+        }
+        return $units / $this->font->unitsPerEm() * $fontSizePx;
+    }
+
+    public function lineHeight(float $fontSizePx): float
+    {
+        return $fontSizePx * self::NORMAL_LINE_HEIGHT;
+    }
+
+    public function ascent(float $fontSizePx): float
+    {
+        return $this->font->ascender() / $this->font->unitsPerEm() * $fontSizePx;
+    }
+}
+
+&lt;?php // src/Layout/FormattingContext.php
+declare(strict_types=1);
+
+namespace Pliego\Layout;
+
+use Pliego\Box\BlockBox;
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Geometry\Rect;
+
+interface FormattingContext
+{
+    public function layout(BlockBox $box, Rect $containingBlock): BoxFragment;
+}
+
+&lt;?php // src/Layout/BlockFlowContext.php
+declare(strict_types=1);
+
+namespace Pliego\Layout;
+
+use Pliego\Box\BlockBox;
+use Pliego\Box\TextRun;
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+
+/**
+ * CSS 2.2 §9.4.1 (block formatting) + §10.3.3 (anchos) simplificado para M0:
+ * sin margin collapsing, sin floats, line breaking greedy por espacios.
+ */
+final readonly class BlockFlowContext implements FormattingContext
+{
+    public function __construct(private TextMeasurer $measurer) {}
+
+    public function layout(BlockBox $box, Rect $containingBlock): BoxFragment
+    {
+        $style = $box->style;
+        $x = $containingBlock->x + $style->marginLeft->px;
+        $y = $containingBlock->y + $style->marginTop->px;
+        $borderBoxWidth = $style->width?->px
+            ?? $containingBlock->width - $style->marginLeft->px - $style->marginRight->px;
+        $contentX = $x + $style->paddingLeft->px;
+        $contentWidth = $borderBoxWidth - $style->paddingLeft->px - $style->paddingRight->px;
+        $cursorY = $y + $style->paddingTop->px;
+
+        $children = [];
+        foreach ($box->children as $child) {
+            if ($child instanceof TextRun) {
+                foreach ($this->wrapText($child, $contentX, $cursorY, $contentWidth) as $line) {
+                    $children[] = $line;
+                    $cursorY = $line->rect->bottom();
+                }
+                continue;
+            }
+            $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
+            $children[] = $childFragment;
+            $cursorY = $childFragment->rect->bottom() + $child->style->marginBottom->px;
+        }
+
+        $height = ($cursorY - $y) + $style->paddingBottom->px;
+        return new BoxFragment(
+            new Rect($x, $y, $borderBoxWidth, $height),
+            $style->backgroundColor,
+            $children,
+        );
+    }
+
+    /** @return list&lt;TextFragment&gt; */
+    private function wrapText(TextRun $run, float $x, float $y, float $availableWidth): array
+    {
+        $fontSize = $run->style->fontSizePx;
+        $lineHeight = $this->measurer->lineHeight($fontSize);
+        $ascent = $this->measurer->ascent($fontSize);
+        $spaceWidth = $this->measurer->widthOf(' ', $fontSize);
+        $lines = [];
+        $currentWords = [];
+        $currentWidth = 0.0;
+        $flush = function () use (&amp;$lines, &amp;$currentWords, &amp;$currentWidth, $x, &amp;$y, $lineHeight, $ascent, $fontSize, $run): void {
+            if ($currentWords === []) {
+                return;
+            }
+            $text = implode(' ', $currentWords);
+            $lines[] = new TextFragment(
+                new Rect($x, $y, $currentWidth, $lineHeight),
+                $text,
+                $y + ($lineHeight - $fontSize) / 2 + $ascent,
+                $fontSize,
+                $run->style->color,
+            );
+            $y += $lineHeight;
+            $currentWords = [];
+            $currentWidth = 0.0;
+        };
+        foreach (explode(' ', $run->text) as $word) {
+            $wordWidth = $this->measurer->widthOf($word, $fontSize);
+            $projected = $currentWords === [] ? $wordWidth : $currentWidth + $spaceWidth + $wordWidth;
+            if ($projected &gt; $availableWidth &amp;&amp; $currentWords !== []) {
+                $flush();
+                $projected = $wordWidth;
+            }
+            $currentWords[] = $word;
+            $currentWidth = $projected;
+        }
+        $flush();
+        return $lines;
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Layout</code> — <span class="expected">Expected: 7 passed</span>; gates verdes.</p>
+<p class="step"><input type="checkbox"> Paso 5: commit <code>feat(layout): add block flow context with greedy text wrapping</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 9 — <code>Page\</code>: paginador generator con push-down</h3>
+<p><strong>Files:</strong> Create <code>src/Page/PaperSize.php</code>, <code>src/Page/Page.php</code>, <code>src/Page/Paginator.php</code> · Test <code>tests/Unit/Page/PaginatorTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>enum PaperSize { case A4; }</code> con <code>widthPx(): float</code> (793.70), <code>heightPx(): float</code> (1122.52) · <code>Page</code> readonly: <code>int $number</code> (1-based), <code>list&lt;Fragment&gt; $fragments</code> (coordenadas locales de página, orden de pintado) · <code>Paginator</code> (constructor <code>float $contentHeightPx</code>): <code>paginate(BoxFragment $root): \Generator&lt;int, Page&gt;</code>.</p>
+<p><strong>Algoritmo M0</strong> (css-break-3 reducido a lo mínimo): se aplana el árbol a hojas en orden de pintado (fondo del contenedor antes que sus hijos). Con un offset acumulado de push-down: si una hoja de altura ≤ altura de página cruza el límite inferior, se empuja (y todo lo posterior) al inicio de la página siguiente. Hojas más altas que la página se quedan donde caen (se recorren varias páginas; los fondos multipágina NO se parten en M0 — limitación documentada). En cuanto una hoja cae en una página posterior a la actual, la página actual se emite con <code>yield</code> y se libera.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test que falla</p>
+<pre><code>&lt;?php // tests/Unit/Page/PaginatorTest.php
+declare(strict_types=1);
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Page\Paginator;
+
+function textAt(float $y, float $height = 20.0): TextFragment
+{
+    return new TextFragment(new Rect(0.0, $y, 100.0, $height), 'x', $y + 15.0, 16.0, new Color(0, 0, 0));
+}
+
+it('yields a single page when content fits', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 500), null, [textAt(10.0), textAt(400.0)]);
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    expect($pages[0]->number)->toBe(1);
+    expect($pages[0]->fragments)->toHaveCount(2);
+});
+it('pushes a line crossing the boundary to the next page top', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 1100), null, [textAt(10.0), textAt(990.0), textAt(1010.0)]);
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(2);
+    // La hoja en y=990 (990..1010) cruza el límite 1000 => empieza la página 2 en y local 0
+    expect($pages[1]->fragments[0]->rect->y)->toBe(0.0);
+    // La siguiente conserva la distancia relativa (1010-990=20) tras el push-down
+    expect($pages[1]->fragments[1]->rect->y)->toBe(20.0);
+});
+it('keeps page-local coordinates', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 2500), null, [textAt(2100.0)]);
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    $last = end($pages);
+    assert($last !== false);
+    expect($last->number)->toBe(3);
+    expect($last->fragments[0]->rect->y)->toBe(100.0);
+});
+it('emits container backgrounds before their text in paint order', function () {
+    $bg = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [textAt(10.0)]);
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($bg));
+    expect($pages[0]->fragments[0])->toBeInstanceOf(BoxFragment::class);
+    expect($pages[0]->fragments[1])->toBeInstanceOf(TextFragment::class);
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Page/PaperSize.php
+declare(strict_types=1);
+
+namespace Pliego\Page;
+
+enum PaperSize
+{
+    case A4;
+
+    public function widthPx(): float
+    {
+        return match ($this) { self::A4 => 210.0 / 25.4 * 96.0 };  // 793.70
+    }
+
+    public function heightPx(): float
+    {
+        return match ($this) { self::A4 => 297.0 / 25.4 * 96.0 };  // 1122.52
+    }
+}
+
+&lt;?php // src/Page/Page.php
+declare(strict_types=1);
+
+namespace Pliego\Page;
+
+use Pliego\Layout\Fragment\Fragment;
+
+final readonly class Page
+{
+    /** @param list&lt;Fragment&gt; $fragments en coordenadas locales de página, orden de pintado */
+    public function __construct(public int $number, public array $fragments) {}
+}
+
+&lt;?php // src/Page/Paginator.php
+declare(strict_types=1);
+
+namespace Pliego\Page;
+
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+
+/**
+ * Fragmentación M0 (css-break-3 mínimo): push-down de hojas que cruzan el
+ * límite de página. Streaming real: cada página se emite en cuanto la
+ * siguiente hoja pertenece a una página posterior.
+ */
+final readonly class Paginator
+{
+    public function __construct(private float $contentHeightPx) {}
+
+    /** @return \Generator&lt;int, Page&gt; */
+    public function paginate(BoxFragment $root): \Generator
+    {
+        $h = $this->contentHeightPx;
+        $offset = 0.0;
+        $pageIndex = 0;
+        $current = [];
+        foreach ($this->flatten($root) as $leaf) {
+            $top = $leaf->rect->y + $offset;
+            $leafPage = (int) floor($top / $h);
+            $bottom = $top + $leaf->rect->height;
+            if ($leaf->rect->height &lt;= $h &amp;&amp; $bottom &gt; ($leafPage + 1) * $h) {
+                $pushDown = ($leafPage + 1) * $h - $top;
+                $offset += $pushDown;
+                $top += $pushDown;
+                $leafPage++;
+            }
+            while ($leafPage &gt; $pageIndex) {
+                yield new Page($pageIndex + 1, $current);
+                $current = [];
+                $pageIndex++;
+            }
+            $current[] = $this->relocate($leaf, $top - $pageIndex * $h);
+        }
+        yield new Page($pageIndex + 1, $current);
+    }
+
+    /**
+     * Hojas en orden de pintado: el fondo de un contenedor precede a sus hijos.
+     * @return \Generator&lt;int, Fragment&gt;
+     */
+    private function flatten(BoxFragment $box): \Generator
+    {
+        if ($box->background !== null) {
+            yield new BoxFragment($box->rect, $box->background, []);
+        }
+        foreach ($box->children as $child) {
+            if ($child instanceof BoxFragment) {
+                yield from $this->flatten($child);
+            } else {
+                yield $child;
+            }
+        }
+    }
+
+    private function relocate(Fragment $leaf, float $localY): Fragment
+    {
+        $rect = new Rect($leaf->rect->x, $localY, $leaf->rect->width, $leaf->rect->height);
+        return match (true) {
+            $leaf instanceof TextFragment => new TextFragment(
+                $rect, $leaf->text, $localY + ($leaf->baselineY - $leaf->rect->y), $leaf->fontSizePx, $leaf->color,
+            ),
+            $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, []),
+            default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
+        };
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Page</code> — <span class="expected">Expected: 4 passed</span>; gates verdes.</p>
+<p class="step"><input type="checkbox"> Paso 5: commit <code>feat(page): add streaming paginator generator with push-down fragmentation</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 10 — <code>Paint\Canvas</code> (interfaz) + <code>Pdf\</code>: embedding Type0 y canvas PDF</h3>
+<p><strong>Files:</strong> Create <code>src/Paint/Canvas.php</code>, <code>src/Pdf/FontEmbedder.php</code>, <code>src/Pdf/PdfCanvas.php</code> · Test <code>tests/Unit/Pdf/PdfCanvasTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>interface Canvas { public function fillRect(Rect $rect, Color $color): void; public function fillText(TextFragment $text): void; }</code> (coordenadas px, origen arriba-izquierda) · <code>FontEmbedder</code> (constructor <code>PdfWriter, TtfFont, string $baseFontName</code>): <code>objectId(): int</code>, <code>encode(string $text): string</code> (hex CIDs, registra glifos usados), <code>flush(): void</code> (escribe los objetos al final — el orden de objetos en el fichero PDF es libre, solo importa el xref) · <code>PdfCanvas implements Canvas</code> (constructor <code>PdfWriter, FontEmbedder, PaperSize, float $offsetX, float $offsetY</code>): <code>beginPage(): void</code>, <code>endPage(): void</code>.</p>
+<p><strong>Conversiones</strong> (restricción global): <code>pt = px × 0.75</code>; el eje Y del PDF crece hacia arriba (ISO 32000-1 §8.3.2.3): <code>yPt = (pageHeightPx − yPx) × 0.75</code>. Fuente compuesta Type0/CIDFontType2 con <code>/Encoding /Identity-H</code> (CID = glyph id directo, ISO 32000-1 §9.7): sin tablas de encoding, cualquier codepoint del BMP. <code>/W</code> solo con los glifos usados; <code>/FontBBox</code> y métricas escaladas a espacio de glifo 1000 (<code>× 1000/unitsPerEm</code>).</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test que falla</p>
+<pre><code>&lt;?php // tests/Unit/Pdf/PdfCanvasTest.php
+declare(strict_types=1);
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Page\PaperSize;
+use Pliego\Pdf\FontEmbedder;
+use Pliego\Pdf\PdfCanvas;
+use Pliego\Pdf\PdfWriter;
+use Pliego\Text\TtfFont;
+
+function renderOnePage(callable $draw): string
+{
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $embedder = new FontEmbedder($writer, $font, 'DejaVuSans');
+    $canvas = new PdfCanvas($writer, $embedder, PaperSize::A4, 0.0, 0.0);
+    $canvas->beginPage();
+    $draw($canvas, $font);
+    $canvas->endPage();
+    $embedder->flush();
+    $writer->finish();
+    rewind($stream);
+    return (string) stream_get_contents($stream);
+}
+
+it('embeds a Type0 Identity-H font with the used glyph widths', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 0)));
+    });
+    expect($pdf)->toContain('/Subtype /Type0')->toContain('/Encoding /Identity-H')
+        ->toContain('/Subtype /CIDFontType2')->toContain('/FontFile2');
+});
+it('writes text as hex CIDs of the glyph ids', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 20, 19.2), 'A', 24.4, 16.0, new Color(0, 0, 0)));
+    });
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $expectedHex = sprintf('%04X', $font->glyphId(0x41));
+    expect($pdf)->toContain("&lt;$expectedHex&gt; Tj");
+});
+it('flips the Y axis and converts px to pt for rectangles', function () {
+    // rect y=0 px (top) con altura 100px => en PDF: y = (1122.52-100)*0.75 pt
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 200, 100), new Color(255, 0, 0));
+    });
+    $expectedY = (PaperSize::A4->heightPx() - 100.0) * 0.75;
+    expect($pdf)->toContain(sprintf('0.00 %.2F 150.00 75.00 re', $expectedY));
+    expect($pdf)->toContain('1.000 0.000 0.000 rg');
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span></p>
+
+<p class="step"><input type="checkbox"> Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Paint/Canvas.php
+declare(strict_types=1);
+
+namespace Pliego\Paint;
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+
+/** Destino de pintado. Coordenadas en px CSS, origen arriba-izquierda. */
+interface Canvas
+{
+    public function fillRect(Rect $rect, Color $color): void;
+
+    public function fillText(TextFragment $text): void;
+}
+
+&lt;?php // src/Pdf/FontEmbedder.php
+declare(strict_types=1);
+
+namespace Pliego\Pdf;
+
+use Pliego\Text\TtfFont;
+
+/** Fuente compuesta Type0/CIDFontType2, Identity-H (ISO 32000-1 §9.7.4). */
+final class FontEmbedder
+{
+    private readonly int $fontObjectId;
+    /** @var array&lt;int, true&gt; glyph ids usados */
+    private array $usedGlyphs = [];
+
+    public function __construct(
+        private readonly PdfWriter $writer,
+        private readonly TtfFont $font,
+        private readonly string $baseFontName,
+    ) {
+        $this->fontObjectId = $writer->allocateObjectId();
+    }
+
+    public function objectId(): int
+    {
+        return $this->fontObjectId;
+    }
+
+    /** Codifica texto como CIDs hex (Identity-H: CID = glyph id) y registra uso. */
+    public function encode(string $text): string
+    {
+        $hex = '';
+        foreach (mb_str_split($text) as $char) {
+            $glyphId = $this->font->glyphId(mb_ord($char));
+            $this->usedGlyphs[$glyphId] = true;
+            $hex .= sprintf('%04X', $glyphId);
+        }
+        return $hex;
+    }
+
+    /** Escribe los objetos de fuente. Llamar una única vez, tras la última página. */
+    public function flush(): void
+    {
+        $scale = 1000 / $this->font->unitsPerEm();
+        $fileId = $this->writer->allocateObjectId();
+        $bytes = $this->font->bytes();
+        $length = strlen($bytes);
+        $this->writer->writeObject($fileId, "&lt;&lt; /Length $length /Length1 $length &gt;&gt;\nstream\n$bytes\nendstream");
+
+        [$xMin, $yMin, $xMax, $yMax] = array_map(
+            static fn (int $v): int => (int) round($v * $scale),
+            $this->font->boundingBox(),
+        );
+        $ascent = (int) round($this->font->ascender() * $scale);
+        $descent = (int) round($this->font->descender() * $scale);
+        $descriptorId = $this->writer->allocateObjectId();
+        $this->writer->writeObject($descriptorId, "&lt;&lt; /Type /FontDescriptor /FontName /{$this->baseFontName} /Flags 32 /FontBBox [$xMin $yMin $xMax $yMax] /ItalicAngle 0 /Ascent $ascent /Descent $descent /CapHeight $ascent /StemV 80 /FontFile2 $fileId 0 R &gt;&gt;");
+
+        ksort($this->usedGlyphs);
+        $w = '';
+        foreach (array_keys($this->usedGlyphs) as $glyphId) {
+            $width = (int) round($this->font->advanceOf($glyphId) * $scale);
+            $w .= "$glyphId [$width] ";
+        }
+        $cidFontId = $this->writer->allocateObjectId();
+        $this->writer->writeObject($cidFontId, "&lt;&lt; /Type /Font /Subtype /CIDFontType2 /BaseFont /{$this->baseFontName} /CIDSystemInfo &lt;&lt; /Registry (Adobe) /Ordering (Identity) /Supplement 0 &gt;&gt; /FontDescriptor $descriptorId 0 R /CIDToGIDMap /Identity /DW 1000 /W [ $w] &gt;&gt;");
+
+        $this->writer->writeObject($this->fontObjectId, "&lt;&lt; /Type /Font /Subtype /Type0 /BaseFont /{$this->baseFontName} /Encoding /Identity-H /DescendantFonts [$cidFontId 0 R] &gt;&gt;");
+    }
+}
+
+&lt;?php // src/Pdf/PdfCanvas.php
+declare(strict_types=1);
+
+namespace Pliego\Pdf;
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Page\PaperSize;
+use Pliego\Paint\Canvas;
+
+/** Canvas PDF: px CSS (origen arriba-izda) => pt PDF (origen abajo-izda, ×0.75). */
+final class PdfCanvas implements Canvas
+{
+    private const float PX_TO_PT = 0.75;
+    private string $ops = '';
+
+    public function __construct(
+        private readonly PdfWriter $writer,
+        private readonly FontEmbedder $font,
+        private readonly PaperSize $paper,
+        private readonly float $offsetX,
+        private readonly float $offsetY,
+    ) {}
+
+    public function beginPage(): void
+    {
+        $this->ops = '';
+    }
+
+    public function endPage(): void
+    {
+        $this->writer->addPage(
+            $this->paper->widthPx() * self::PX_TO_PT,
+            $this->paper->heightPx() * self::PX_TO_PT,
+            $this->ops,
+            ['F1' => $this->font->objectId()],
+        );
+    }
+
+    public function fillRect(Rect $rect, Color $color): void
+    {
+        $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+        $this->ops .= sprintf(
+            "%s %.2F %.2F %.2F %.2F re f\n",
+            $this->rg($color), $x, $y, $rect->width * self::PX_TO_PT, $rect->height * self::PX_TO_PT,
+        );
+    }
+
+    public function fillText(TextFragment $text): void
+    {
+        $x = ($text->rect->x + $this->offsetX) * self::PX_TO_PT;
+        $baseline = ($this->paper->heightPx() - ($text->baselineY + $this->offsetY)) * self::PX_TO_PT;
+        $hex = $this->font->encode($text->text);
+        $this->ops .= sprintf(
+            "BT /F1 %.2F Tf %s %.2F %.2F Td &lt;%s&gt; Tj ET\n",
+            $text->fontSizePx * self::PX_TO_PT, $this->rg($text->color), $x, $baseline, $hex,
+        );
+    }
+
+    private function rg(Color $color): string
+    {
+        return sprintf('%.3F %.3F %.3F rg', $color->r / 255, $color->g / 255, $color->b / 255);
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Pdf</code> — <span class="expected">Expected: todos passed (incluye T3)</span>; gates verdes. Volcado visual: generar un PDF con «Hola pliego» y abrirlo en un visor — el texto debe verse y poder seleccionarse la caja (sin ToUnicode el copy-paste dará basura: esperado, es M1).</p>
+<p class="step"><input type="checkbox"> Paso 5: commit <code>feat(pdf): add Type0 font embedding and pdf canvas</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 11 — <code>Paint\Painter</code>: de la página al canvas</h3>
+<p><strong>Files:</strong> Create <code>src/Paint/Painter.php</code> · Test <code>tests/Unit/Paint/PainterTest.php</code></p>
+<p><strong>Interfaces — Produces:</strong> <code>Painter::paint(Page $page, Canvas $canvas): void</code> — recorre <code>$page->fragments</code> en orden: <code>BoxFragment</code> con background → <code>fillRect</code>; <code>TextFragment</code> → <code>fillText</code>.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test que falla (con un canvas fake — demuestra que la interfaz aísla del PDF)</p>
+<pre><code>&lt;?php // tests/Unit/Paint/PainterTest.php
+declare(strict_types=1);
+
+use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Page\Page;
+use Pliego\Paint\Canvas;
+use Pliego\Paint\Painter;
+
+final class RecordingCanvas implements Canvas
+{
+    /** @var list&lt;string&gt; */
+    public array $calls = [];
+
+    public function fillRect(Rect $rect, Color $color): void
+    {
+        $this->calls[] = "rect({$rect->x},{$rect->y})";
+    }
+
+    public function fillText(TextFragment $text): void
+    {
+        $this->calls[] = "text({$text->text})";
+    }
+}
+
+it('paints backgrounds and text in page order', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), []),
+        new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.0, 16.0, new Color(0, 0, 0)),
+    ]);
+    new Painter()->paint($page, $canvas);
+    expect($canvas->calls)->toBe(['rect(0,0)', 'text(Hola)']);
+});
+it('skips boxes without background', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [])]);
+    new Painter()->paint($page, $canvas);
+    expect($canvas->calls)->toBe([]);
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span> · Paso 3: implementación</p>
+<pre><code>&lt;?php // src/Paint/Painter.php
+declare(strict_types=1);
+
+namespace Pliego\Paint;
+
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Page\Page;
+
+final readonly class Painter
+{
+    public function paint(Page $page, Canvas $canvas): void
+    {
+        foreach ($page->fragments as $fragment) {
+            if ($fragment instanceof BoxFragment &amp;&amp; $fragment->background !== null) {
+                $canvas->fillRect($fragment->rect, $fragment->background);
+            } elseif ($fragment instanceof TextFragment) {
+                $canvas->fillText($fragment);
+            }
+        }
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: <code>./vendor/bin/pest tests/Unit/Paint</code> — <span class="expected">Expected: 2 passed</span> · Paso 5: commit <code>feat(paint): add painter from page fragments to canvas</code>.</p>
+</div>
+
+<div class="task">
+<h3>Tarea 12 — <code>Engine</code>: API pública, E2E y playground</h3>
+<p><strong>Files:</strong> Create <code>src/Engine.php</code>, <code>src/RenderResult.php</code>, <code>src/RenderReport.php</code>, <code>index.php</code>, <code>README.md</code> · Test <code>tests/EndToEnd/RenderTest.php</code></p>
+<p><strong>Interfaces — Produces (API pública v0.1):</strong> <code>Engine::make(): self</code> · <code>->stylesheet(string $css): self</code> (contenido CSS; sugar de paths en M2) · <code>->paper(PaperSize $size): self</code> (default A4) · <code>->margins(Length $margin): self</code> (default 48px ≈ 0.5") · <code>->fontFile(string $ttfPath): self</code> (default DejaVuSans embebida) · <code>->render(string $html): RenderResult</code> · <code>RenderResult::save(string $path): RenderReport</code> / <code>::toStream($resource): RenderReport</code> · <code>RenderReport</code> readonly: <code>list&lt;string&gt; $warnings</code>, <code>int $pageCount</code>.</p>
+
+<p class="step"><input type="checkbox"> Paso 1: test E2E que falla</p>
+<pre><code>&lt;?php // tests/EndToEnd/RenderTest.php
+declare(strict_types=1);
+
+use Pliego\Engine;
+
+function sampleHtml(int $paragraphs): string
+{
+    $body = '&lt;h1&gt;Factura FA-2026-0001&lt;/h1&gt;';
+    for ($i = 0; $i &lt; $paragraphs; $i++) {
+        $body .= "&lt;p&gt;Línea de concepto número $i con su descripción correspondiente y detalle adicional.&lt;/p&gt;";
+    }
+    return "&lt;body&gt;$body&lt;/body&gt;";
+}
+
+const SAMPLE_CSS = 'h1 { font-size: 28px; color: #8b5e34; margin: 0 0 16px 0 }
+p { margin: 0 0 8px 0 } .box { background-color: #eee; padding: 12px }';
+
+it('renders a valid single-page PDF', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-1.pdf';
+    $report = Engine::make()->stylesheet(SAMPLE_CSS)->render(sampleHtml(3))->save($path);
+    $pdf = (string) file_get_contents($path);
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect($report->pageCount)->toBe(1);
+    expect(substr_count($pdf, '/Type /Page /Parent'))->toBe(1);
+});
+it('splits long content across pages in streaming', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-2.pdf';
+    $report = Engine::make()->stylesheet(SAMPLE_CSS)->render(sampleHtml(80))->save($path);
+    expect($report->pageCount)->toBeGreaterThan(1);
+});
+it('reports unsupported CSS as warnings without failing', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-3.pdf';
+    $report = Engine::make()->stylesheet('p { float: left; color: #f00 }')->render(sampleHtml(1))->save($path);
+    expect($report->warnings)->not->toBeEmpty();
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});
+it('keeps memory bounded on large documents (streaming O(page))', function () {
+    $before = memory_get_peak_usage(true);
+    Engine::make()->render(sampleHtml(2000))->save(sys_get_temp_dir() . '/pliego-e2e-4.pdf');
+    // El box/fragment tree completo sí vive en memoria en M0 (streaming pleno = M2);
+    // este umbral holgado detecta regresiones groseras (acumular todas las páginas pintadas).
+    expect(memory_get_peak_usage(true) - $before)->toBeLessThan(128 * 1024 * 1024);
+});</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 2: ejecutar — <span class="expected">Expected: FAIL</span> · Paso 3: implementación</p>
+<pre><code>&lt;?php // src/RenderReport.php
+declare(strict_types=1);
+
+namespace Pliego;
+
+final readonly class RenderReport
+{
+    /** @param list&lt;string&gt; $warnings */
+    public function __construct(public array $warnings, public int $pageCount) {}
+}
+
+&lt;?php // src/RenderResult.php
+declare(strict_types=1);
+
+namespace Pliego;
+
+final readonly class RenderResult
+{
+    /** @param \Closure(resource): RenderReport $writer */
+    public function __construct(private \Closure $writer) {}
+
+    public function save(string $path): RenderReport
+    {
+        $stream = fopen($path, 'wb');
+        if ($stream === false) {
+            throw new \RuntimeException("Cannot open for writing: $path");
+        }
+        try {
+            return ($this->writer)($stream);
+        } finally {
+            fclose($stream);
+        }
+    }
+
+    /** @param resource $stream */
+    public function toStream(mixed $stream): RenderReport
+    {
+        return ($this->writer)($stream);
+    }
+}
+
+&lt;?php // src/Engine.php
+declare(strict_types=1);
+
+namespace Pliego;
+
+use Pliego\Box\BoxTreeBuilder;
+use Pliego\Css\StylesheetParser;
+use Pliego\Css\Value\Length;
+use Pliego\Dom\HtmlParser;
+use Pliego\Layout\BlockFlowContext;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Layout\TextMeasurer;
+use Pliego\Page\Paginator;
+use Pliego\Page\PaperSize;
+use Pliego\Paint\Painter;
+use Pliego\Pdf\FontEmbedder;
+use Pliego\Pdf\PdfCanvas;
+use Pliego\Pdf\PdfWriter;
+use Pliego\Style\CssStyleSource;
+use Pliego\Style\StyleResolver;
+use Pliego\Text\TtfFont;
+
+final class Engine
+{
+    private string $css = '';
+    private PaperSize $paper = PaperSize::A4;
+    private Length $margin;
+    private string $fontPath = __DIR__ . '/../resources/fonts/DejaVuSans.ttf';
+
+    private function __construct()
+    {
+        $this->margin = Length::px(48.0);
+    }
+
+    public static function make(): self
+    {
+        return new self();
+    }
+
+    public function stylesheet(string $css): self
+    {
+        $this->css .= "\n" . $css;
+        return $this;
+    }
+
+    public function paper(PaperSize $paper): self
+    {
+        $this->paper = $paper;
+        return $this;
+    }
+
+    public function margins(Length $margin): self
+    {
+        $this->margin = $margin;
+        return $this;
+    }
+
+    public function fontFile(string $ttfPath): self
+    {
+        $this->fontPath = $ttfPath;
+        return $this;
+    }
+
+    public function render(string $html): RenderResult
+    {
+        return new RenderResult(function (mixed $stream) use ($html): RenderReport {
+            $parseResult = new StylesheetParser()->parse($this->css);
+            $document = HtmlParser::parse($html);
+            $styles = new StyleResolver([new CssStyleSource($parseResult)])->resolve($document);
+            $boxTree = new BoxTreeBuilder()->build($document, $styles);
+
+            $font = TtfFont::fromFile($this->fontPath);
+            $measurer = new TextMeasurer($font);
+            $margin = $this->margin->px;
+            $contentWidth = $this->paper->widthPx() - 2 * $margin;
+            $contentHeight = $this->paper->heightPx() - 2 * $margin;
+            $rootFragment = new BlockFlowContext($measurer)
+                ->layout($boxTree, new Rect(0.0, 0.0, $contentWidth, INF));
+
+            $writer = new PdfWriter($stream);
+            $writer->begin();
+            $embedder = new FontEmbedder($writer, $font, 'PliegoDefault');
+            $canvas = new PdfCanvas($writer, $embedder, $this->paper, $margin, $margin);
+            $painter = new Painter();
+            $pageCount = 0;
+            foreach (new Paginator($contentHeight)->paginate($rootFragment) as $page) {
+                $canvas->beginPage();
+                $painter->paint($page, $canvas);
+                $canvas->endPage();
+                $pageCount++;
+            }
+            $embedder->flush();
+            $writer->finish();
+            return new RenderReport($parseResult->warnings, $pageCount);
+        });
+    }
+}</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 4: playground <code>index.php</code> (raíz) y <code>README.md</code> mínimo (qué es, estado M0, ejemplo de la API, aviso «not published yet»; SIN datos personales)</p>
+<pre><code>&lt;?php // index.php — playground: php index.php && abrir out.pdf
+declare(strict_types=1);
+
+require __DIR__ . '/vendor/autoload.php';
+
+use Pliego\Css\Value\Length;
+use Pliego\Engine;
+
+$html = &lt;&lt;&lt;'HTML'
+&lt;body&gt;
+  &lt;h1&gt;pliego — esqueleto andante&lt;/h1&gt;
+  &lt;p class="box"&gt;Motor HTML/CSS a PDF en PHP puro. Esta página salió del pipeline completo:
+  DOM, cascade, box tree, block flow, paginación en streaming y writer PDF propio.&lt;/p&gt;
+  &lt;p&gt;Texto con &lt;strong&gt;inline aplanado&lt;/strong&gt; y acentos: años, señal, corazón.&lt;/p&gt;
+&lt;/body&gt;
+HTML;
+
+$css = 'h1 { font-size: 28px; color: #8b5e34; margin: 0 0 16px 0 }
+p { margin: 0 0 10px 0 } .box { background-color: #eee; padding: 14px }';
+
+$report = Engine::make()->stylesheet($css)->margins(Length::px(60))->render($html)->save('out.pdf');
+echo "out.pdf generado — {$report->pageCount} página(s), " . count($report->warnings) . " warning(s)\n";</code></pre>
+
+<p class="step"><input type="checkbox"> Paso 5: verificación final completa</p>
+<pre><code>composer test      # Expected: TODOS los tests del proyecto passed
+composer analyse   # Expected: no errors
+composer style     # Expected: no files need fixing
+composer arch      # Expected: 0 violations
+php index.php      # Expected: "out.pdf generado — 1 página(s), 0 warning(s)"
+# Abrir out.pdf en un visor real: título marrón, caja gris con padding, acentos correctos.</code></pre>
+<p class="step"><input type="checkbox"> Paso 6: commit <code>feat: add public Engine API, e2e tests and playground — M0 complete</code> y push si hay remoto configurado.</p>
+</div>
+
+<h2>Self-review del plan (ya aplicado)</h2>
+<ul>
+  <li><strong>Cobertura del spec:</strong> las 4 apuestas quedan representadas en M0: kernel+plugins (interfaz <code>FormattingContext</code>, T8), streaming (generator del Paginator + writer incremental, T3/T9), IR separable (fragmentos/display-list inmutables, T8/T11); CSS→PHP compilado NO entra en M0 por diseño — la costura <code>StyleSource</code> (T6) es donde se enchufará el matcher compilado en su milestone, sin tocar el resolver.</li>
+  <li><strong>Consistencia de tipos verificada</strong> entre bloques "Produces"/"Consumes" de tareas vecinas (p.ej. <code>allocateObjectId/writeObject</code> de T3 usados por T10; <code>Fragment.rect</code> property hook usado por T9/T11).</li>
+  <li><strong>Simplificaciones M0 declaradas</strong> en restricciones globales — un implementador no debe "mejorarlas" por su cuenta.</li>
+  <li><strong>Memoria:</strong> el test E2E de memoria documenta que M0 aún materializa el fragment tree (el streaming pleno de layout llega con la fragmentación real en M2); el umbral solo caza regresiones groseras.</li>
+</ul>
+
+<p class="meta">Fin del plan — 12 tareas, ~60 pasos. Ejecución: superpowers:subagent-driven-development, un subagent por tarea en orden del grafo (T2 y T4 pueden ir en paralelo tras T1; T3 y T5 en paralelo tras T2).</p>
+
+</body>
+</html>
