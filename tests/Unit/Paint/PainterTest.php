@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Pliego\Css\Value\BorderSide;
+use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
@@ -19,7 +21,16 @@ final class RecordingCanvas implements Canvas
 
     public function fillRect(Rect $rect, Color $color): void
     {
-        $this->calls[] = "rect({$rect->x},{$rect->y})";
+        $this->calls[] = sprintf(
+            'rect(%.2F,%.2F,%.2F,%.2F,#%02x%02x%02x)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $color->r,
+            $color->g,
+            $color->b,
+        );
     }
 
     public function fillText(TextFragment $text): void
@@ -40,7 +51,7 @@ it('paints backgrounds and text in page order', function () {
         new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
     new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
-    expect($canvas->calls)->toBe(['rect(0,0)', 'text(Hola)']);
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)', 'text(Hola)']);
 });
 it('skips boxes without background', function () {
     $canvas = new RecordingCanvas();
@@ -126,4 +137,85 @@ it('falls back to -0.1em/0.05em underline metrics when the font has no post tabl
     } finally {
         unlink($path);
     }
+});
+
+it('paints background then all 4 visible borders, in top/right/bottom/left order (css-backgrounds-3 painting order)', function () {
+    // Caja de 100x50 con borde uniforme de 2px negro y fondo rojo: 1 rect de fondo + 4 rects
+    // de borde, en ese orden (background -> borders -> children, T5). Geometría: los rects
+    // horizontales (top/bottom) cubren toda la anchura; los verticales (left/right) encajan
+    // ENTRE ellos (h - topW - bottomW) — solape simple, sin miter real (milestone posterior).
+    $canvas = new RecordingCanvas();
+    $black = new Color(0, 0, 0);
+    $side = new BorderSide(2.0, BorderStyle::Solid, $black);
+    $borders = new BorderSet($side, $side, $side, $side);
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], $borders),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)', // background
+        'rect(0.00,0.00,100.00,2.00,#000000)',  // top
+        'rect(98.00,2.00,2.00,46.00,#000000)',  // right
+        'rect(0.00,48.00,100.00,2.00,#000000)', // bottom
+        'rect(0.00,2.00,2.00,46.00,#000000)',   // left
+    ]);
+});
+
+it('paints only the visible border sides when some sides have width 0 or style none', function () {
+    // top: solid 3px; right: solid width 0 (invisible, css-backgrounds-3: width>0 required);
+    // bottom: style None a pesar de width>0 (invisible); left: solid 1px.
+    $canvas = new RecordingCanvas();
+    $black = new Color(0, 0, 0);
+    $top = new BorderSide(3.0, BorderStyle::Solid, $black);
+    $right = new BorderSide(0.0, BorderStyle::Solid, $black);
+    $bottom = new BorderSide(4.0, BorderStyle::None, $black);
+    $left = new BorderSide(1.0, BorderStyle::Solid, $black);
+    $borders = new BorderSet($top, $right, $bottom, $left);
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,3.00,#000000)', // top
+        'rect(0.00,3.00,1.00,47.00,#000000)',  // left (h - topW - bottomW=0 => 50-3-0=47)
+    ]);
+});
+
+it('paints a border-only box with no background (T5 gating: no background, still paintable)', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 128, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toHaveCount(4);
+    foreach ($canvas->calls as $call) {
+        expect($call)->toContain('#008000');
+    }
+});
+
+it('defensively skips a border side whose color is null even though width>0 and style is Solid', function () {
+    // BorderSide::$color es ?Color por tipo; ComputedStyle nunca produce null (currentColor
+    // eager en T3), pero el Painter debe ser defensivo y no romper si alguna vez ocurre.
+    $canvas = new RecordingCanvas();
+    $nullColorSide = new BorderSide(2.0, BorderStyle::Solid, null);
+    $normalSide = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($nullColorSide, $normalSide, $normalSide, $normalSide);
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toHaveCount(3); // top skipped, right/bottom/left painted
+});
+
+it('skips border painting entirely when the box has no visible border side', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none())]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe([]);
 });

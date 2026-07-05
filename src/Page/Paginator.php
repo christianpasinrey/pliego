@@ -51,7 +51,9 @@ final readonly class Paginator
      */
     private function flatten(BoxFragment $box): \Generator
     {
-        if ($box->background !== null) {
+        // T5: una caja sin fondo pero con borde visible también necesita una hoja paintable
+        // (antes de T5 solo se emitía por background !== null y el borde se perdía).
+        if ($box->background !== null || $box->borders->isVisible()) {
             yield new BoxFragment($box->rect, $box->background, [], $box->borders);
         }
         foreach ($box->children as $child) {

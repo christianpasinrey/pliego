@@ -57,3 +57,24 @@ it('relocates a box with a visible border unchanged, just like its background', 
     assert($box instanceof BoxFragment);
     expect($box->borders)->toBe($borders);
 });
+it('emits a leaf for a border-only box with no background (T5: widened leaf gating)', function () {
+    // Antes de T5, flatten() solo emitía una hoja BoxFragment si background !== null; una caja
+    // con borde visible pero sin fondo se perdía (Painter no tenía nada que pintar). T5 amplía
+    // la condición a background !== null || borders->isVisible().
+    $solid = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($solid, $solid, $solid, $solid);
+    $root = new BoxFragment(new Rect(0, 0, 100, 50), null, [textAt(10.0)], $borders);
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages[0]->fragments)->toHaveCount(2);
+    $box = $pages[0]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->background)->toBeNull();
+    expect($box->borders)->toBe($borders);
+    expect($pages[0]->fragments[1])->toBeInstanceOf(TextFragment::class);
+});
+it('does not emit a leaf for a box with neither background nor visible border', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 50), null, [textAt(10.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages[0]->fragments)->toHaveCount(1);
+    expect($pages[0]->fragments[0])->toBeInstanceOf(TextFragment::class);
+});

@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Pliego\Paint;
 
+use Pliego\Css\Value\BorderSide;
+use Pliego\Css\Value\BorderStyle;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
 use Pliego\Text\FontCatalog;
 
@@ -23,8 +26,11 @@ final readonly class Painter
     public function paint(Page $page, Canvas $canvas): void
     {
         foreach ($page->fragments as $fragment) {
-            if ($fragment instanceof BoxFragment && $fragment->background !== null) {
-                $canvas->fillRect($fragment->rect, $fragment->background);
+            if ($fragment instanceof BoxFragment) {
+                if ($fragment->background !== null) {
+                    $canvas->fillRect($fragment->rect, $fragment->background);
+                }
+                $this->paintBorders($fragment, $canvas);
             } elseif ($fragment instanceof TextFragment) {
                 // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
                 // rect->width === 0.0 para la línea vacía que deja un <br> forzado — nada que
@@ -72,5 +78,60 @@ final readonly class Painter
             $thicknessPx,
             $fragment->color,
         );
+    }
+
+    /**
+     * css-backgrounds-3 §painting order: background, LUEGO bordes visibles (style Solid &&
+     * widthPx > 0), antes que los hijos (que llegan después en el orden de flatten() de
+     * Paginator). Orden entre lados: top, right, bottom, left (orden clockwise del shorthand
+     * CSS) — los rects horizontales (top/bottom) cubren toda la anchura de la caja; los
+     * verticales (left/right) encajan ENTRE ellos (alto = h - topW - bottomW). Esto deja una
+     * junta simple sin solape en las esquinas, no un miter real (eso es un milestone de bordes
+     * completos posterior).
+     */
+    private function paintBorders(BoxFragment $fragment, Canvas $canvas): void
+    {
+        $rect = $fragment->rect;
+        $borders = $fragment->borders;
+        // Solo el ancho de los lados VISIBLES reserva espacio para el rect vertical entre ellos
+        // (un lado con style None no ocupa hueco, igual que en el modelo de caja CSS 2.2 §8.5.3:
+        // "if border-style is none... the computed value of the border width is 0").
+        $topW = $this->effectiveWidth($borders->top);
+        $bottomW = $this->effectiveWidth($borders->bottom);
+        $middleHeight = $rect->height - $topW - $bottomW;
+
+        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW));
+        $this->paintBorderSide(
+            $borders->right,
+            $canvas,
+            new Rect($rect->right() - $borders->right->widthPx, $rect->y + $topW, $borders->right->widthPx, $middleHeight),
+        );
+        $this->paintBorderSide(
+            $borders->bottom,
+            $canvas,
+            new Rect($rect->x, $rect->bottom() - $bottomW, $rect->width, $bottomW),
+        );
+        $this->paintBorderSide(
+            $borders->left,
+            $canvas,
+            new Rect($rect->x, $rect->y + $topW, $borders->left->widthPx, $middleHeight),
+        );
+    }
+
+    /**
+     * BorderSide::$color es ?Color por tipo, aunque ComputedStyle nunca produce null (T3:
+     * currentColor eager) — guardia defensiva, nunca debería activarse desde el pipeline real.
+     */
+    private function paintBorderSide(BorderSide $side, Canvas $canvas, Rect $rect): void
+    {
+        if ($side->style !== BorderStyle::Solid || $side->widthPx <= 0.0 || $side->color === null) {
+            return;
+        }
+        $canvas->fillRect($rect, $side->color);
+    }
+
+    private function effectiveWidth(BorderSide $side): float
+    {
+        return $side->style === BorderStyle::Solid ? $side->widthPx : 0.0;
     }
 }
