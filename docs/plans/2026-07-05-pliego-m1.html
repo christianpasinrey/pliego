@@ -234,8 +234,8 @@ it('prefixes subset tag in BaseFont', ...)               // /BaseFont /XXXXXX+De
   <tr><td><strong>M1</strong> (este plan)</td><td>Texto real: estilos inline, UAX#14, alineación, subsetting, ToUnicode</td><td>Bold/tamaños/alineados del documento objetivo; PDFs 10× más pequeños</td></tr>
   <tr><td><strong>M2</strong></td><td>Box model completo: <strong>borders</strong>, width/height %, min/max, overflow básico + <strong>@page, cabecera/pie repetidos, counters «Pagina X de Y»</strong></td><td>Las bandas, filas con borde y el pie numerado del objetivo</td></tr>
   <tr><td><strong>M3</strong> (antes M8 parcial)</td><td><strong>Imágenes</strong>: &lt;img&gt; JPEG passthrough + PNG (decode a XObject), object-fit básico, medidas intrínsecas</td><td>Las fotos de las tarjetas del itinerario</td></tr>
-  <tr><td><strong>M4</strong> (antes M3)</td><td><strong>Tablas</strong> (el layout email-style del objetivo: foto izquierda + texto derecha se maqueta con tablas)</td><td>Con M1-M4 el documento objetivo se genera COMPLETO</td></tr>
-  <tr><td>M5+</td><td>Floats/position → Bootstrap → Tailwind-JIT → flex → grid</td><td>Orden original del spec a partir de aquí</td></tr>
+  <tr><td><strong>M4</strong> (decisión usuario 2026-07-05)</td><td><strong>Flexbox subset</strong>: display:flex, flex-direction (row/column), flex-wrap, gap, justify-content, align-items, flex-grow/shrink básicos, flex-basis/width</td><td>El usuario autora su HTML pensando en flex (tarjeta = foto + texto flexible); con M1-M4 el documento objetivo se genera COMPLETO vía flex</td></tr>
+  <tr><td>M5+</td><td>Tablas → floats/position → Bootstrap → Tailwind-JIT → flex completo (order, align-self, stretch) → grid</td><td>Tablas siguen necesarias para HTML ajeno/email-style; flex se completa a spec en su milestone original</td></tr>
 </table>
 
 </body>
