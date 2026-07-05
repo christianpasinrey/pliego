@@ -1,0 +1,102 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        80.2
+    ],
+    "background": null,
+    "borders": null,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                46.0,
+                36.0
+            ],
+            "background": null,
+            "borders": {
+                "top": {
+                    "widthPx": 1.0,
+                    "color": "#000000"
+                },
+                "right": {
+                    "widthPx": 1.0,
+                    "color": "#000000"
+                },
+                "bottom": {
+                    "widthPx": 1.0,
+                    "color": "#000000"
+                },
+                "left": {
+                    "widthPx": 1.0,
+                    "color": "#000000"
+                }
+            },
+            "children": [
+                {
+                    "type": "image",
+                    "rect": [
+                        3.0,
+                        3.0,
+                        40.0,
+                        30.0
+                    ],
+                    "imageKey": "tiny.jpg"
+                }
+            ]
+        },
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                46.0,
+                20.0,
+                15.0
+            ],
+            "background": null,
+            "borders": null,
+            "children": [
+                {
+                    "type": "image",
+                    "rect": [
+                        0.0,
+                        46.0,
+                        20.0,
+                        15.0
+                    ],
+                    "imageKey": "tiny.jpg"
+                }
+            ]
+        },
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                61.0,
+                300.0,
+                19.2
+            ],
+            "background": null,
+            "borders": null,
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        0.0,
+                        61.0,
+                        197.23,
+                        19.2
+                    ],
+                    "text": "Texto tras las imagenes.",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 77.45
+                }
+            ]
+        }
+    ]
+}

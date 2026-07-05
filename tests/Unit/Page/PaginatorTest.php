@@ -7,6 +7,7 @@ use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Paginator;
@@ -14,6 +15,11 @@ use Pliego\Page\Paginator;
 function textAt(float $y, float $height = 20.0): TextFragment
 {
     return new TextFragment(new Rect(0.0, $y, 100.0, $height), 'x', $y + 15.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+}
+
+function imageAt(float $y, float $height = 20.0): ImageFragment
+{
+    return new ImageFragment(new Rect(0.0, $y, 100.0, $height), '/tmp/tiny.jpg');
 }
 
 it('yields a single page when content fits', function () {
@@ -77,4 +83,48 @@ it('does not emit a leaf for a box with neither background nor visible border', 
     $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
     expect($pages[0]->fragments)->toHaveCount(1);
     expect($pages[0]->fragments[0])->toBeInstanceOf(TextFragment::class);
+});
+
+// --- M3-T3: ImageFragment is a leaf, just like TextFragment ------------------------------------
+
+it('treats an ImageFragment as a leaf that flows through paint order like text', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 50), null, [imageAt(10.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    expect($pages[0]->fragments)->toHaveCount(1);
+    expect($pages[0]->fragments[0])->toBeInstanceOf(ImageFragment::class);
+});
+
+it('pushes an image crossing the page boundary to the next page top, same as a TextFragment', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 1100), null, [imageAt(990.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(2);
+    expect($pages[1]->fragments[0])->toBeInstanceOf(ImageFragment::class);
+    expect($pages[1]->fragments[0]->rect()->y)->toBe(0.0);
+});
+
+it('relocates an image preserving its imageKey and shrinking coordinates to the page-local origin', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 2500), null, [imageAt(2100.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    $last = end($pages);
+    assert($last !== false);
+    expect($last->number)->toBe(3);
+    $image = $last->fragments[0];
+    assert($image instanceof ImageFragment);
+    expect($image->rect->y)->toBe(100.0);
+    expect($image->imageKey)->toBe('/tmp/tiny.jpg');
+});
+
+it('leaves an image taller than the page crossing the boundary unsplit (documented push-down limitation)', function () {
+    // Height > page content height ($h): the generic push-down guard (`height <= $h`) never
+    // fires, so a too-tall image is never pushed to the next page — it just stays where it
+    // lands and visually overflows the page boundary, same limitation as an over-tall
+    // TextFragment already has (brief: "documented, not split").
+    $root = new BoxFragment(new Rect(0, 0, 100, 1500), null, [imageAt(500.0, 1200.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    $image = $pages[0]->fragments[0];
+    assert($image instanceof ImageFragment);
+    expect($image->rect->y)->toBe(500.0);
+    expect($image->rect->height)->toBe(1200.0);
 });

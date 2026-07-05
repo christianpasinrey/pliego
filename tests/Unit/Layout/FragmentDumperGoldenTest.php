@@ -32,11 +32,11 @@ use Pliego\Text\FontCatalog;
  * then re-run without the env var to confirm the freshly-written golden passes, and diff/review
  * the golden file change before committing it.
  */
-function goldenLayoutHtml(string $html, string $css, float $width): BoxFragment
+function goldenLayoutHtml(string $html, string $css, float $width, string $basePath = __DIR__): BoxFragment
 {
     $doc = HtmlParser::parse($html);
     $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
-    $root = new BoxTreeBuilder(new ImageLoader(), new WarningCollector(), __DIR__)->build($doc, $map);
+    $root = new BoxTreeBuilder(new ImageLoader(), new WarningCollector(), $basePath)->build($doc, $map);
     return new BlockFlowContext(new TextMeasurer(), FontCatalog::withDefaults())
         ->layout($root, new Rect(0.0, 0.0, $width, INF));
 }
@@ -105,4 +105,19 @@ it('golden: bordered box with a percentage border-box width (M2-T8)', function (
     $fragment = goldenLayoutHtml($html, $css, 300.0);
 
     assertMatchesGolden('border-percent-box-sizing', new FragmentDumper()->dump($fragment));
+});
+
+it('golden: replaced box sizing and ImageFragment (M3-T3)', function () {
+    // tiny.jpg fixture: 4x3px (ratio 0.75). One image sized by an explicit CSS width (derives
+    // height via ratio), one by HTML attrs alone, and a paragraph after both to exercise the
+    // margin-bottom cursor advance/box model interplay in the same golden document.
+    $html = '<body>'
+        . '<img src="tiny.jpg" class="css-sized">'
+        . '<img src="tiny.jpg" width="20" height="15">'
+        . '<p>Texto tras las imagenes.</p>'
+        . '</body>';
+    $css = '.css-sized { width: 40px; margin-bottom: 10px; border: 1px solid #000000; padding: 2px }';
+    $fragment = goldenLayoutHtml($html, $css, 300.0, __DIR__ . '/../../../resources/images');
+
+    assertMatchesGolden('replaced-box-sizing', new FragmentDumper()->dump($fragment));
 });

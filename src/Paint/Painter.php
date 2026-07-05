@@ -7,6 +7,7 @@ namespace Pliego\Paint;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
@@ -43,6 +44,8 @@ final readonly class Painter
                 if ($fragment->underline) {
                     $this->paintUnderline($fragment, $canvas);
                 }
+            } elseif ($fragment instanceof ImageFragment) {
+                continue; // M3-T4 lo consume
             }
         }
     }

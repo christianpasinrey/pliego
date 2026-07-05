@@ -217,3 +217,36 @@ it('keeps width % unresolved on ComputedStyle (used-value resolution is T4)', fu
     expect($width->isPercent)->toBeTrue();
     expect($width->value)->toBe(50.0);
 });
+
+// --- M3-T3: height (Length, no %, no inheritance) ----------------------------------------------
+
+it('computes a declared height as a plain Length (px)', function () {
+    [$doc, $map] = resolveDoc('img { height: 30px }', '<body><img></body>');
+    $img = $doc->querySelector('img');
+    assert($img !== null);
+    expect($map->get($img)->height?->px)->toBe(30.0);
+});
+
+it('defaults height to null (auto) when not declared', function () {
+    [$doc, $map] = resolveDoc('', '<body><img></body>');
+    $img = $doc->querySelector('img');
+    assert($img !== null);
+    expect($map->get($img)->height)->toBeNull();
+});
+
+it('does not inherit height from the parent', function () {
+    [$doc, $map] = resolveDoc('div { height: 100px }', '<body><div><img></div></body>');
+    $img = $doc->querySelector('img');
+    assert($img !== null);
+    expect($map->get($img)->height)->toBeNull();
+});
+
+it('rejects a percentage height at parse time, leaving ComputedStyle::$height null (auto)', function () {
+    // Height is LENGTH_PROPERTIES in DeclarationParser (Length, not LengthPercentage): "50%"
+    // never parses into a value, so it never reaches ComputedStyle — the brief's adjudication
+    // ("% height -> warning + auto") is enforced here, at the parser boundary.
+    [$doc, $map] = resolveDoc('img { height: 50% }', '<body><img></body>');
+    $img = $doc->querySelector('img');
+    assert($img !== null);
+    expect($map->get($img)->height)->toBeNull();
+});

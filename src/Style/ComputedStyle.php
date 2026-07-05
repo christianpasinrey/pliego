@@ -31,6 +31,13 @@ final readonly class ComputedStyle
         public LengthPercentage $paddingBottom,
         public LengthPercentage $paddingLeft,
         public ?LengthPercentage $width,
+        // M3-T3: a diferencia de width, height NO admite % en M3 (LENGTH_PROPERTIES en
+        // DeclarationParser, no LENGTH_PERCENTAGE_PROPERTIES) — CSS 2.2 §10.5 resolvería un % de
+        // height contra la altura del containing block, que este motor no rastrea; un valor como
+        // "height: 50%" ya se rechaza en el parser ("Unsupported length for height: 50%") y aquí
+        // simplemente no llega, dejando el eje en null (auto), warning incluido — la adjudicación
+        // "% height -> warning + auto" del brief M3-T3 queda satisfecha sin código extra aquí.
+        public ?Length $height,
         public ?Color $backgroundColor,
         public Color $color,
         public float $fontSizePx,
@@ -64,6 +71,7 @@ final readonly class ComputedStyle
             $zero,
             $zero,
             $zero,
+            null,
             null,
             null,
             $rootColor,
@@ -187,6 +195,9 @@ final readonly class ComputedStyle
             $lengthPercentage('padding-bottom'),
             $lengthPercentage('padding-left'),
             $hasLengthPercentage('width') ? $lengthPercentage('width') : null,
+            // height NO hereda (igual que width): siempre parte de las propias declaraciones del
+            // elemento, nunca del padre.
+            $length('height'),
             ($declarations['background-color'] ?? null) instanceof Color ? $declarations['background-color'] : null,
             $color,
             $fontSizePx,

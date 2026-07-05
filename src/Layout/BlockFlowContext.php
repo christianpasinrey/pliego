@@ -10,6 +10,7 @@ use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Text\FontCatalog;
 
@@ -103,7 +104,11 @@ final readonly class BlockFlowContext implements FormattingContext
             }
             $flushInline();
             if ($child instanceof ImageBox) {
-                continue; // M3-T3 lo consume
+                $childFragment = $this->layoutImage($child, new Rect($contentX, $cursorY, $contentWidth, INF));
+                $children[] = $childFragment;
+                $contentBottom = $childFragment->rect->bottom();
+                $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
+                continue;
             }
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;
@@ -124,5 +129,102 @@ final readonly class BlockFlowContext implements FormattingContext
             $children,
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
         );
+    }
+
+    /**
+     * M3-T3: <img> es un replaced block-level box — mismo box model que un BlockBox normal
+     * (margin/border/padding se resuelven exactamente igual, incluido box-sizing's ausencia:
+     * un replaced element no lo necesita porque su tamaño "usado" YA ES el del content box, ver
+     * resolveReplacedSize()), pero SIN flujo interno: el content box tiene el tamaño que decide
+     * el algoritmo de sizing CSS 2.2 §10.3.4/§10.6.2 en vez de "lo que quede" del containing
+     * block. Se emite como un BoxFragment (border-box, background/borders pintables igual que
+     * cualquier otra caja) cuyo único hijo es el ImageFragment (la content box real, lo que
+     * pinta la imagen).
+     */
+    private function layoutImage(ImageBox $box, Rect $containingBlock): BoxFragment
+    {
+        $style = $box->style;
+        $cbWidth = $containingBlock->width;
+
+        $marginLeft = $style->marginLeft->resolve($cbWidth);
+        $marginRight = $style->marginRight->resolve($cbWidth);
+        $marginTop = $style->marginTop->resolve($cbWidth);
+
+        $x = $containingBlock->x + $marginLeft;
+        $y = $containingBlock->y + $marginTop;
+
+        $paddingLeft = $style->paddingLeft->resolve($cbWidth);
+        $paddingRight = $style->paddingRight->resolve($cbWidth);
+        $paddingTop = $style->paddingTop->resolve($cbWidth);
+        $paddingBottom = $style->paddingBottom->resolve($cbWidth);
+
+        $borderLeft = $style->borderLeft->widthPx;
+        $borderRight = $style->borderRight->widthPx;
+        $borderTop = $style->borderTop->widthPx;
+        $borderBottom = $style->borderBottom->widthPx;
+
+        [$contentWidth, $contentHeight] = $this->resolveReplacedSize($box, $cbWidth);
+
+        $contentX = $x + $borderLeft + $paddingLeft;
+        $contentY = $y + $borderTop + $paddingTop;
+
+        $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
+        $borderBoxHeight = $contentHeight + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
+
+        $imageFragment = new ImageFragment(new Rect($contentX, $contentY, $contentWidth, $contentHeight), $box->src);
+
+        return new BoxFragment(
+            new Rect($x, $y, $borderBoxWidth, $borderBoxHeight),
+            $style->backgroundColor,
+            [$imageFragment],
+            new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
+        );
+    }
+
+    /**
+     * CSS 2.2 §10.3.4 (ancho de replaced elements) + §10.6.2 (alto), simplificado para M3:
+     * cada eje se resuelve INDEPENDIENTEMENTE por prioridad CSS width/height (resuelto contra
+     * $cbWidth para width; height nunca admite % en M3, ver ComputedStyle::$height) > atributo
+     * HTML width/height > intrínseco. Solo cuando UN eje queda sin resolver por ninguna de las
+     * 3 fuentes se deriva del otro eje ya resuelto vía el aspect ratio intrínseco; si NINGÚN eje
+     * se resuelve, se usan ambas dimensiones intrínsecas, recortadas (preservando el ratio) al
+     * ancho del containing block si lo exceden — regla práctica de los navegadores, no está en
+     * el texto de la spec CSS 2.2 pero es el comportamiento observable universal.
+     *
+     * @return array{0: float, 1: float} content width/height en px
+     */
+    private function resolveReplacedSize(ImageBox $box, float $cbWidth): array
+    {
+        $style = $box->style;
+        $intrinsicWidth = (float) $box->intrinsicWidth;
+        $intrinsicHeight = (float) $box->intrinsicHeight;
+        $ratio = $intrinsicWidth > 0.0 ? $intrinsicHeight / $intrinsicWidth : 0.0;
+
+        // Nullsafe + ?? en la misma expresión dispara el mismo falso positivo de PHPStan que en
+        // BlockFlowContext::layout() (ver comentario de $declaredWidthPx más arriba); se separa en
+        // dos sentencias por eje, igual que allí.
+        $declaredWidth = $style->width;
+        $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
+        $declaredHeight = $style->height;
+        $declaredHeightPx = $declaredHeight?->px;
+
+        $width = $declaredWidthPx ?? $box->attrWidth;
+        $height = $declaredHeightPx ?? $box->attrHeight;
+
+        if ($width === null && $height === null) {
+            $width = $intrinsicWidth;
+            $height = $intrinsicHeight;
+            if ($width > $cbWidth && $width > 0.0) {
+                $scale = $cbWidth / $width;
+                $width = $cbWidth;
+                $height *= $scale;
+            }
+        } elseif ($width === null) {
+            $width = $ratio > 0.0 ? $height / $ratio : $intrinsicWidth;
+        } elseif ($height === null) {
+            $height = $width * $ratio;
+        }
+
+        return [$width, $height];
     }
 }

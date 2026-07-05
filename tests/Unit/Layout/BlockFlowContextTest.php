@@ -9,6 +9,7 @@ use Pliego\Dom\HtmlParser;
 use Pliego\Image\ImageLoader;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
@@ -16,14 +17,22 @@ use Pliego\Style\CssStyleSource;
 use Pliego\Style\StyleResolver;
 use Pliego\Text\FontCatalog;
 
-function layoutHtml(string $html, string $css, float $width = 500.0): BoxFragment
+// tests/resources/images fixtures (M3-T3): tiny.jpg is a real 4x3px JPEG (ratio height/width = 0.75).
+const BLOCK_FLOW_IMAGE_FIXTURES_DIR = __DIR__ . '/../../../resources/images';
+
+function layoutHtml(string $html, string $css, float $width = 500.0, string $basePath = __DIR__): BoxFragment
 {
     $doc = HtmlParser::parse($html);
     $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
-    $root = new BoxTreeBuilder(new ImageLoader(), new WarningCollector(), __DIR__)->build($doc, $map);
+    $root = new BoxTreeBuilder(new ImageLoader(), new WarningCollector(), $basePath)->build($doc, $map);
     $measurer = new TextMeasurer();
     $catalog = FontCatalog::withDefaults();
     return new BlockFlowContext($measurer, $catalog)->layout($root, new Rect(0.0, 0.0, $width, INF));
+}
+
+function layoutImageHtml(string $html, string $css, float $width = 500.0): BoxFragment
+{
+    return layoutHtml($html, $css, $width, BLOCK_FLOW_IMAGE_FIXTURES_DIR);
 }
 
 function textFragments(BoxFragment $box): array
@@ -181,4 +190,161 @@ it('resolves padding-top % against the containing block WIDTH, not any height', 
     assert($div instanceof BoxFragment);
     $text = textFragments($div)[0];
     expect($text->rect->y)->toBe(30.0);
+});
+
+// --- M3-T3: replaced box sizing (CSS 2.2 §10.3.4/§10.6.2) + ImageFragment ---------------------
+// tiny.jpg fixture: 4x3px, aspect ratio height/width = 0.75.
+
+it('emits a BoxFragment wrapping an ImageFragment for the content box', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', '', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    expect($img->children)->toHaveCount(1);
+    expect($img->children[0])->toBeInstanceOf(ImageFragment::class);
+    $imageFragment = $img->children[0];
+    assert($imageFragment instanceof ImageFragment);
+    expect($imageFragment->imageKey)->toBe(BLOCK_FLOW_IMAGE_FIXTURES_DIR . '/tiny.jpg');
+});
+
+it('sizes an image using its intrinsic dimensions when nothing else is specified', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', '', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(4.0);
+    expect($content->rect->height)->toBe(3.0);
+});
+
+it('caps an oversized image to the containing block width, preserving the intrinsic aspect ratio', function () {
+    // Containing block narrower (2px) than the 4x3 intrinsic image: neither CSS nor HTML attrs
+    // give a size, so both dims fall back to intrinsic — then get capped to fit cbWidth=2,
+    // scaling height by the same factor (2/4 = 0.5) to preserve the 0.75 ratio: 3 * 0.5 = 1.5.
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', '', 2.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(2.0);
+    expect($content->rect->height)->toBe(1.5);
+});
+
+it('sizes an image from HTML width/height attributes when no CSS size is declared', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg" width="40" height="20"></body>', '', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    // Both axes explicitly given (even though 40x20 does not match the 4x3 intrinsic ratio):
+    // per CSS 2.2 §10.3.4, when BOTH dimensions are resolved, neither is derived from the ratio.
+    expect($content->rect->width)->toBe(40.0);
+    expect($content->rect->height)->toBe(20.0);
+});
+
+it('derives the missing HTML attribute dimension from the intrinsic aspect ratio', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg" width="40"></body>', '', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(40.0);
+    expect($content->rect->height)->toBe(30.0); // 40 * 0.75
+});
+
+it('CSS width takes priority over the HTML width attribute', function () {
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg" width="40" height="20"></body>',
+        'img { width: 100px }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    // CSS width (100) wins over the attr (40); the attr height (20) still applies since it was
+    // never overridden by a CSS height — both axes resolved, so no ratio derivation happens.
+    expect($content->rect->width)->toBe(100.0);
+    expect($content->rect->height)->toBe(20.0);
+});
+
+it('derives height from a CSS width via the intrinsic aspect ratio when no height is given anywhere', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', 'img { width: 100px }', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(100.0);
+    expect($content->rect->height)->toBe(75.0); // 100 * 0.75
+});
+
+it('resolves CSS width % against the containing block width for images', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', 'img { width: 50% }', 200.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(100.0);
+    expect($content->rect->height)->toBe(75.0); // 100 * 0.75, derived (no CSS/attr height)
+});
+
+it('a CSS % height is unsupported (rejected by the parser) and falls back to auto, same as undeclared', function () {
+    // DeclarationParser only accepts px for height (LENGTH_PROPERTIES, no %); "50%" is rejected
+    // with a warning and never reaches ComputedStyle::$height, which stays null (auto) — the
+    // brief's adjudication ("% height -> warning + auto") is satisfied at the parser boundary,
+    // so sizing here falls back exactly as if height had never been declared at all.
+    $frag = layoutImageHtml('<body><img src="tiny.jpg" width="40"></body>', 'img { height: 50% }', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(40.0);
+    expect($content->rect->height)->toBe(30.0); // derived from width via ratio, height:50% ignored
+});
+
+it('applies margin/border/padding to the image using the normal box model', function () {
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg" width="40" height="30"></body>',
+        'img { margin: 5px 0 0 5px; padding: 5px; border: 2px solid #000000 }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    // border-box positioned after the margin.
+    expect($img->rect->x)->toBe(5.0);
+    expect($img->rect->y)->toBe(5.0);
+    // border-box size = content (40x30) + 2*padding (10) + 2*border (4) = 54x44.
+    expect($img->rect->width)->toBe(54.0);
+    expect($img->rect->height)->toBe(44.0);
+    expect($img->borders->isVisible())->toBeTrue();
+
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    // content box offset from the border-box origin by border+padding (2+5=7) on each side.
+    expect($content->rect->x)->toBe(12.0);
+    expect($content->rect->y)->toBe(12.0);
+    expect($content->rect->width)->toBe(40.0);
+    expect($content->rect->height)->toBe(30.0);
+});
+
+it('paints the image background on the wrapping BoxFragment', function () {
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg" width="10" height="10"></body>',
+        'img { background-color: #ff0000 }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    expect($img->background?->r)->toBe(255);
+});
+
+it('advances the cursor for the next sibling using the image margin-bottom, like a normal block', function () {
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg" width="10" height="20"><p>after</p></body>',
+        'img { margin-bottom: 15px }',
+        500.0,
+    );
+    [$img, $p] = $frag->children;
+    assert($img instanceof BoxFragment && $p instanceof BoxFragment);
+    expect($img->rect->height)->toBe(20.0);
+    expect($p->rect->y)->toBe(20.0 + 15.0);
 });
