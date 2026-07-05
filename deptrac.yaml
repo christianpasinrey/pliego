@@ -15,8 +15,8 @@ deptrac:
   ruleset:
     Css: [Vendor]
     Style: [Css, Vendor]
-    Dom: []
-    Box: [Dom, Style, Css]
+    Dom: [Vendor]
+    Box: [Dom, Style, Css, Vendor]
     Layout: [Box, Style, Css, Text]
     Text: []
     Page: [Layout, Css]
