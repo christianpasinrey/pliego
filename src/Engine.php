@@ -70,7 +70,7 @@ final class Engine
             // encadenamiento directo de PHP 8.4 (`new X()->metodo()`, sintaxis válida y
             // semánticamente idéntica). Deviación documentada (mismo motivo que
             // Fragment::rect(), ver task-8-report.md): el parser interno de deptrac.phar
-            // (nikic/php-parser v4.9-dev) no reconoce el encadenamiento sin paréntesis y
+            // (nikic/php-parser v4.19.1) no reconoce el encadenamiento sin paréntesis y
             // marca el fichero entero "Syntax Error", dejando sin cubrir el grafo de
             // dependencias de Engine (`--fail-on-uncovered` deja de verificar nada aquí).
             $parseResult = (new StylesheetParser())->parse($this->css);
