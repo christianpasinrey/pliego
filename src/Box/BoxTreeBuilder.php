@@ -4,12 +4,22 @@ declare(strict_types=1);
 
 namespace Pliego\Box;
 
+use Pliego\Css\WarningCollector;
+use Pliego\Image\ImageException;
+use Pliego\Image\ImageLoader;
+use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
 use Pliego\Style\StyleMap;
 
 final class BoxTreeBuilder
 {
     private const array INLINE_TAGS = ['span', 'strong', 'em', 'b', 'i', 'a', 'small', 'code', 'u'];
+
+    public function __construct(
+        private readonly ImageLoader $imageLoader,
+        private readonly WarningCollector $warnings,
+        private readonly string $basePath,
+    ) {}
 
     public function build(\Dom\HTMLDocument $document, StyleMap $styles): BlockBox
     {
@@ -45,6 +55,14 @@ final class BoxTreeBuilder
                 $pending[] = new LineBreakRun();
                 continue;
             }
+            if ($tag === 'img') {
+                $flush();
+                $imageBox = $this->buildImage($node, $styles->get($node));
+                if ($imageBox !== null) {
+                    $children[] = $imageBox;
+                }
+                continue;
+            }
             if (in_array($tag, self::INLINE_TAGS, true)) {
                 $this->collectInline($node, $styles, $pending);
                 continue;
@@ -54,6 +72,56 @@ final class BoxTreeBuilder
         }
         $flush();
         return new BlockBox($style, $children, strtolower($element->tagName));
+    }
+
+    /**
+     * M3-T2: <img> es replaced block-level (nunca aporta a la secuencia inline de runs, brief
+     * M3-T2). Errores suaves: src remoto (http/https), fichero ausente o formato no soportado
+     * por Image\ImageLoader → warning en el WarningCollector compartido + null (la caja se omite,
+     * nunca se lanza una excepción desde aquí). Los atributos HTML width/height solo se leen si
+     * son puramente numéricos; cualquier otro valor (%, auto, vacío, ausente) se ignora en
+     * silencio — no es un fallo, solo un atributo no soportado en M3.
+     */
+    private function buildImage(\Dom\Element $element, ComputedStyle $style): ?ImageBox
+    {
+        $src = $element->getAttribute('src');
+        if ($src === null || $src === '') {
+            $this->warnings->addWarning('Image missing src attribute');
+            return null;
+        }
+        if (preg_match('#^https?://#i', $src) === 1) {
+            $this->warnings->addWarning("remote images not supported yet: $src");
+            return null;
+        }
+        $resolved = $this->resolvePath($src);
+        try {
+            $image = $this->imageLoader->load($resolved);
+        } catch (ImageException $e) {
+            $this->warnings->addWarning("Could not load image \"$src\": " . $e->getMessage());
+            return null;
+        }
+        return new ImageBox(
+            $style,
+            $resolved,
+            $image->widthPx(),
+            $image->heightPx(),
+            self::numericAttribute($element, 'width'),
+            self::numericAttribute($element, 'height'),
+        );
+    }
+
+    /** src relativo se resuelve contra basePath (Engine::basePath(), default getcwd()); un src ya
+     * absoluto (unix "/..." o Windows "C:\..."/"C:/...") se usa tal cual. */
+    private function resolvePath(string $src): string
+    {
+        $isAbsolute = str_starts_with($src, '/') || preg_match('#^[a-zA-Z]:[\\\\/]#', $src) === 1;
+        return $isAbsolute ? $src : rtrim($this->basePath, '/\\') . '/' . $src;
+    }
+
+    private static function numericAttribute(\Dom\Element $element, string $name): ?float
+    {
+        $value = $element->getAttribute($name);
+        return $value !== null && is_numeric($value) ? (float) $value : null;
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Layout;
 
 use Pliego\Box\BlockBox;
+use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
 use Pliego\Layout\Fragment\BorderSet;
@@ -101,6 +102,9 @@ final readonly class BlockFlowContext implements FormattingContext
                 continue;
             }
             $flushInline();
+            if ($child instanceof ImageBox) {
+                continue; // M3-T3 lo consume
+            }
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;
             // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la

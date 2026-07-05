@@ -8,7 +8,9 @@ namespace Pliego;
 use Pliego\Box\BoxTreeBuilder;
 use Pliego\Css\StylesheetParser;
 use Pliego\Css\Value\Length;
+use Pliego\Css\WarningCollector;
 use Pliego\Dom\HtmlParser;
+use Pliego\Image\ImageLoader;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
@@ -33,10 +35,12 @@ final class Engine
     private string $fontPath = __DIR__ . '/../resources/fonts/DejaVuSans.ttf';
     /** @var list<array{string, int, FontStyle, string}> registros ->font() adicionales, en orden */
     private array $extraFonts = [];
+    private string $basePath;
 
     private function __construct()
     {
         $this->margin = Length::px(48.0);
+        $this->basePath = getcwd() ?: '.';
     }
 
     public static function make(): self
@@ -75,6 +79,13 @@ final class Engine
         return $this;
     }
 
+    /** M3-T2: directorio base contra el que se resuelven los <img src="..."> relativos. */
+    public function basePath(string $basePath): self
+    {
+        $this->basePath = $basePath;
+        return $this;
+    }
+
     public function render(string $html): RenderResult
     {
         return new RenderResult(function (mixed $stream) use ($html): RenderReport {
@@ -88,7 +99,8 @@ final class Engine
             $parseResult = (new StylesheetParser())->parse($this->css);
             $document = HtmlParser::parse($html);
             $styles = (new StyleResolver([new CssStyleSource($parseResult)]))->resolve($document);
-            $boxTree = (new BoxTreeBuilder())->build($document, $styles);
+            $imageWarnings = new WarningCollector();
+            $boxTree = (new BoxTreeBuilder(new ImageLoader(), $imageWarnings, $this->basePath))->build($document, $styles);
 
             // fontFile() registra/sobreescribe la cara regular de la familia 'default'; el resto
             // de caras (bold/italic/bold-italic) siguen siendo las builtin de withDefaults().
@@ -107,7 +119,7 @@ final class Engine
             // geometría del área de contenido y el canvas.
             $pageRuleFactory = new PageRuleFactory();
             $pageRule = $pageRuleFactory->fromCssData($parseResult->pageRule);
-            $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings()];
+            $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings(), ...$imageWarnings->drain()];
 
             $uniformMargin = $this->margin->px;
             // Nullsafe + ?? en la misma expresión dispara un falso positivo de PHPStan (ver

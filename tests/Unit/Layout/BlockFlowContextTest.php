@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 use Pliego\Box\BoxTreeBuilder;
 use Pliego\Css\StylesheetParser;
+use Pliego\Css\WarningCollector;
 use Pliego\Dom\HtmlParser;
+use Pliego\Image\ImageLoader;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
@@ -18,7 +20,7 @@ function layoutHtml(string $html, string $css, float $width = 500.0): BoxFragmen
 {
     $doc = HtmlParser::parse($html);
     $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
-    $root = new BoxTreeBuilder()->build($doc, $map);
+    $root = new BoxTreeBuilder(new ImageLoader(), new WarningCollector(), __DIR__)->build($doc, $map);
     $measurer = new TextMeasurer();
     $catalog = FontCatalog::withDefaults();
     return new BlockFlowContext($measurer, $catalog)->layout($root, new Rect(0.0, 0.0, $width, INF));

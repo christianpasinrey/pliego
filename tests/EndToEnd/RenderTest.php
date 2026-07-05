@@ -81,6 +81,29 @@ it('registers an extra font family via ->font() and embeds it only when referenc
     expect(substr_count($pdf2, '/Subtype /Type0'))->toBe(2);
 });
 
+it('resolves relative <img> src against ->basePath() and renders a valid PDF (M3-T2)', function () {
+    // M3-T3 aún no consume ImageBox en layout (ver BlockFlowContext), así que esto solo verifica
+    // el wiring Engine -> BoxTreeBuilder -> WarningCollector -> RenderReport: 0 warnings cuando la
+    // imagen se resuelve y carga correctamente contra basePath.
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-ok.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny.jpg"></body>')
+        ->save($path);
+    expect($report->warnings)->toBe([]);
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});
+
+it('reports a missing/remote <img> src as a soft warning, PDF still valid (M3-T2)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-missing.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="does-not-exist.png"><img src="https://example.com/a.jpg"></body>')
+        ->save($path);
+    expect($report->warnings)->toHaveCount(2);
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});
+
 it('paints solid borders as filled rects beyond the background, in css-backgrounds-3 painting order (M2-T5)', function () {
     // Una única caja con fondo + borde uniforme visible en los 4 lados: 1 "re f" para el fondo
     // + 4 "re f" para los lados del borde (Painter::paintBorders). Nada más en el documento
