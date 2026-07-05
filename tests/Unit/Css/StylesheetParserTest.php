@@ -31,3 +31,7 @@ it('warns on unsupported properties and selectors without failing', function () 
     expect($result->rules)->toHaveCount(0);
     expect($result->warnings)->not->toBeEmpty();
 });
+it('lets the last declaration of a property within a rule win', function () {
+    $d = new StylesheetParser()->parse('p { color: #f00; color: #00f }')->rules[0]->declarations;
+    expect($d['color'])->toEqual(new Color(0, 0, 255));
+});

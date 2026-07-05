@@ -18,7 +18,9 @@ final class StylesheetParser
         foreach ($document->getAllDeclarationBlocks() as $block) {
             $declarations = [];
             foreach ($block->getRules() as $rule) {
-                $declarations += $declarationParser->parse($rule->getRule(), (string) $rule->getValue());
+                foreach ($declarationParser->parse($rule->getRule(), (string) $rule->getValue()) as $property => $value) {
+                    $declarations[$property] = $value;
+                }
             }
             $warnings = [...$warnings, ...$declarationParser->drainWarnings()];
             foreach ($block->getSelectors() as $sabberwormSelector) {
