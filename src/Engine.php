@@ -97,7 +97,7 @@ final class Engine
             $defaultFace = $catalog->select('default', 400, false);
             $embedder = new FontEmbedder($writer, $defaultFace->font, 'PliegoDefault');
             $canvas = new PdfCanvas($writer, $embedder, $this->paper, $margin, $margin);
-            $painter = new Painter();
+            $painter = new Painter($catalog);
             $pageCount = 0;
             foreach ((new Paginator($contentHeight))->paginate($rootFragment) as $page) {
                 $canvas->beginPage();

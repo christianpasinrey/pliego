@@ -74,6 +74,20 @@ final class FontCatalog
         return array_values($this->usedFaces);
     }
 
+    /**
+     * Resuelve una cara a partir de una key YA producida por select() (formato
+     * "family:weight:normal|italic", ver constructor de $key en select()). Reutiliza el
+     * mismo camino/caché de select(); pensado para consumidores que solo tienen el faceKey
+     * de un TextFragment (p.ej. Painter al pintar el subrayado). Simplificación documentada:
+     * si $family contuviera ':' el parseo se rompería — no ocurre con las familias usadas en
+     * M1 (nombres CSS habituales sin ':').
+     */
+    public function faceByKey(string $key): FontFace
+    {
+        [$family, $weight, $style] = explode(':', $key, 3);
+        return $this->select($family, (int) $weight, $style === 'italic');
+    }
+
     /** @return array{string, int, bool, string}|null */
     private function resolve(string $family, int $weight, bool $italic): ?array
     {

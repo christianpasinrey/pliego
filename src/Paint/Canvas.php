@@ -14,4 +14,7 @@ interface Canvas
     public function fillRect(Rect $rect, Color $color): void;
 
     public function fillText(TextFragment $text): void;
+
+    /** Segmento recto de $widthPx de grosor, en px CSS (p.ej. subrayado bajo la baseline). */
+    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void;
 }

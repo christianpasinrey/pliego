@@ -54,3 +54,22 @@ it('flips the Y axis and converts px to pt for rectangles', function () {
     expect($pdf)->toContain(sprintf('0.00 %.2F 150.00 75.00 re', $expectedY));
     expect($pdf)->toContain('1.000 0.000 0.000 rg');
 });
+it('strokes a horizontal line with RG stroke color, w line width in pt, and m/l/S path ops', function () {
+    // y=20px horizontal (x:10..60px), grosor 0.8px => todo x0.75 con flip vertical de Y.
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeLine(10.0, 20.0, 60.0, 20.0, 0.8, new Color(0, 0, 0));
+    });
+    $expectedY = (PaperSize::A4->heightPx() - 20.0) * 0.75;
+    expect($pdf)->toContain('0.000 0.000 0.000 RG');
+    expect($pdf)->toContain(sprintf('%.2F w', 0.8 * 0.75));
+    expect($pdf)->toContain(sprintf('%.2F %.2F m %.2F %.2F l S', 7.50, $expectedY, 45.00, $expectedY));
+});
+it('flips Y and scales px to pt for both endpoints of a diagonal stroked line', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeLine(0.0, 0.0, 100.0, 200.0, 1.0, new Color(255, 0, 0));
+    });
+    $expectedY1 = PaperSize::A4->heightPx() * 0.75;
+    $expectedY2 = (PaperSize::A4->heightPx() - 200.0) * 0.75;
+    expect($pdf)->toContain('1.000 0.000 0.000 RG');
+    expect($pdf)->toContain(sprintf('%.2F %.2F m %.2F %.2F l S', 0.00, $expectedY1, 75.00, $expectedY2));
+});

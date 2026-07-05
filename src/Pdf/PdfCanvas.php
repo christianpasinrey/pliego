@@ -55,6 +55,8 @@ final class PdfCanvas implements Canvas
 
     public function fillText(TextFragment $text): void
     {
+        // T9: seleccionar /F por faceKey (FontRegistry sustituirá a $this->font único; por
+        // ahora toda la cara se pinta con los glifos de la única cara embebida por el Engine).
         $x = ($text->rect->x + $this->offsetX) * self::PX_TO_PT;
         $baseline = ($this->paper->heightPx() - ($text->baselineY + $this->offsetY)) * self::PX_TO_PT;
         $hex = $this->font->encode($text->text);
@@ -68,8 +70,30 @@ final class PdfCanvas implements Canvas
         );
     }
 
+    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void
+    {
+        $px1 = ($x1 + $this->offsetX) * self::PX_TO_PT;
+        $py1 = ($this->paper->heightPx() - ($y1 + $this->offsetY)) * self::PX_TO_PT;
+        $px2 = ($x2 + $this->offsetX) * self::PX_TO_PT;
+        $py2 = ($this->paper->heightPx() - ($y2 + $this->offsetY)) * self::PX_TO_PT;
+        $this->ops .= sprintf(
+            "%s\n%.2F w\n%.2F %.2F m %.2F %.2F l S\n",
+            $this->rgStroke($color),
+            $widthPx * self::PX_TO_PT,
+            $px1,
+            $py1,
+            $px2,
+            $py2,
+        );
+    }
+
     private function rg(Color $color): string
     {
         return sprintf('%.3F %.3F %.3F rg', $color->r / 255, $color->g / 255, $color->b / 255);
+    }
+
+    private function rgStroke(Color $color): string
+    {
+        return sprintf('%.3F %.3F %.3F RG', $color->r / 255, $color->g / 255, $color->b / 255);
     }
 }

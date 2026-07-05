@@ -94,6 +94,23 @@ final class TtfFont
         return $this->data;
     }
 
+    /**
+     * post table (OpenType spec §5.6 "post"): underlinePosition/underlineThickness, int16
+     * @+8/@+10 respectively, common to every post table version (0.5/1.0/2.0/3.0). Returns
+     * null when the font has no post table at all — callers fall back to a documented
+     * em-relative default (see Paint\Painter).
+     *
+     * @return array{int, int}|null [underlinePosition, underlineThickness] in font units
+     */
+    public function underlineMetrics(): ?array
+    {
+        $post = $this->tables['post']['offset'] ?? null;
+        if ($post === null) {
+            return null;
+        }
+        return [$this->int16($post + 8), $this->int16($post + 10)];
+    }
+
     public function advanceOf(int $glyphId): int
     {
         // hmtx: glyphs beyond numberOfHMetrics reuse the last advance width.

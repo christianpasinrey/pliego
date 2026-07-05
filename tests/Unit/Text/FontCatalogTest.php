@@ -68,6 +68,16 @@ it('exposes distinct metrics per face', function (): void {
     expect($boldAdvance)->toBeGreaterThan($regularAdvance);
 });
 
+it('resolves a face back from its own key', function (): void {
+    $catalog = FontCatalog::withDefaults();
+    $selected = $catalog->select('default', 700, true);
+
+    $byKey = $catalog->faceByKey($selected->key);
+
+    expect($byKey)->toBe($selected); // misma instancia (cache de usedFaces)
+    expect($byKey->key)->toBe('default:700:italic');
+});
+
 it('lists the faces used for embedding', function (): void {
     $catalog = FontCatalog::withDefaults();
     $catalog->select('default', 400, false);

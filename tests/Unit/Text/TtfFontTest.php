@@ -27,3 +27,23 @@ it('exposes wider advances for wider glyphs', function () {
 it('returns the raw file bytes for embedding', function () {
     expect(strlen($this->font->bytes()))->toBe(filesize(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf'));
 });
+it('reads underline metrics from the post table (real DejaVuSans values)', function () {
+    // Verificado a mano contra los bytes reales de DejaVuSans.ttf (post table @ offset
+    // 693640): version 0x00020000, underlinePosition int16 @+8 = -130 (bajo la baseline,
+    // signo negativo por convención OpenType), underlineThickness int16 @+10 = 90.
+    [$position, $thickness] = $this->font->underlineMetrics();
+    expect($position)->toBe(-130);
+    expect($position)->toBeLessThan(0); // bajo la baseline
+    expect($thickness)->toBe(90);
+});
+it('returns null underline metrics when the font has no post table', function () {
+    // buildMinimalTtfWithoutPostTable() está en tests/Pest.php (bootstrap), compartida con
+    // PainterTest para el mismo caso de fallback en el punto de consumo.
+    $path = buildMinimalTtfWithoutPostTable();
+    try {
+        $font = TtfFont::fromFile($path);
+        expect($font->underlineMetrics())->toBeNull();
+    } finally {
+        unlink($path);
+    }
+});
