@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M2 — pliego: box model y paged media</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; --ok:#4a7c59; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; --ok:#7fb08a; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M2 «box model y paged media»</h1>
+<p class="meta">2026-07-05 · Spec: <a href="../design/2026-07-05-php-pdf-engine-design.html">design doc</a> · Previos: <a href="./2026-07-05-pliego-m0.html">M0</a> ✅ · <a href="./2026-07-05-pliego-m1.html">M1</a> ✅ (main, CI verde, 140 tests) · Ejecución: subagent-driven.</p>
+
+<div class="task">
+  <strong>Goal:</strong> el documento objetivo del usuario (itinerario) menos las fotos: bordes reales, anchos en %, <code>box-sizing</code>, reglas <code>@page</code> con margin boxes y numeración «Pagina X de Y» repetida en cada página — manteniendo el streaming O(página).<br>
+  <strong>Claves técnicas:</strong> (1) <code>LengthPercentage</code> — los % se resuelven en used-value time contra el containing block, no en computed time; (2) bordes entran en la geometría del border box y se pintan como 4 rects solapados en esquinas; (3) <code>counter(pages)</code> sin romper streaming: el número total no se conoce al emitir la página 1 → cada label de página se pinta vía <strong>Form XObject</strong> referenciado (<code>/PgLbl1 Do</code>), y los streams de esos XObjects se escriben AL CIERRE del writer, cuando pages ya es conocido (la técnica de placeholders diferidos que el design doc §2 prometía).
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0/M1 vigente: strict_types, VOs readonly, px→pt solo Pdf\, deptrac verde, sin datos personales, trailer Co-Authored-By, TDD estándar (test→RED→impl→GREEN→4 gates→commit), baselines solo tests/.</li>
+  <li>Lecciones acumuladas: DOM 8.4 sin ->children; deptrac sin hooks ni new-chaining sin paréntesis (y salta ficheros EN SILENCIO — verificar conteo); comas finales en match; php-cs-fixer del CI más nuevo; Fragment::rect() método; FontCatalog bool $italic; boundary space al final del run precedente.</li>
+  <li>API pública M0/M1 intacta. Los 140 tests actuales verdes salvo actualizaciones explícitamente autorizadas por tarea.</li>
+  <li>Los tests de cada tarea son el contrato; algoritmos según spec citada (CSS 2.2 §8.5/§10, css-backgrounds-3, css-page-3, css-lists-3 para counters).</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Css (T2)
+final readonly class LengthPercentage {   // sustituye a Length donde CSS permite %
+    public static function px(float): self; public static function percent(float): self;
+    public static function fromCss(string): ?self;   // px, %, 0
+    public function resolve(float $containingBlockPx): float;  // % → px
+    public bool $isPercent; public float $value;
+}
+enum BorderStyle { case None; case Solid; }           // M2: solid|none
+final readonly class BorderSide { public float $widthPx; public BorderStyle $style; public ?Color $color; }
+// ComputedStyle += BorderSide $borderTop/Right/Bottom/Left; string $boxSizing ('content-box'|'border-box');
+// margin/padding/width pasan a LengthPercentage donde aplique (width, margin-*, padding-*)
+
+// Page (T6/T7)
+final readonly class PageRule {           // de @page
+    public ?Length $marginTop/Right/Bottom/Left;      // override de Engine::margins
+    /** @var array<string, MarginBoxContent> claves: top-left|top-center|top-right|bottom-left|bottom-center|bottom-right */
+    public array $marginBoxes;
+}
+final readonly class MarginBoxContent {   // content: "Pagina " counter(page) " de " counter(pages)
+    /** @var list<string|CounterRef> */ public array $parts;
+}
+enum CounterRef { case Page; case Pages; }
+
+// Pdf (T7)
+// PdfWriter += beginDeferredXObject(): DeferredXObject {objectId, name}; los streams se
+// entregan en finish() vía callable(int $totalPages): string por XObject diferido.</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M1"] --> T2["T2 LengthPercentage<br/>+ borders CSS + @page parse"]
+  T2 --> T3["T3 ComputedStyle:<br/>borders + box-sizing + %"]
+  T3 --> T4["T4 Layout: bordes en<br/>geometría + % widths"]
+  T4 --> T5["T5 Paint: pintar bordes"]
+  T2 --> T6["T6 PageRule + counters<br/>en el pipeline"]
+  T6 --> T7["T7 margin boxes +<br/>XObjects diferidos (X de Y)"]
+  T5 --> T8["T8 E2E documento objetivo<br/>+ goldens + README"]
+  T7 --> T8
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M2-T1 — Housekeeping M1</h3>
+<p>(1) Memoizar <code>TtfFont::locaOffsets()</code> (propiedad lazy; test: subsetting de 200 gids no degrada — benchmark simple &lt; 500ms). (2) Test de la rama U+2010 del BreakFinder. (3) Fixture + test de short-loca en FontSubsetter (fixture sintética con indexToLocFormat=0). (4) Corregir comentario misatribuido en Painter (InlineFlowContext, no TextMeasurer). Commit: <code>chore: apply M1 final-review housekeeping</code>.</p>
+</div>
+
+<div class="task">
+<h3>M2-T2 — CSS: LengthPercentage, bordes y parse de @page</h3>
+<p><strong>LengthPercentage</strong> per interfaz; <code>DeclarationParser</code> acepta % en width/margin-*/padding-* (font-size/line-height NO — % de font-size es M3+, warning). <strong>Bordes</strong>: longhands border-{top,right,bottom,left}-{width,style,color} + shorthands <code>border</code> y <code>border-{side}</code> (width style color en cualquier orden; estilos soportados solid|none, resto warning; width px o keywords thin=1/medium=3/thick=5). <strong>@page</strong>: StylesheetParser reconoce <code>@page { margin: …; @top-center { content: … } … }</code> — sabberworm expone at-rules; el content parsea strings entre comillas + <code>counter(page)</code>/<code>counter(pages)</code> → ParseResult += <code>?PageRuleData</code> (estructura cruda Css\, la conversión a Page\PageRule es de T6 — deptrac). Tests: shorthand en los 3 órdenes; keywords de width; @page con 2 margin boxes y counters; % fuera de sitio → warning.</p>
+<p>Commit: <code>feat(css): length percentages, border properties and @page parsing</code></p>
+</div>
+
+<div class="task">
+<h3>M2-T3 — Style: bordes, box-sizing y % en ComputedStyle</h3>
+<p>ComputedStyle += BorderSide ×4 (default none/0/currentColor→color del elemento), <code>box-sizing</code> (content-box default; border-box; hereda NO). width/margin/padding tipados como LengthPercentage (px puro sigue funcionando — <code>Length</code> se mantiene para @page margins y font-size). Ningún % se resuelve aquí (used-value en T4). border-color default: el <code>color</code> computado del elemento (currentColor per spec). Tests: border shorthand → 4 sides computados; box-sizing declarado; % conservado sin resolver; borde sin color → color del texto.</p>
+<p>Commit: <code>feat(style): computed borders, box-sizing and length percentages</code></p>
+</div>
+
+<div class="task">
+<h3>M2-T4 — Layout: bordes en la geometría y % widths</h3>
+<p>BlockFlowContext (CSS 2.2 §10.3.3): % de width/margin/padding se resuelven contra el ANCHO del containing block. content-box: border box = width + paddings + borders; border-box: width ES el border box (content = width − paddings − borders, clamp ≥ 0). Bordes desplazan el contenido igual que paddings. BoxFragment += <code>array{BorderSide,BorderSide,BorderSide,BorderSide} $borders</code> (o VO BorderSet). Los goldens M1 existentes NO cambian (docs sin bordes → geometría idéntica; verificar). Tests: border 2px desplaza contenido 2px; border-box con padding+border reduce content width; width 50% de un bloque de 400 → 200; margin % contra ancho (no altura, per spec).</p>
+<p>Commit: <code>feat(layout): borders in box geometry, box-sizing and percentage resolution</code></p>
+</div>
+
+<div class="task">
+<h3>M2-T5 — Paint: pintar bordes</h3>
+<p>Painter: por BoxFragment con bordes visibles (style solid, width &gt; 0), 4 fillRect (top: alto=widthPx a lo ancho del border box; etc.; esquinas: los rects horizontales cubren toda la anchura, los verticales van entre ellos — solape simple documentado, miter real en milestone de bordes completos). Orden de pintado: background → bordes → hijos (css-backgrounds-3 §painting). Tests con RecordingCanvas (orden y rects exactos) + bytes PDF (4 re con coordenadas correctas).</p>
+<p>Commit: <code>feat(paint): solid border painting</code></p>
+</div>
+
+<div class="task">
+<h3>M2-T6 — Page: PageRule y counters en el pipeline</h3>
+<p>Conversión Css\PageRuleData → Page\PageRule (T2 produjo la cruda). Engine: si el stylesheet trae @page margin, override de <code>margins()</code> (per-side). Paginator/Page: Page += <code>int $number</code> ya existe; el TOTAL no se conoce en streaming — T7 lo resuelve con XObjects; esta tarea deja PageRule fluyendo hasta el render loop y los margin boxes SIN pintar aún. Tests: @page margin 30px → content area reducida (geometría de fragments); sin @page → margins() de Engine.</p>
+<p>Commit: <code>feat(page): page rule margins flowing through the engine</code></p>
+</div>
+
+<div class="task">
+<h3>M2-T7 — Margin boxes con XObjects diferidos («Pagina X de Y»)</h3>
+<p>PdfWriter += XObjects diferidos: <code>defer(callable(int $totalPages): string $opsBuilder): DeferredRef{objectId,name}</code>; addPage acepta xobjectRefs para /Resources /XObject; finish() invoca los builders con el total real y escribe los streams (Form XObject: /Subtype /Form /BBox). Por cada página y cada margin box con content: PdfCanvas emite <code>/PgLblN Do</code> posicionado en el área de margen (top-center: centrado horizontal en el margen superior; bottom-*: margen inferior); el builder compone el texto sustituyendo counter(page) por el número YA conocido (se captura al emitir) y counter(pages) por el total (solo conocido en finish) — es decir: un XObject POR PÁGINA que contenga counter(pages); páginas cuyo content no usa counter(pages) pueden pintar directo sin diferir (optimización opcional). Fuente de los margin boxes: cara default regular, 10px, color #555 (defaults css-page razonables; font-size/color del @page en milestone posterior). Streaming intacto: los XObjects diferidos retienen solo callables + ids, O(páginas) punteros, no contenido de página. Tests: doc 3 páginas con @bottom-center «Pagina  counter(page)  de  counter(pages)» → cada página referencia su XObject, los streams al final del PDF contienen «Pagina 1 de 3»,«Pagina 2 de 3»,«Pagina 3 de 3» (hex de glifos vía encode del embedder — cuidado: los glifos de los labels deben registrarse en el subset ANTES del flush de fuentes: flushAll tras finish de labels, orden documentado); pdftotext-style check estructural.</p>
+<p>Commit: <code>feat(pdf): deferred form xobjects for page margin boxes with page counters</code></p>
+</div>
+
+<div class="task">
+<h3>M2-T8 — E2E documento objetivo, goldens y README</h3>
+<p>E2E «itinerary skeleton»: réplica sin imágenes del documento del usuario — banda de cabecera con fondo, bloque de datos con bordes 1px, precio alineado derecha, banda amarilla, 6 tarjetas (fuerzan 2+ páginas), @page con @bottom-left «tubuencamino.com» y @bottom-right «Pagina X de Y». Asserts: PDF válido, 2+ páginas, bordes presentes (ops re), labels correctos en XObjects, 0 warnings. +1 golden con bordes+%. README: CSS soportado actualizado (borders, %, box-sizing, @page/margin boxes/counters). Playground sample: añadir bordes y @page al ejemplo.</p>
+<p>Commit: <code>test: itinerary-skeleton e2e and goldens; update README and playground for M2</code></p>
+</div>
+
+</body>
+</html>
