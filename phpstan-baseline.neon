@@ -37,6 +37,12 @@ parameters:
 			path: tests/Unit/Css/LengthTest.php
 
 		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/TypographyTest.php
+
+		-
 			message: '#^Binary operation "\+" between mixed and 40\.0 results in an error\.$#'
 			identifier: binaryOp.invalid
 			count: 1
@@ -125,6 +131,12 @@ parameters:
 			identifier: argument.type
 			count: 3
 			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Call to an undefined method Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy\:\:markTestSkipped\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: tests/Unit/Layout/FragmentDumperGoldenTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'

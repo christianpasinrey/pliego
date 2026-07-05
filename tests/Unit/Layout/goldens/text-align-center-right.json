@@ -1,0 +1,62 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        38.4
+    ],
+    "background": null,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                300.0,
+                19.2
+            ],
+            "background": null,
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        113.12,
+                        0.0,
+                        73.76,
+                        19.2
+                    ],
+                    "text": "Centrado",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 16.45
+                }
+            ]
+        },
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                19.2,
+                300.0,
+                19.2
+            ],
+            "background": null,
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        199.47,
+                        19.2,
+                        100.53,
+                        19.2
+                    ],
+                    "text": "A la derecha",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 35.65
+                }
+            ]
+        }
+    ]
+}
