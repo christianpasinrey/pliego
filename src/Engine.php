@@ -15,10 +15,11 @@ use Pliego\Layout\TextMeasurer;
 use Pliego\Page\Paginator;
 use Pliego\Page\PaperSize;
 use Pliego\Paint\Painter;
-use Pliego\Pdf\FontEmbedder;
+use Pliego\Pdf\FontRegistry;
 use Pliego\Pdf\PdfCanvas;
 use Pliego\Pdf\PdfWriter;
 use Pliego\Style\CssStyleSource;
+use Pliego\Style\FontStyle;
 use Pliego\Style\StyleResolver;
 use Pliego\Text\FontCatalog;
 
@@ -28,6 +29,8 @@ final class Engine
     private PaperSize $paper = PaperSize::A4;
     private Length $margin;
     private string $fontPath = __DIR__ . '/../resources/fonts/DejaVuSans.ttf';
+    /** @var list<array{string, int, FontStyle, string}> registros ->font() adicionales, en orden */
+    private array $extraFonts = [];
 
     private function __construct()
     {
@@ -63,6 +66,13 @@ final class Engine
         return $this;
     }
 
+    /** Registra una cara (family/weight/style) adicional para embedding multi-cara. */
+    public function font(string $family, int $weight, FontStyle $style, string $ttfPath): self
+    {
+        $this->extraFonts[] = [$family, $weight, $style, $ttfPath];
+        return $this;
+    }
+
     public function render(string $html): RenderResult
     {
         return new RenderResult(function (mixed $stream) use ($html): RenderReport {
@@ -80,8 +90,12 @@ final class Engine
 
             // fontFile() registra/sobreescribe la cara regular de la familia 'default'; el resto
             // de caras (bold/italic/bold-italic) siguen siendo las builtin de withDefaults().
+            // font() añade caras extra (otras familias, u otros pesos/estilos de 'default').
             $catalog = FontCatalog::withDefaults();
             $catalog->register('default', 400, false, $this->fontPath);
+            foreach ($this->extraFonts as [$family, $weight, $style, $ttfPath]) {
+                $catalog->register($family, $weight, $style === FontStyle::Italic, $ttfPath);
+            }
             $measurer = new TextMeasurer();
             $margin = $this->margin->px;
             $contentWidth = $this->paper->widthPx() - 2 * $margin;
@@ -91,12 +105,8 @@ final class Engine
 
             $writer = new PdfWriter($stream);
             $writer->begin();
-            // PdfCanvas/FontEmbedder siguen siendo de UNA sola cara (M1-T6): se embebe solo la
-            // regular por defecto e IGNORAN faceKey; el texto en negrita se pinta temporalmente
-            // con los glifos de la regular (M1-T9 completa el embedding multi-cara).
-            $defaultFace = $catalog->select('default', 400, false);
-            $embedder = new FontEmbedder($writer, $defaultFace->font, 'PliegoDefault');
-            $canvas = new PdfCanvas($writer, $embedder, $this->paper, $margin, $margin);
+            $fonts = new FontRegistry($writer, $catalog);
+            $canvas = new PdfCanvas($writer, $fonts, $this->paper, $margin, $margin);
             $painter = new Painter($catalog);
             $pageCount = 0;
             foreach ((new Paginator($contentHeight))->paginate($rootFragment) as $page) {
@@ -105,7 +115,7 @@ final class Engine
                 $canvas->endPage();
                 $pageCount++;
             }
-            $embedder->flush();
+            $fonts->flushAll();
             $writer->finish();
             return new RenderReport($parseResult->warnings, $pageCount);
         });

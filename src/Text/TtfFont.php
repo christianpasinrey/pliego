@@ -25,7 +25,7 @@ final class TtfFont
     private array $cmapCache = [];
     private int $cmapOffset;
 
-    private function __construct(private readonly string $data)
+    private function __construct(private readonly string $data, private readonly ?string $sourcePath = null)
     {
         $numTables = $this->uint16(4);
         for ($i = 0; $i < $numTables; $i++) {
@@ -60,13 +60,19 @@ final class TtfFont
         if ($data === false) {
             throw new FontException("Cannot read font file: $path");
         }
-        return new self($data);
+        return new self($data, $path);
     }
 
     /** Parses an in-memory sfnt (e.g. the output of FontSubsetter::subset()). */
     public static function fromString(string $data): self
     {
         return new self($data);
+    }
+
+    /** Path passed to fromFile(), or null when loaded via fromString() (e.g. a subset). */
+    public function sourcePath(): ?string
+    {
+        return $this->sourcePath;
     }
 
     public function unitsPerEm(): int

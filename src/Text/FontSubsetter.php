@@ -22,8 +22,15 @@ namespace Pliego\Text;
  */
 final class FontSubsetter
 {
-    /** @param list<int> $glyphIds glyph ids to keep, in addition to .notdef (gid 0) */
-    public function subset(TtfFont $font, array $glyphIds): string
+    /**
+     * @param list<int> $glyphIds glyph ids to keep, in addition to .notdef (gid 0)
+     * @param list<string>|null $keepTables when given, only these sfnt tags (plus the always-
+     *   rebuilt glyf/loca/head) are copied from the source font — every other table (e.g.
+     *   name/post/GSUB/GPOS/kern/cmap for a PDF embed that shapes text itself and uses
+     *   CIDToGIDMap=Identity) is dropped. A tag listed here that the source font doesn't have
+     *   is skipped silently (nothing to copy).
+     */
+    public function subset(TtfFont $font, array $glyphIds, ?array $keepTables = null): string
     {
         $keep = $this->expandWithComponents($font, $glyphIds);
         [$glyf, $loca] = $this->rebuildGlyfAndLoca($font, $keep);
@@ -32,14 +39,13 @@ final class FontSubsetter
         $head = substr_replace($head, "\x00\x00\x00\x00", 8, 4); // checksumAdjustment = 0
         $head = substr_replace($head, pack('n', 1), 50, 2); // indexToLocFormat = long
 
+        $rebuilt = ['glyf' => $glyf, 'loca' => $loca, 'head' => $head];
         $tables = [];
         foreach ($font->tableDirectory() as $tag => $_) {
-            $tables[$tag] = match ($tag) {
-                'glyf' => $glyf,
-                'loca' => $loca,
-                'head' => $head,
-                default => $font->tableBytes($tag) ?? '',
-            };
+            if ($keepTables !== null && !isset($rebuilt[$tag]) && !in_array($tag, $keepTables, true)) {
+                continue;
+            }
+            $tables[$tag] = $rebuilt[$tag] ?? $font->tableBytes($tag) ?? '';
         }
 
         return $this->assembleSfnt($tables);

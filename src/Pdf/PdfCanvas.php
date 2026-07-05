@@ -18,7 +18,7 @@ final class PdfCanvas implements Canvas
 
     public function __construct(
         private readonly PdfWriter $writer,
-        private readonly FontEmbedder $font,
+        private readonly FontRegistry $fonts,
         private readonly PaperSize $paper,
         private readonly float $offsetX,
         private readonly float $offsetY,
@@ -35,7 +35,7 @@ final class PdfCanvas implements Canvas
             $this->paper->widthPx() * self::PX_TO_PT,
             $this->paper->heightPx() * self::PX_TO_PT,
             $this->ops,
-            ['F1' => $this->font->objectId()],
+            $this->fonts->pageResources(),
         );
     }
 
@@ -55,13 +55,13 @@ final class PdfCanvas implements Canvas
 
     public function fillText(TextFragment $text): void
     {
-        // T9: seleccionar /F por faceKey (FontRegistry sustituirá a $this->font único; por
-        // ahora toda la cara se pinta con los glifos de la única cara embebida por el Engine).
         $x = ($text->rect->x + $this->offsetX) * self::PX_TO_PT;
         $baseline = ($this->paper->heightPx() - ($text->baselineY + $this->offsetY)) * self::PX_TO_PT;
-        $hex = $this->font->encode($text->text);
+        $resourceName = $this->fonts->resourceNameFor($text->faceKey);
+        $hex = $this->fonts->embedderFor($text->faceKey)->encode($text->text);
         $this->ops .= sprintf(
-            "BT /F1 %.2F Tf %s %.2F %.2F Td <%s> Tj ET\n",
+            "BT /%s %.2F Tf %s %.2F %.2F Td <%s> Tj ET\n",
+            $resourceName,
             $text->fontSizePx * self::PX_TO_PT,
             $this->rg($text->color),
             $x,

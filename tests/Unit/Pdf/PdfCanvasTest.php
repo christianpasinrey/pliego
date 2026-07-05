@@ -7,9 +7,10 @@ use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\PaperSize;
-use Pliego\Pdf\FontEmbedder;
+use Pliego\Pdf\FontRegistry;
 use Pliego\Pdf\PdfCanvas;
 use Pliego\Pdf\PdfWriter;
+use Pliego\Text\FontCatalog;
 use Pliego\Text\TtfFont;
 
 function renderOnePage(callable $draw): string
@@ -18,13 +19,14 @@ function renderOnePage(callable $draw): string
     assert($stream !== false);
     $writer = new PdfWriter($stream);
     $writer->begin();
-    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
-    $embedder = new FontEmbedder($writer, $font, 'DejaVuSans');
-    $canvas = new PdfCanvas($writer, $embedder, PaperSize::A4, 0.0, 0.0);
+    $catalog = FontCatalog::withDefaults();
+    $font = $catalog->select('default', 400, false)->font;
+    $registry = new FontRegistry($writer, $catalog);
+    $canvas = new PdfCanvas($writer, $registry, PaperSize::A4, 0.0, 0.0);
     $canvas->beginPage();
     $draw($canvas, $font);
     $canvas->endPage();
-    $embedder->flush();
+    $registry->flushAll();
     $writer->finish();
     rewind($stream);
     return (string) stream_get_contents($stream);

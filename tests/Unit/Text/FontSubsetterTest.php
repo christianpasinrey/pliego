@@ -10,6 +10,14 @@ function fontSubsetterFixturesDir(): string
     return __DIR__ . '/../../../resources/fonts';
 }
 
+/** Número de tablas del sfnt (uint16 @+4), sin depender del parser de TtfFont (que exige cmap). */
+function sfntTableCount(string $bytes): int
+{
+    /** @var array{1: int} $v */
+    $v = unpack('n', substr($bytes, 4, 2));
+    return $v[1];
+}
+
 /**
  * Synthetic multi-glyph sfnt built to actually exercise the size-reduction guarantee of
  * keep-gid subsetting. A real production font (see DejaVuSans fixtures) has large GPOS/GSUB/
@@ -223,4 +231,48 @@ it('parses as a valid sfnt that TtfFont can fully re-parse', function (): void {
     expect($subsetFont->descender())->toBe($original->descender());
     expect($subsetFont->glyphCount())->toBe($original->glyphCount()); // keep-gid: no renumbering
     expect($subsetFont->indexToLocFormat())->toBe(1); // subsetter always emits long loca
+});
+
+it('shrinks a real 3-glyph subset well below 8% of the original using the PDF rasterizer table whitelist', function (): void {
+    // M1-T9 controller addition: FontEmbedder passes this exact whitelist (the tables a PDF
+    // rasterizer needs to hint/scale glyphs) — name/post/GSUB/GPOS/kern/cmap are dropped
+    // because we shape text ourselves and CIDToGIDMap=Identity needs no cmap.
+    $whitelist = ['head', 'hhea', 'maxp', 'hmtx', 'cvt ', 'fpgm', 'prep'];
+    $originalPath = fontSubsetterFixturesDir() . '/DejaVuSans.ttf';
+    $original = TtfFont::fromFile($originalPath);
+    $gidA = $original->glyphId(0x41);
+    $gidB = $original->glyphId(0x42);
+    $gidNTilde = $original->glyphId(0xF1);
+
+    $subsetBytes = (new FontSubsetter())->subset($original, [$gidA, $gidB, $gidNTilde], $whitelist);
+
+    expect(strlen($subsetBytes))->toBeLessThan((int) (filesize($originalPath) * 0.08));
+
+    // Solo el whitelist + glyf/loca/head (siempre reconstruidas) sobreviven; cmap/name/post/
+    // GSUB/GPOS/kern (todas presentes en el DejaVuSans real) se descartan. TtfFont::fromString
+    // no puede re-parsear este subset (exige cmap en el constructor), así que se inspecciona
+    // el directorio de tablas del sfnt crudo.
+    $numTables = sfntTableCount($subsetBytes);
+    $tags = [];
+    for ($i = 0; $i < $numTables; $i++) {
+        $tags[] = substr($subsetBytes, 12 + $i * 16, 4);
+    }
+    sort($tags);
+    expect($tags)->toBe(['cvt ', 'fpgm', 'glyf', 'head', 'hhea', 'hmtx', 'loca', 'maxp', 'prep']);
+});
+
+it('skips a whitelisted table silently when the source font does not have it', function (): void {
+    $whitelist = ['head', 'hhea', 'maxp', 'hmtx', 'GSUB']; // GSUB absent from the synthetic fixture
+    $fixture = buildSubsettableTtf();
+    $font = TtfFont::fromString($fixture['bytes']);
+
+    $subsetBytes = (new FontSubsetter())->subset($font, [$fixture['aGid']], $whitelist);
+
+    $numTables = sfntTableCount($subsetBytes);
+    $tags = [];
+    for ($i = 0; $i < $numTables; $i++) {
+        $tags[] = substr($subsetBytes, 12 + $i * 16, 4);
+    }
+    sort($tags);
+    expect($tags)->toBe(['glyf', 'head', 'hhea', 'hmtx', 'loca', 'maxp']); // no 'GSUB', no error
 });
