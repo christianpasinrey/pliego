@@ -10,6 +10,7 @@ deptrac:
     - { name: Page,   collectors: [{ type: directory, value: src/Page }] }
     - { name: Paint,  collectors: [{ type: directory, value: src/Paint }] }
     - { name: Pdf,    collectors: [{ type: directory, value: src/Pdf }] }
+    - { name: Image,  collectors: [{ type: directory, value: src/Image }] }
     - { name: Engine, collectors: [{ type: classLike, value: 'Pliego\\(Engine|RenderResult|RenderReport)' }] }
     - { name: Vendor, collectors: [{ type: classLike, value: '^(Sabberworm\\CSS\\.*|Dom\\.*)$' }] }
   ruleset:
@@ -22,4 +23,5 @@ deptrac:
     Page: [Layout, Css]
     Paint: [Layout, Page, Css, Text]
     Pdf: [Paint, Text, Css, Layout, Page]
+    Image: [Css]
     Engine: [Css, Style, Dom, Box, Layout, Text, Page, Paint, Pdf]
