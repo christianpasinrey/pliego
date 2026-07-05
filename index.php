@@ -83,10 +83,11 @@ $sampleHtml = <<<'HTML'
   <div class="band">Itinerario</div>
 
   <div class="card">
-    <p class="day"><strong>Sarria</strong> — Giorno 1</p>
-    <p class="data">Data: 19/09/2026 · Pernottamento a Sarria</p>
+    <p class="day"><strong>Sarria</strong> — <em>Giorno 1</em></p>
+    <p class="data">Data: 19/09/2026 · Pernottamento a <u>Sarria</u></p>
     <p>Una volta arrivato a Sarria, ti consigliamo di visitare la città e di goderti
-    i suoi monumenti e le sue strade, dove si respira già l'atmosfera del Cammino.</p>
+    i suoi monumenti e le sue strade, dove si respira già l'atmosfera del Cammino.
+    Puoi <strong>prenotare online</strong> o scriverci — <em>siamo qui per aiutarti</em>.</p>
   </div>
 
   <div class="card">
@@ -108,6 +109,8 @@ h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .card { background-color: #f4f4f4; padding: 12px; margin: 0 0 10px 0 }
 .day { margin: 0 0 4px 0; font-size: 16px }
 .data { color: #555555; font-size: 12px; margin: 0 0 6px 0 }
+.price { text-align: right }
+p { line-height: 1.45 }
 CSS;
 ?>
 <!DOCTYPE html>
