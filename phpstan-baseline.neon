@@ -177,19 +177,19 @@ parameters:
 		-
 			message: '#^Cannot access property \$underline on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 19
+			count: 20
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 17
+			count: 18
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

@@ -14,8 +14,8 @@ final readonly class ComputedStyle
     private const array BOLD_BY_DEFAULT = ['b', 'strong'];
     /** UA stylesheet: i,em → italic. */
     private const array ITALIC_BY_DEFAULT = ['i', 'em'];
-    /** UA stylesheet: a → underline. */
-    private const array UNDERLINE_BY_DEFAULT = ['a'];
+    /** UA stylesheet: a,u → underline. */
+    private const array UNDERLINE_BY_DEFAULT = ['a', 'u'];
 
     public function __construct(
         public Display $display,

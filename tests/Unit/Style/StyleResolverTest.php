@@ -79,6 +79,13 @@ it('computes underline for a via UA default', function () {
     expect($map->get($a)->underline)->toBeTrue();
 });
 
+it('defaults u elements to underline', function () {
+    [$doc, $map] = resolveDoc('', '<body><p><u>x</u></p></body>');
+    $u = $doc->querySelector('u');
+    assert($u !== null);
+    expect($map->get($u)->underline)->toBeTrue();
+});
+
 it('lets author declarations override UA defaults', function () {
     [$doc, $map] = resolveDoc('strong { font-weight: normal }', '<body><strong>x</strong></body>');
     $strong = $doc->querySelector('strong');
