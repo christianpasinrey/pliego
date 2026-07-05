@@ -988,7 +988,10 @@ final class StylesheetParser
             }
             $declarations = [];
             foreach ($block->getRules() as $rule) {
-                $declarations += $declarationParser->parse($rule->getRule(), (string) $rule->getValue());
+                // CSS 2.2 §6.4: dentro de una regla gana la ÚLTIMA declaración de cada propiedad
+                foreach ($declarationParser->parse($rule->getRule(), (string) $rule->getValue()) as $property => $value) {
+                    $declarations[$property] = $value;
+                }
             }
             $warnings = [...$warnings, ...$declarationParser->drainWarnings()];
             foreach ($block->getSelectors() as $sabberwormSelector) {
