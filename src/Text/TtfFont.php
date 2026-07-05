@@ -63,6 +63,12 @@ final class TtfFont
         return new self($data);
     }
 
+    /** Parses an in-memory sfnt (e.g. the output of FontSubsetter::subset()). */
+    public static function fromString(string $data): self
+    {
+        return new self($data);
+    }
+
     public function unitsPerEm(): int
     {
         return $this->unitsPerEm;
@@ -115,6 +121,101 @@ final class TtfFont
     {
         // hmtx: glyphs beyond numberOfHMetrics reuse the last advance width.
         return $this->advances[min($glyphId, count($this->advances) - 1)];
+    }
+
+    /**
+     * Full sfnt table directory (tag => {offset,length} into bytes()), for FontSubsetter.
+     *
+     * @return array<string, array{offset: int, length: int}>
+     */
+    public function tableDirectory(): array
+    {
+        return $this->tables;
+    }
+
+    /** Raw bytes of one table as stored in the sfnt, or null if the font has no such table. */
+    public function tableBytes(string $tag): ?string
+    {
+        $table = $this->tables[$tag] ?? null;
+        if ($table === null) {
+            return null;
+        }
+        return substr($this->data, $table['offset'], $table['length']);
+    }
+
+    /** head @+50 (OpenType spec §5.2 "head"): 0 = short (loca values × 2), 1 = long offsets. */
+    public function indexToLocFormat(): int
+    {
+        return $this->int16($this->requireTable('head') + 50);
+    }
+
+    /**
+     * loca table (OpenType spec §5.3 "loca"): byte offsets into glyf, one per glyph plus a
+     * trailing sentinel (numGlyphs + 1 entries total).
+     *
+     * @return list<int>
+     */
+    public function locaOffsets(): array
+    {
+        $loca = $this->requireTable('loca');
+        $long = $this->indexToLocFormat() === 1;
+        $offsets = [];
+        for ($i = 0; $i <= $this->numGlyphs; $i++) {
+            $offsets[] = $long ? $this->uint32($loca + $i * 4) : $this->uint16($loca + $i * 2) * 2;
+        }
+        return $offsets;
+    }
+
+    /** Raw glyf bytes for one glyph id (empty string for glyphs with no outline data). */
+    public function glyphDataFor(int $glyphId): string
+    {
+        $offsets = $this->locaOffsets();
+        $glyf = $this->requireTable('glyf');
+        $start = $offsets[$glyphId] ?? throw new FontException("Glyph id out of range: $glyphId");
+        $end = $offsets[$glyphId + 1] ?? throw new FontException("Glyph id out of range: $glyphId");
+        return substr($this->data, $glyf + $start, $end - $start);
+    }
+
+    /**
+     * Direct (non-recursive) component glyph ids of a composite glyph (glyf table,
+     * numberOfContours < 0 — OpenType spec §5.3.3 "Glyph Headers" / composite glyph
+     * description). Returns [] for simple or empty glyphs. Callers that need the transitive
+     * closure (a component that is itself composite) must recurse.
+     *
+     * @return list<int>
+     */
+    public function compositeComponents(int $glyphId): array
+    {
+        $offsets = $this->locaOffsets();
+        $start = $offsets[$glyphId] ?? throw new FontException("Glyph id out of range: $glyphId");
+        $end = $offsets[$glyphId + 1] ?? throw new FontException("Glyph id out of range: $glyphId");
+        if ($end <= $start) {
+            return [];
+        }
+        $glyf = $this->requireTable('glyf');
+        $base = $glyf + $start;
+        if ($this->int16($base) >= 0) {
+            return []; // simple glyph
+        }
+        $components = [];
+        $pos = $base + 10; // past numberOfContours (2) + bbox (4 × int16)
+        while (true) {
+            $flags = $this->uint16($pos);
+            $components[] = $this->uint16($pos + 2);
+            $pos += 4;
+            $pos += ($flags & 0x0001) !== 0 ? 4 : 2; // ARG_1_AND_2_ARE_WORDS (bit 0)
+            if (($flags & 0x0008) !== 0) {
+                $pos += 2; // WE_HAVE_A_SCALE (bit 3)
+            } elseif (($flags & 0x0040) !== 0) {
+                $pos += 4; // WE_HAVE_AN_X_AND_Y_SCALE (bit 6)
+            } elseif (($flags & 0x0080) !== 0) {
+                $pos += 8; // WE_HAVE_A_TWO_BY_TWO (bit 7)
+            }
+            if (($flags & 0x0020) === 0) {
+                break; // no MORE_COMPONENTS (bit 5)
+            }
+        }
+        return $components;
     }
 
     /** cmap format 4 lookup (OpenType spec, "Segment mapping to delta values"). */
