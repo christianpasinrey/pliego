@@ -27,7 +27,11 @@ final class DeclarationParser
      */
     private const array NON_NEGATIVE_PROPERTIES = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width'];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
-    private const array KEYWORD_PROPERTIES = ['display' => ['block', 'none'], 'font-family' => null];
+    private const array KEYWORD_PROPERTIES = [
+        'display' => ['block', 'none'],
+        'font-family' => null,
+        'box-sizing' => ['content-box', 'border-box'],
+    ];
 
     private const array BORDER_SIDES = ['top', 'right', 'bottom', 'left'];
     private const array BORDER_WIDTH_KEYWORDS = ['thin' => 1.0, 'medium' => 3.0, 'thick' => 5.0];

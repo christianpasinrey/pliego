@@ -230,3 +230,14 @@ it('warns on an unrecognized border shorthand component', function () {
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M2-T3: box-sizing -------------------------------------------------------------------
+
+it('parses box-sizing content-box/border-box and warns on unsupported values', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('box-sizing', 'content-box'))->toBe(['box-sizing' => 'content-box']);
+    expect($parser->parse('box-sizing', 'border-box'))->toBe(['box-sizing' => 'border-box']);
+    $result = $parser->parse('box-sizing', 'padding-box');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

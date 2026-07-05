@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Pliego\Css\StylesheetParser;
+use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\Display;
@@ -138,4 +139,63 @@ it('keeps M0 styles intact', function () {
     expect($style->textAlign)->toBe(TextAlign::Left);
     expect($style->underline)->toBeFalse();
     expect($style->lineHeightPx)->toBeNull();
+});
+
+// --- M2-T3: bordes, box-sizing y % en ComputedStyle -------------------------------------
+
+it('computes all 4 border sides from the border shorthand', function () {
+    [$doc, $map] = resolveDoc('p { border: 2px solid #ccc }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    foreach (['borderTop', 'borderRight', 'borderBottom', 'borderLeft'] as $side) {
+        expect($style->$side->widthPx)->toBe(2.0);
+        expect($style->$side->style)->toBe(BorderStyle::Solid);
+        expect($style->$side->color)->toEqual(new Color(204, 204, 204));
+    }
+});
+
+it('defaults border sides to none/0 when no border is declared', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    foreach (['borderTop', 'borderRight', 'borderBottom', 'borderLeft'] as $side) {
+        expect($style->$side->widthPx)->toBe(0.0);
+        expect($style->$side->style)->toBe(BorderStyle::None);
+    }
+});
+
+it('resolves a border with no color declared to the element computed color (currentColor)', function () {
+    [$doc, $map] = resolveDoc('p { color: #f00; border-top-style: solid; border-top-width: 3px }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->borderTop->color)->toEqual(new Color(255, 0, 0));
+});
+
+it('defaults box-sizing to content-box and does not inherit it', function () {
+    [$doc, $map] = resolveDoc('body { box-sizing: border-box }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    $body = $doc->querySelector('body');
+    assert($p !== null && $body !== null);
+    expect($map->get($body)->boxSizing)->toBe('border-box');
+    expect($map->get($p)->boxSizing)->toBe('content-box');
+});
+
+it('applies box-sizing border-box when declared on the element itself', function () {
+    [$doc, $map] = resolveDoc('p { box-sizing: border-box }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->boxSizing)->toBe('border-box');
+});
+
+it('keeps width % unresolved on ComputedStyle (used-value resolution is T4)', function () {
+    [$doc, $map] = resolveDoc('p { width: 50% }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $width = $map->get($p)->width;
+    expect($width)->not->toBeNull();
+    expect($width->isPercent)->toBeTrue();
+    expect($width->value)->toBe(50.0);
 });

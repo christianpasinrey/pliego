@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Pliego\Style;
 
+use Pliego\Css\Value\BorderSide;
+use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
@@ -38,11 +40,20 @@ final readonly class ComputedStyle
         public ?float $lineHeightPx,
         public TextAlign $textAlign,
         public bool $underline,
+        public BorderSide $borderTop,
+        public BorderSide $borderRight,
+        public BorderSide $borderBottom,
+        public BorderSide $borderLeft,
+        public string $boxSizing,
     ) {}
 
     public static function root(): self
     {
         $zero = LengthPercentage::zero();
+        $rootColor = new Color(0, 0, 0);
+        // Sin borde declarado en la raíz: color=currentColor (=$rootColor), igual que en
+        // compute() — invariante del árbol: BorderSide::$color nunca es null en ComputedStyle.
+        $noBorder = new BorderSide(0.0, BorderStyle::None, $rootColor);
         return new self(
             Display::Block,
             $zero,
@@ -55,7 +66,7 @@ final readonly class ComputedStyle
             $zero,
             null,
             null,
-            new Color(0, 0, 0),
+            $rootColor,
             16.0,
             'default',
             400,
@@ -63,6 +74,11 @@ final readonly class ComputedStyle
             null,
             TextAlign::Left,
             false,
+            $noBorder,
+            $noBorder,
+            $noBorder,
+            $noBorder,
+            'content-box',
         );
     }
 
@@ -134,6 +150,26 @@ final readonly class ComputedStyle
             };
         }
 
+        // color se computa antes de ensamblar los bordes: border-{side}-color por defecto
+        // es currentColor (CSS 2.2 §8.5.3), es decir, el color computado de este elemento.
+        $color = ($declarations['color'] ?? null) instanceof Color ? $declarations['color'] : $parent->color;
+
+        $borderSide = static function (string $side) use ($declarations, $color): BorderSide {
+            $width = $declarations["border-$side-width"] ?? null;
+            $style = $declarations["border-$side-style"] ?? null;
+            $sideColor = $declarations["border-$side-color"] ?? null;
+            return new BorderSide(
+                $width instanceof Length ? $width->px : 0.0,
+                $style instanceof BorderStyle ? $style : BorderStyle::None,
+                $sideColor instanceof Color ? $sideColor : $color,
+            );
+        };
+
+        $boxSizingValue = $declarations['box-sizing'] ?? null;
+        // box-sizing NO hereda (CSS Box Sizing L3 §2): el initial value es siempre content-box,
+        // independientemente de $parent->boxSizing.
+        $boxSizing = $boxSizingValue === 'border-box' ? 'border-box' : 'content-box';
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -145,8 +181,8 @@ final readonly class ComputedStyle
             $lengthPercentage('padding-bottom'),
             $lengthPercentage('padding-left'),
             $hasLengthPercentage('width') ? $lengthPercentage('width') : null,
-            ($declarations['background-color'] ?? null) instanceof \Pliego\Css\Value\Color ? $declarations['background-color'] : null,
-            ($declarations['color'] ?? null) instanceof \Pliego\Css\Value\Color ? $declarations['color'] : $parent->color,
+            ($declarations['background-color'] ?? null) instanceof Color ? $declarations['background-color'] : null,
+            $color,
             $fontSizePx,
             is_string($declarations['font-family'] ?? null) ? $declarations['font-family'] : $parent->fontFamily,
             $fontWeight,
@@ -154,6 +190,11 @@ final readonly class ComputedStyle
             $lineHeightPx,
             $textAlign,
             $underline,
+            $borderSide('top'),
+            $borderSide('right'),
+            $borderSide('bottom'),
+            $borderSide('left'),
+            $boxSizing,
         );
     }
 }
