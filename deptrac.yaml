@@ -11,8 +11,9 @@ deptrac:
     - { name: Paint,  collectors: [{ type: directory, value: src/Paint }] }
     - { name: Pdf,    collectors: [{ type: directory, value: src/Pdf }] }
     - { name: Engine, collectors: [{ type: classLike, value: 'Pliego\\(Engine|RenderResult|RenderReport)' }] }
+    - { name: Vendor, collectors: [{ type: classLike, value: '^(Sabberworm\\CSS\\.*|Dom\\.*)$' }] }
   ruleset:
-    Css: []
+    Css: [Vendor]
     Style: [Css]
     Dom: []
     Box: [Dom, Style, Css]
