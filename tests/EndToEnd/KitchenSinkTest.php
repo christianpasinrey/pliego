@@ -47,7 +47,7 @@ function expectedGlyphHex(string $text): string
     return $hex;
 }
 
-it('renders nested backgrounds, overflows to 3 pages, warns on exactly 4 unsupported declarations, hides display:none text and keeps accents', function () {
+it('renders nested backgrounds, overflows to 3 pages, warns on exactly 3 unsupported declarations, hides display:none text and keeps accents', function () {
     $path = sys_get_temp_dir() . '/pliego-kitchen-sink.pdf';
     $report = Engine::make()->stylesheet(KITCHEN_SINK_CSS)->render(kitchenSinkHtml(140))->save($path);
     $pdf = (string) file_get_contents($path);
@@ -57,12 +57,11 @@ it('renders nested backgrounds, overflows to 3 pages, warns on exactly 4 unsuppo
     // Overflow a 3 páginas.
     expect($report->pageCount)->toBe(3);
 
-    // Exactamente 4 declaraciones CSS no soportadas: selector combinador, float,
-    // line-height (M1-T2 la implementa; en esta tarea sigue sin soporte) y width:%.
-    expect($report->warnings)->toHaveCount(4);
+    // Exactamente 3 declaraciones CSS no soportadas: selector combinador, float y width:%.
+    // line-height ya no genera warning: M1-T2 le da soporte (ver p { line-height: 1.5 } arriba).
+    expect($report->warnings)->toHaveCount(3);
     expect($report->warnings)->toContain('Unsupported selector in M0: p > span');
     expect($report->warnings)->toContain('Unsupported property: float');
-    expect($report->warnings)->toContain('Unsupported property: line-height');
     expect($report->warnings)->toContain('Unsupported length for width: 50%');
 
     // Fondos anidados: el gris claro de .outer y el gris oscuro de .inner aparecen.
