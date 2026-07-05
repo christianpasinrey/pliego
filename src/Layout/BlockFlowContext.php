@@ -40,6 +40,8 @@ final readonly class BlockFlowContext implements FormattingContext
         // Falso positivo verificado (ver task-8-report.md): PHPStan resuelve `?LengthPercentage`
         // como no-nulo solo cuando el nullsafe y el `??` conviven en la misma expresión; separar
         // en dos sentencias hace desaparecer el aviso sin cambiar tipo ni comportamiento.
+        // TODO(M2-T4): los ->value de aquí abajo leen LengthPercentage CRUDO — un % llega como
+        // su número (50% => 50, no px). T4 debe sustituir estas lecturas por ->resolve($containingBlock->width).
         // @phpstan-ignore nullsafe.neverNull
         $borderBoxWidth = $style->width?->value
             ?? $containingBlock->width - $style->marginLeft->value - $style->marginRight->value;
