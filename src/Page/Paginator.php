@@ -73,6 +73,8 @@ final readonly class Paginator
                 $localY + ($leaf->baselineY - $leaf->rect->y),
                 $leaf->fontSizePx,
                 $leaf->color,
+                $leaf->faceKey,
+                $leaf->underline,
             ),
             $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, []),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),

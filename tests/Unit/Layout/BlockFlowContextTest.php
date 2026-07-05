@@ -12,15 +12,16 @@ use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\StyleResolver;
-use Pliego\Text\TtfFont;
+use Pliego\Text\FontCatalog;
 
 function layoutHtml(string $html, string $css, float $width = 500.0): BoxFragment
 {
     $doc = HtmlParser::parse($html);
     $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
     $root = new BoxTreeBuilder()->build($doc, $map);
-    $measurer = new TextMeasurer(TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf'));
-    return new BlockFlowContext($measurer)->layout($root, new Rect(0.0, 0.0, $width, INF));
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    return new BlockFlowContext($measurer, $catalog)->layout($root, new Rect(0.0, 0.0, $width, INF));
 }
 
 function textFragments(BoxFragment $box): array
@@ -67,4 +68,15 @@ it('honours declared width', function () {
     $div = $frag->children[0];
     assert($div instanceof BoxFragment);
     expect($div->rect->width)->toBe(200.0);
+});
+it('excludes the last child margin-bottom from the parent content height', function () {
+    // CSS 2.2 §10.6.3: la altura de contenido llega hasta el borde inferior del
+    // border-box de la última caja en flujo; los márgenes se salen del cálculo.
+    $frag = layoutHtml('<body><div class="box"><p>x</p></div></body>', '.box { padding: 10px } p { margin-bottom: 10px }');
+    $box = $frag->children[0];
+    assert($box instanceof BoxFragment);
+    $p = $box->children[0];
+    assert($p instanceof BoxFragment);
+    $lineHeight = $p->rect->height;
+    expect($box->rect->height)->toBe($lineHeight + 20.0);
 });

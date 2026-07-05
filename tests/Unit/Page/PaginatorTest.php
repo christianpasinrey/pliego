@@ -10,7 +10,7 @@ use Pliego\Page\Paginator;
 
 function textAt(float $y, float $height = 20.0): TextFragment
 {
-    return new TextFragment(new Rect(0.0, $y, 100.0, $height), 'x', $y + 15.0, 16.0, new Color(0, 0, 0));
+    return new TextFragment(new Rect(0.0, $y, 100.0, $height), 'x', $y + 15.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
 }
 
 it('yields a single page when content fits', function () {

@@ -18,7 +18,7 @@ final class PdfCanvas implements Canvas
 
     public function __construct(
         private readonly PdfWriter $writer,
-        private readonly FontEmbedder $font,
+        private readonly FontRegistry $fonts,
         private readonly PaperSize $paper,
         private readonly float $offsetX,
         private readonly float $offsetY,
@@ -35,7 +35,7 @@ final class PdfCanvas implements Canvas
             $this->paper->widthPx() * self::PX_TO_PT,
             $this->paper->heightPx() * self::PX_TO_PT,
             $this->ops,
-            ['F1' => $this->font->objectId()],
+            $this->fonts->pageResources(),
         );
     }
 
@@ -57,9 +57,11 @@ final class PdfCanvas implements Canvas
     {
         $x = ($text->rect->x + $this->offsetX) * self::PX_TO_PT;
         $baseline = ($this->paper->heightPx() - ($text->baselineY + $this->offsetY)) * self::PX_TO_PT;
-        $hex = $this->font->encode($text->text);
+        $resourceName = $this->fonts->resourceNameFor($text->faceKey);
+        $hex = $this->fonts->embedderFor($text->faceKey)->encode($text->text);
         $this->ops .= sprintf(
-            "BT /F1 %.2F Tf %s %.2F %.2F Td <%s> Tj ET\n",
+            "BT /%s %.2F Tf %s %.2F %.2F Td <%s> Tj ET\n",
+            $resourceName,
             $text->fontSizePx * self::PX_TO_PT,
             $this->rg($text->color),
             $x,
@@ -68,8 +70,30 @@ final class PdfCanvas implements Canvas
         );
     }
 
+    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void
+    {
+        $px1 = ($x1 + $this->offsetX) * self::PX_TO_PT;
+        $py1 = ($this->paper->heightPx() - ($y1 + $this->offsetY)) * self::PX_TO_PT;
+        $px2 = ($x2 + $this->offsetX) * self::PX_TO_PT;
+        $py2 = ($this->paper->heightPx() - ($y2 + $this->offsetY)) * self::PX_TO_PT;
+        $this->ops .= sprintf(
+            "%s\n%.2F w\n%.2F %.2F m %.2F %.2F l S\n",
+            $this->rgStroke($color),
+            $widthPx * self::PX_TO_PT,
+            $px1,
+            $py1,
+            $px2,
+            $py2,
+        );
+    }
+
     private function rg(Color $color): string
     {
         return sprintf('%.3F %.3F %.3F rg', $color->r / 255, $color->g / 255, $color->b / 255);
+    }
+
+    private function rgStroke(Color $color): string
+    {
+        return sprintf('%.3F %.3F %.3F RG', $color->r / 255, $color->g / 255, $color->b / 255);
     }
 }

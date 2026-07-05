@@ -1,5 +1,5 @@
 includes:
-    - pest.baseline.neon
+    - phpstan-baseline.neon
 
 parameters:
     level: max

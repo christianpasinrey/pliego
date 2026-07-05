@@ -1,0 +1,427 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Access to an undefined property Pest\\Expectation\<Pliego\\Css\\Value\\Color\|null\>\:\:\$r\.$#'
+			identifier: property.notFound
+			count: 3
+			path: tests/Unit/Css/ColorTest.php
+
+		-
+			message: '#^Cannot access property \$b on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Css/ColorTest.php
+
+		-
+			message: '#^Cannot access property \$g on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Css/ColorTest.php
+
+		-
+			message: '#^Cannot call method toBe\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 9
+			path: tests/Unit/Css/ColorTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\Expectation\<Pliego\\Css\\Value\\Length\|null\>\:\:\$px\.$#'
+			identifier: property.notFound
+			count: 2
+			path: tests/Unit/Css/LengthTest.php
+
+		-
+			message: '#^Cannot call method toBe\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Css/LengthTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/TypographyTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and 40\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Cannot access property \$height on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Cannot access property \$rect on mixed\.$#'
+			identifier: property.nonObject
+			count: 6
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Cannot access property \$width on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Cannot access property \$x on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Cannot access property \$y on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Function textFragments\(\) return type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeGreaterThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$finder\.$#'
+			identifier: property.notFound
+			count: 9
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Cannot access offset 0 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 6
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Cannot access property \$byteOffset on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Cannot access property \$mandatory on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Cannot call method find\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 8
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Parameter \#1 \$callback of function array_map expects \(callable\(mixed\)\: mixed\)\|null, Closure\(Pliego\\Layout\\Text\\BreakOpportunity\)\: int given\.$#'
+			identifier: argument.type
+			count: 3
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Parameter \#2 \$array of function array_map expects array, mixed given\.$#'
+			identifier: argument.type
+			count: 3
+			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Call to an undefined method Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy\:\:markTestSkipped\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: tests/Unit/Layout/FragmentDumperGoldenTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
+			identifier: property.notFound
+			count: 12
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
+			identifier: property.notFound
+			count: 15
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\*" between int\<0, max\> and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between \(array\|float\|int\) and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between float and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\-" between 200\.0 and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Binary operation "\-" between mixed and 16\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method ascent\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method lineHeight\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method select\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 3
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
+			identifier: argument.type
+			count: 9
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
+			identifier: argument.type
+			count: 9
+			path: tests/Unit/Layout/InlineFlowContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$bold\.$#'
+			identifier: property.notFound
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
+			identifier: property.notFound
+			count: 11
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$regular\.$#'
+			identifier: property.notFound
+			count: 9
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Binary operation "\*" between mixed and 2 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Cannot call method ascent\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Cannot call method descent\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Cannot call method lineHeight\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 6
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeGreaterThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 2
+			path: tests/Unit/Layout/TextMeasurerTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 3
+			path: tests/Unit/Pdf/PdfWriterTest.php
+
+		-
+			message: '#^Cannot access property \$color on mixed\.$#'
+			identifier: property.nonObject
+			count: 4
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$display on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$fontSizePx on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$fontStyle on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$fontWeight on mixed\.$#'
+			identifier: property.nonObject
+			count: 5
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$lineHeightPx on mixed\.$#'
+			identifier: property.nonObject
+			count: 5
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$paddingLeft on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$px on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$textAlign on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$underline on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot call method get\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 20
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 18
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Function resolveDoc\(\) return type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$font\.$#'
+			identifier: property.notFound
+			count: 13
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method advanceOf\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method ascender\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method bytes\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method descender\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method glyphId\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 5
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method underlineMetrics\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot call method unitsPerEm\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Cannot use array destructuring on mixed\.$#'
+			identifier: offsetAccess.nonArray
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeGreaterThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Parameter \#1 \$string of function strlen expects string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Text/TtfFontTest.php

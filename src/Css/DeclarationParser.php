@@ -14,6 +14,11 @@ final class DeclarationParser
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
         'font-size', 'width', 'height',
     ];
+    /** CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos; margin es la única excepción. */
+    private const array NON_NEGATIVE_PROPERTIES = [
+        'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+        'font-size', 'width', 'height',
+    ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = ['display' => ['block', 'none'], 'font-family' => null];
 
@@ -32,6 +37,10 @@ final class DeclarationParser
             $length = Length::fromCss($value);
             if ($length === null) {
                 $this->warnings[] = "Unsupported length for $property: $value";
+                return [];
+            }
+            if ($length->px < 0.0 && in_array($property, self::NON_NEGATIVE_PROPERTIES, true)) {
+                $this->warnings[] = "Negative value not allowed for $property: $value";
                 return [];
             }
             return [$property => $length];
@@ -53,7 +62,114 @@ final class DeclarationParser
             }
             return [$property => $property === 'font-family' ? trim($value, '"\' ') : $keyword];
         }
+        if ($property === 'font-weight') {
+            return $this->parseFontWeight($value);
+        }
+        if ($property === 'font-style') {
+            return $this->parseFontStyle($value);
+        }
+        if ($property === 'line-height') {
+            return $this->parseLineHeight($value);
+        }
+        if ($property === 'text-align') {
+            return $this->parseTextAlign($value);
+        }
+        if ($property === 'text-decoration') {
+            return $this->parseTextDecoration($value);
+        }
         $this->warnings[] = "Unsupported property: $property";
+        return [];
+    }
+
+    /** @return array<string, mixed> */
+    private function parseFontWeight(string $value): array
+    {
+        $keyword = strtolower($value);
+        return match ($keyword) {
+            'normal' => ['font-weight' => 400],
+            'bold' => ['font-weight' => 700],
+            '400' => ['font-weight' => 400],
+            '700' => ['font-weight' => 700],
+            default => $this->warn("Unsupported font-weight: $value"),
+        };
+    }
+
+    /** @return array<string, mixed> */
+    private function parseFontStyle(string $value): array
+    {
+        $keyword = strtolower($value);
+        if ($keyword === 'normal') {
+            return ['font-style' => 'normal'];
+        }
+        if ($keyword === 'italic') {
+            return ['font-style' => 'italic'];
+        }
+        if ($keyword === 'oblique') {
+            $this->warnings[] = "Unsupported font-style (approximated as italic): $value";
+            return ['font-style' => 'italic'];
+        }
+        return $this->warn("Unsupported font-style: $value");
+    }
+
+    /**
+     * CSS 2.2 §10.8.1: número unitless multiplica el font-size del propio elemento
+     * (resuelto en ComputedStyle::compute); un valor en px pasa directo; 'normal' → null.
+     * Negativo (unitless o longitud) no tiene interpretación válida — igual que las
+     * propiedades en NON_NEGATIVE_PROPERTIES — así que se descarta con warning.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseLineHeight(string $value): array
+    {
+        $keyword = strtolower($value);
+        if ($keyword === 'normal') {
+            return ['line-height' => null];
+        }
+        if (preg_match('/^-?\d+(?:\.\d+)?$/', $value) === 1) {
+            $multiplier = (float) $value;
+            if ($multiplier < 0.0) {
+                return $this->warn("Negative value not allowed for line-height: $value");
+            }
+            return ['line-height' => $multiplier];
+        }
+        $length = Length::fromCss($value);
+        if ($length !== null) {
+            if ($length->px < 0.0) {
+                return $this->warn("Negative value not allowed for line-height: $value");
+            }
+            return ['line-height' => $length];
+        }
+        return $this->warn("Unsupported line-height: $value");
+    }
+
+    /** @return array<string, mixed> */
+    private function parseTextAlign(string $value): array
+    {
+        $keyword = strtolower($value);
+        return match ($keyword) {
+            'left' => ['text-align' => 'left'],
+            'center' => ['text-align' => 'center'],
+            'right' => ['text-align' => 'right'],
+            'justify' => $this->warn("Unsupported text-align (justify not supported in M1): $value"),
+            default => $this->warn("Unsupported text-align: $value"),
+        };
+    }
+
+    /** @return array<string, mixed> */
+    private function parseTextDecoration(string $value): array
+    {
+        $keyword = strtolower($value);
+        return match ($keyword) {
+            'none' => ['text-decoration' => false],
+            'underline' => ['text-decoration' => true],
+            default => $this->warn("Unsupported text-decoration: $value"),
+        };
+    }
+
+    /** @return array<string, mixed> */
+    private function warn(string $message): array
+    {
+        $this->warnings[] = $message;
         return [];
     }
 

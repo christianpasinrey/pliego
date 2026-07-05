@@ -15,6 +15,8 @@ final readonly class TextFragment implements Fragment
         public float $baselineY,
         public float $fontSizePx,
         public Color $color,
+        public string $faceKey,
+        public bool $underline,
     ) {}
 
     public function rect(): Rect

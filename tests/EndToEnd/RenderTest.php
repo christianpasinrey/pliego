@@ -4,6 +4,7 @@
 declare(strict_types=1);
 
 use Pliego\Engine;
+use Pliego\Style\FontStyle;
 
 function sampleHtml(int $paragraphs): string
 {
@@ -42,4 +43,40 @@ it('keeps memory bounded on large documents (streaming O(page))', function () {
     // El box/fragment tree completo sí vive en memoria en M0 (streaming pleno = M2);
     // este umbral holgado detecta regresiones groseras (acumular todas las páginas pintadas).
     expect(memory_get_peak_usage(true) - $before)->toBeLessThan(128 * 1024 * 1024);
+});
+
+it('embeds a separate font object per used face end-to-end (regular + bold)', function () {
+    // M1-T9: FontRegistry crea/embebe una cara por faceKey realmente usado; <b> resuelve a la
+    // cara "default:700:normal" (builtin de FontCatalog::withDefaults()), distinta de la
+    // regular usada por el resto del texto.
+    $path = sys_get_temp_dir() . '/pliego-e2e-multiface.pdf';
+    Engine::make()->render('<body><p>Texto normal <b>y texto en negrita</b>.</p></body>')->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect(substr_count($pdf, '/Subtype /Type0'))->toBe(2);
+    expect(substr_count($pdf, '/FontFile2'))->toBe(2);
+});
+
+it('registers an extra font family via ->font() and embeds it only when referenced', function () {
+    // ->font() añade una cara nueva al catálogo; aquí reusamos DejaVuSans-Bold.ttf bajo la
+    // familia 'acme' solo para comprobar el wiring Engine -> FontCatalog -> FontRegistry (no
+    // nos interesa el glifo en sí). Como ninguna regla CSS referencia 'acme', el documento solo
+    // debe seguir usando la cara 'default' (1 sola Type0) — el catálogo puede tener caras
+    // registradas sin usar sin que eso embeba nada.
+    $path = sys_get_temp_dir() . '/pliego-e2e-extra-font.pdf';
+    $ttf = __DIR__ . '/../../resources/fonts/DejaVuSans-Bold.ttf';
+    Engine::make()->font('acme', 400, FontStyle::Normal, $ttf)->render(sampleHtml(1))->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(substr_count($pdf, '/Subtype /Type0'))->toBe(1);
+
+    // Ahora sí se referencia 'acme' desde CSS: debe embeberse como cara adicional (2 Type0).
+    $path2 = sys_get_temp_dir() . '/pliego-e2e-extra-font-used.pdf';
+    Engine::make()->font('acme', 400, FontStyle::Normal, $ttf)
+        ->stylesheet('h1 { font-family: acme }')
+        ->render(sampleHtml(1))->save($path2);
+    $pdf2 = (string) file_get_contents($path2);
+
+    expect(substr_count($pdf2, '/Subtype /Type0'))->toBe(2);
 });
