@@ -5,8 +5,10 @@ declare(strict_types=1);
 use Pliego\Css\DeclarationParser;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
+use Pliego\Css\Value\LengthUnit;
 
 it('rejects negative padding as an invalid length with a warning', function () {
     $parser = new DeclarationParser();
@@ -136,18 +138,56 @@ it('expands mixed px/percent margin shorthand values', function () {
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('warns on % for font-size (unsupported until M3+)', function () {
+// --- M6-T3: em/rem/pt/cm/mm/in (css-values-3 §5-6) --------------------------------------
+
+it('exactly folds 1in/1pt/1cm/1mm to px at parse time on width', function () {
     $parser = new DeclarationParser();
-    $result = $parser->parse('font-size', '150%');
-    expect($result)->toBe([]);
-    expect($parser->drainWarnings())->not->toBeEmpty();
+    expect($parser->parse('width', '1in'))->toEqual(['width' => LengthPercentage::px(96.0)]);
+    expect($parser->parse('width', '1pt'))->toEqual(['width' => LengthPercentage::px(96.0 / 72.0)]);
+    expect($parser->parse('width', '1cm'))->toEqual(['width' => LengthPercentage::px(96.0 / 2.54)]);
+    expect($parser->parse('width', '1mm'))->toEqual(['width' => LengthPercentage::px(9.6 / 2.54)]);
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('warns on % for line-height (unsupported until M3+)', function () {
+it('keeps em/rem symbolic (CssLength) on width/margin/padding until ComputedStyle::compute resolves them', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('width', '2em'))->toEqual(['width' => CssLength::of(2.0, LengthUnit::Em)]);
+    expect($parser->parse('margin-left', '1.5rem'))->toEqual(['margin-left' => CssLength::of(1.5, LengthUnit::Rem)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands a margin shorthand mixing em/rem/px/% ("1em 2rem 10px 5%")', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', '1em 2rem 10px 5%');
+    expect($result)->toEqual([
+        'margin-top' => CssLength::of(1.0, LengthUnit::Em),
+        'margin-right' => CssLength::of(2.0, LengthUnit::Rem),
+        'margin-bottom' => LengthPercentage::px(10.0),
+        'margin-left' => LengthPercentage::percent(5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('keeps em/rem symbolic on font-size/height/border-width until ComputedStyle::compute resolves them', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-size', '2em'))->toEqual(['font-size' => CssLength::of(2.0, LengthUnit::Em)]);
+    expect($parser->parse('height', '1.5rem'))->toEqual(['height' => CssLength::of(1.5, LengthUnit::Rem)]);
+    expect($parser->parse('border-top-width', '0.1em'))->toEqual(['border-top-width' => CssLength::of(0.1, LengthUnit::Em)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts % for font-size as a symbolic CssLength (M6-T3: resolved against the parent font-size in ComputedStyle::compute)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', '150%');
+    expect($result)->toEqual(['font-size' => CssLength::of(150.0, LengthUnit::Percent)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts % for line-height as a symbolic CssLength (M6-T3: resolved against the own font-size in ComputedStyle::compute)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('line-height', '150%');
-    expect($result)->toBe([]);
-    expect($parser->drainWarnings())->not->toBeEmpty();
+    expect($result)->toEqual(['line-height' => CssLength::of(150.0, LengthUnit::Percent)]);
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
 // --- M2-T2: bordes (longhands + shorthands) ---------------------------------------------

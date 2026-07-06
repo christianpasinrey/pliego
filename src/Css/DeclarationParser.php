@@ -6,15 +6,19 @@ namespace Pliego\Css;
 
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
+use Pliego\Css\Value\LengthUnit;
 
 final class DeclarationParser
 {
-    /** font-size/height/row-gap/column-gap NO admiten % (M3+ para font-size; height no está en
-     * el contrato T2; row-gap/column-gap son px-only en M4, css-flexbox-1 §8.1 nota "% fuera de
-     * alcance aquí" — Length::fromCss ya rechaza % de forma natural, generando el warning). */
-    private const array LENGTH_PROPERTIES = ['font-size', 'height', 'row-gap', 'column-gap'];
+    /** height/row-gap/column-gap NO admiten % (height no está en el contrato T2; row-gap/
+     * column-gap son px-only en M4, css-flexbox-1 §8.1 nota "% fuera de alcance aquí" —
+     * parseLength() ya rechaza % de forma natural, generando el warning). font-size vive aparte
+     * (ver parseFontSize, M6-T3): SÍ admite % (contra el font-size del padre), así que no puede
+     * compartir esta lista de "solo longitud pura, nunca %". */
+    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap'];
     /** CSS 2.2 §10: width, margin-{side} y padding-{side} sí admiten %, resuelto en used-value (T4). */
     private const array LENGTH_PERCENTAGE_PROPERTIES = [
         'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
@@ -91,25 +95,28 @@ final class DeclarationParser
             return [$property => $color];
         }
         if (in_array($property, self::LENGTH_PERCENTAGE_PROPERTIES, true)) {
-            $lengthPercentage = LengthPercentage::fromCss($value);
+            $lengthPercentage = $this->parseLengthPercentage($value);
             if ($lengthPercentage === null) {
                 return $this->warn("Unsupported length for $property: $value");
             }
-            if ($lengthPercentage->value < 0.0 && in_array($property, self::NON_NEGATIVE_PROPERTIES, true)) {
+            if (self::rawValueOf($lengthPercentage) < 0.0 && in_array($property, self::NON_NEGATIVE_PROPERTIES, true)) {
                 return $this->warn("Negative value not allowed for $property: $value");
             }
             return [$property => $lengthPercentage];
         }
         if (in_array($property, self::LENGTH_PROPERTIES, true)) {
-            $length = Length::fromCss($value);
+            $length = $this->parseLength($value);
             if ($length === null) {
                 return $this->warn("Unsupported length for $property: $value");
             }
-            // font-size y height (únicos miembros de LENGTH_PROPERTIES) son siempre no-negativos.
-            if ($length->px < 0.0) {
+            // height/row-gap/column-gap (únicos miembros de LENGTH_PROPERTIES) son siempre no-negativos.
+            if (self::rawValueOf($length) < 0.0) {
                 return $this->warn("Negative value not allowed for $property: $value");
             }
             return [$property => $length];
+        }
+        if ($property === 'font-size') {
+            return $this->parseFontSize($value);
         }
         if (in_array($property, self::COLOR_PROPERTIES, true)) {
             $color = Color::fromCss($value);
@@ -166,6 +173,78 @@ final class DeclarationParser
         return false;
     }
 
+    /**
+     * M6-T3 (css-values-3 §5-6): longitud PURA, sin %  — height, row-gap, column-gap,
+     * border-{side}-width, border-spacing, el componente de longitud de line-height y los
+     * tokens del shorthand `gap`. px/pt/cm/mm/in ya llegan resueltos a píxeles desde
+     * CssLength::fromCss (Px), así que se envuelven directo en Length; em/rem quedan en el
+     * CssLength simbólico tal cual, para que ComputedStyle::compute los resuelva contra el
+     * font-size propio/raíz. % no tiene interpretación en una longitud pura (null, igual que el
+     * comportamiento pre-M6-T3), salvo en las propiedades con manejo dedicado (font-size,
+     * line-height) que llaman a CssLength::fromCss directamente en vez de a este método.
+     */
+    private function parseLength(string $value): Length|CssLength|null
+    {
+        $css = CssLength::fromCss($value);
+        if ($css === null) {
+            return null;
+        }
+        return match ($css->unit) {
+            LengthUnit::Px => Length::px($css->value),
+            LengthUnit::Em, LengthUnit::Rem => $css,
+            default => null,
+        };
+    }
+
+    /**
+     * M6-T3: longitud+porcentaje — margin-*, padding-*, width, flex-basis y los componentes del
+     * shorthand margin/padding. Percent sigue diferido a LengthPercentage (resuelto contra el
+     * containing block en Layout, sin cambios respecto a M2); em/rem quedan en CssLength
+     * simbólico para ComputedStyle::compute (resueltos contra el font-size propio/raíz, nunca
+     * contra el containing block).
+     */
+    private function parseLengthPercentage(string $value): LengthPercentage|CssLength|null
+    {
+        $css = CssLength::fromCss($value);
+        if ($css === null) {
+            return null;
+        }
+        return match ($css->unit) {
+            LengthUnit::Px => LengthPercentage::px($css->value),
+            LengthUnit::Percent => LengthPercentage::percent($css->value),
+            LengthUnit::Em, LengthUnit::Rem => $css,
+            default => null,
+        };
+    }
+
+    /**
+     * css-values-3 §5-6 + adjudicación M6-T3: font-size es la única propiedad de longitud pura
+     * que SÍ admite % (relativo al font-size COMPUTADO DEL PADRE — CSS 2.2 §10.8.1 /
+     * css-values-3, no del propio elemento, a diferencia de em en cualquier otra propiedad).
+     * Todas las unidades pasan por aquí; solo Px resuelve ya mismo (Length), el resto
+     * (Em/Rem/Percent) queda en CssLength simbólico hasta ComputedStyle::compute.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseFontSize(string $value): array
+    {
+        $css = CssLength::fromCss($value);
+        if ($css === null) {
+            return $this->warn("Unsupported length for font-size: $value");
+        }
+        if ($css->value < 0.0) {
+            return $this->warn("Negative value not allowed for font-size: $value");
+        }
+        return ['font-size' => $css->unit === LengthUnit::Px ? Length::px($css->value) : $css];
+    }
+
+    /** Valor crudo (sin resolver unidad simbólica) usado solo para el chequeo de negativos —
+     * Length usa ->px, LengthPercentage/CssLength usan ->value. */
+    private static function rawValueOf(Length|LengthPercentage|CssLength $value): float
+    {
+        return $value instanceof Length ? $value->px : $value->value;
+    }
+
     /** @return array<string, mixed> */
     private function parseBorderWidth(string $property, string $value): array
     {
@@ -173,7 +252,7 @@ final class DeclarationParser
         if ($length === null) {
             return $this->warn("Unsupported border width for $property: $value");
         }
-        if ($length->px < 0.0) {
+        if (self::rawValueOf($length) < 0.0) {
             return $this->warn("Negative value not allowed for $property: $value");
         }
         return [$property => $length];
@@ -189,13 +268,13 @@ final class DeclarationParser
         return [$property => $style];
     }
 
-    private function borderWidthFromToken(string $token): ?Length
+    private function borderWidthFromToken(string $token): Length|CssLength|null
     {
         $keyword = strtolower($token);
         if (array_key_exists($keyword, self::BORDER_WIDTH_KEYWORDS)) {
             return Length::px(self::BORDER_WIDTH_KEYWORDS[$keyword]);
         }
-        return Length::fromCss($token);
+        return $this->parseLength($token);
     }
 
     private function borderStyleFromToken(string $token): ?BorderStyle
@@ -229,7 +308,7 @@ final class DeclarationParser
                 if ($width !== null) {
                     return $this->warn("Duplicate border width component for $property: $value");
                 }
-                if ($tokenWidth->px < 0.0) {
+                if (self::rawValueOf($tokenWidth) < 0.0) {
                     return $this->warn("Negative value not allowed for $property: $value");
                 }
                 $width = $tokenWidth;
@@ -302,9 +381,10 @@ final class DeclarationParser
      * CSS 2.2 §10.8.1: número unitless multiplica el font-size del propio elemento
      * (resuelto en ComputedStyle::compute); un valor en px pasa directo; 'normal' → null.
      * Negativo (unitless o longitud) no tiene interpretación válida — igual que las
-     * propiedades en NON_NEGATIVE_PROPERTIES — así que se descarta con warning. % en
-     * line-height (relativo al propio font-size) es M3+, igual que en font-size: no se
-     * reconoce aquí y cae al warning genérico de "unsupported".
+     * propiedades en NON_NEGATIVE_PROPERTIES — así que se descarta con warning. M6-T3: %/em/rem
+     * en line-height son ahora soporte real (%/em relativos al font-size PROPIO del elemento,
+     * igual que el multiplicador unitless; rem contra la raíz) — quedan en CssLength simbólico
+     * hasta ComputedStyle::compute, que es quien conoce ese font-size.
      *
      * @return array<string, mixed>
      */
@@ -321,12 +401,12 @@ final class DeclarationParser
             }
             return ['line-height' => $multiplier];
         }
-        $length = Length::fromCss($value);
-        if ($length !== null) {
-            if ($length->px < 0.0) {
+        $css = CssLength::fromCss($value);
+        if ($css !== null) {
+            if ($css->value < 0.0) {
                 return $this->warn("Negative value not allowed for line-height: $value");
             }
-            return ['line-height' => $length];
+            return ['line-height' => $css->unit === LengthUnit::Px ? Length::px($css->value) : $css];
         }
         return $this->warn("Unsupported line-height: $value");
     }
@@ -360,9 +440,9 @@ final class DeclarationParser
      * segundo vertical. M5 solo soporta la forma de un único valor (mismo px para ambos ejes,
      * como consume TableFormattingContext en M5-T4); dos valores son válidos en CSS pero fuera
      * de alcance aquí, así que caen al warning genérico en vez de tomar solo el primero (evita
-     * fingir soporte de ejes independientes que el layout no respeta). Solo admite px (no %,
-     * igual que row-gap/column-gap en LENGTH_PROPERTIES) — Length::fromCss ya rechaza % de
-     * forma natural.
+     * fingir soporte de ejes independientes que el layout no respeta). Nunca admite % (igual
+     * que row-gap/column-gap en LENGTH_PROPERTIES) — parseLength() ya rechaza % de forma
+     * natural; M6-T3 añade em/rem/pt/cm/mm/in vía CssLength, igual que el resto de longitudes.
      *
      * @return array<string, mixed>
      */
@@ -372,11 +452,11 @@ final class DeclarationParser
         if (count($tokens) !== 1) {
             return $this->warn("Unsupported border-spacing (single value only in M5): $value");
         }
-        $length = Length::fromCss($tokens[0]);
+        $length = $this->parseLength($tokens[0]);
         if ($length === null) {
             return $this->warn("Unsupported border-spacing: $value");
         }
-        if ($length->px < 0.0) {
+        if (self::rawValueOf($length) < 0.0) {
             return $this->warn("Negative value not allowed for border-spacing: $value");
         }
         return ['border-spacing' => $length];
@@ -419,18 +499,18 @@ final class DeclarationParser
 
     /**
      * CSS 2.2 §8.3: expansión 1/2/4 valores (3 valores: top, right+left, bottom).
-     * Ahora en LengthPercentage: acepta % mezclado con px (p.ej. "10px 5%").
+     * Acepta % mezclado con px/em/rem (p.ej. "10px 5%" o "1em 2rem 10px 5%", M6-T3).
      *
      * @return array<string, mixed>
      */
     private function expandBoxShorthand(string $property, string $value): array
     {
         $parts = preg_split('/\s+/', $value) ?: [];
-        $lengths = array_map(LengthPercentage::fromCss(...), $parts);
+        $lengths = array_map($this->parseLengthPercentage(...), $parts);
         if (in_array(null, $lengths, true) || $lengths === []) {
             return $this->warn("Unsupported shorthand for $property: $value");
         }
-        /** @var list<LengthPercentage> $lengths */
+        /** @var list<LengthPercentage|CssLength> $lengths */
         [$top, $right, $bottom, $left] = match (count($lengths)) {
             1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
             2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],
@@ -445,21 +525,21 @@ final class DeclarationParser
 
     /**
      * css-flexbox-1 §8.1 gap shorthand: `gap: <row-gap> <column-gap>?` — un valor fija ambos
-     * ejes, dos valores fijan fila y luego columna (nunca % en M4: Length rechaza % de forma
-     * natural, propagando el warning genérico de shorthand).
+     * ejes, dos valores fijan fila y luego columna (nunca % — parseLength() rechaza % de forma
+     * natural, propagando el warning genérico de shorthand; M6-T3 añade em/rem/físicos).
      *
      * @return array<string, mixed>
      */
     private function expandGapShorthand(string $value): array
     {
         $parts = preg_split('/\s+/', trim($value)) ?: [];
-        $lengths = array_map(Length::fromCss(...), $parts);
+        $lengths = array_map($this->parseLength(...), $parts);
         if ($parts === [] || $parts === [''] || in_array(null, $lengths, true) || count($lengths) > 2) {
             return $this->warn("Unsupported shorthand for gap: $value");
         }
-        /** @var list<Length> $lengths */
+        /** @var list<Length|CssLength> $lengths */
         foreach ($lengths as $length) {
-            if ($length->px < 0.0) {
+            if (self::rawValueOf($length) < 0.0) {
                 return $this->warn("Negative value not allowed for gap: $value");
             }
         }
@@ -494,16 +574,16 @@ final class DeclarationParser
     /**
      * Un componente de <flex-basis> dentro del shorthand o de la longhand: 'auto' (sentinel
      * string, traducido a null/auto en ComputedStyle::compute igual que el resto de keywords de
-     * este parser) o un LengthPercentage no negativo (px/%). 'content' y cualquier otro token
-     * inválido devuelven null, que el llamador convierte en warning.
+     * este parser) o un LengthPercentage/CssLength no negativo (px/%/em/rem, M6-T3). 'content' y
+     * cualquier otro token inválido devuelven null, que el llamador convierte en warning.
      */
-    private function flexBasisToken(string $token): LengthPercentage|string|null
+    private function flexBasisToken(string $token): LengthPercentage|CssLength|string|null
     {
         if (strtolower(trim($token)) === 'auto') {
             return 'auto';
         }
-        $length = LengthPercentage::fromCss($token);
-        if ($length !== null && $length->value < 0.0) {
+        $length = $this->parseLengthPercentage($token);
+        if ($length !== null && self::rawValueOf($length) < 0.0) {
             return null;
         }
         return $length;

@@ -451,3 +451,97 @@ it('computes vertical-align top/bottom from declarations', function () {
     expect($map->get($a)->verticalAlign)->toBe(VerticalAlign::Top);
     expect($map->get($b)->verticalAlign)->toBe(VerticalAlign::Bottom);
 });
+
+// --- M6-T3: em/rem/pt/cm/mm/in resolved at computed-value time (css-values-3 §5-6) -------
+
+it('resolves em in padding against the element\'s own font-size (2em @ 20px -> 40)', function () {
+    [$doc, $map] = resolveDoc('p { font-size: 20px; padding-left: 2em }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(40.0);
+});
+
+it('resolves font-size in em against the PARENT font-size, never its own (the classic trap case)', function () {
+    [$doc, $map] = resolveDoc('body { font-size: 10px } p { font-size: 2em }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->fontSizePx)->toBe(20.0);
+});
+
+it('resolves font-size in % against the parent font-size (150% of 10px -> 15px, warning gone)', function () {
+    [$doc, $map] = resolveDoc('body { font-size: 10px } p { font-size: 150% }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->fontSizePx)->toBe(15.0);
+});
+
+it('resolves line-height in % against its own already-computed font-size (120% of 20px -> 24)', function () {
+    [$doc, $map] = resolveDoc('p { font-size: 20px; line-height: 120% }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->lineHeightPx)->toBe(24.0);
+});
+
+it('defaults rem to the 16px initial value when the root has no declared font-size', function () {
+    [$doc, $map] = resolveDoc('p { padding-left: 1rem }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(16.0);
+});
+
+it('threads html { font-size } as the rem base everywhere, even under a descendant with its own font-size', function () {
+    [$doc, $map] = resolveDoc(
+        'html { font-size: 20px } div { font-size: 10px } p { padding-left: 1rem }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $div = $doc->querySelector('div');
+    $p = $doc->querySelector('p');
+    assert($div !== null && $p !== null);
+    // div's own font-size (10px) never leaks into rem resolution for its descendants.
+    expect($map->get($div)->fontSizePx)->toBe(10.0);
+    expect($map->get($p)->paddingLeft->value)->toBe(20.0);
+});
+
+it('resolves rem on the root\'s own font-size against the 16px initial value, not against itself (css-values-3 §5.2)', function () {
+    [$doc, $map] = resolveDoc('html { font-size: 2rem }', '<body><p>x</p></body>');
+    $html = $doc->documentElement;
+    $p = $doc->querySelector('p');
+    assert($html !== null && $p !== null);
+    expect($map->get($html)->fontSizePx)->toBe(32.0);
+    // Inherited down through body -> p (neither declares its own font-size).
+    expect($map->get($p)->fontSizePx)->toBe(32.0);
+});
+
+it('folds physical units (in/pt/cm) to their exact px factor at parse time, visible on width', function () {
+    [$doc, $map] = resolveDoc(
+        '.a { width: 1in } .b { width: 1pt } .c { width: 1cm }',
+        '<body><p class="a">a</p><p class="b">b</p><p class="c">c</p></body>',
+    );
+    $a = $doc->querySelector('.a');
+    $b = $doc->querySelector('.b');
+    $c = $doc->querySelector('.c');
+    assert($a !== null && $b !== null && $c !== null);
+    expect($map->get($a)->width?->value)->toBe(96.0);
+    expect($map->get($b)->width?->value)->toBe(96.0 / 72.0);
+    expect($map->get($c)->width?->value)->toBe(96.0 / 2.54);
+});
+
+it('mixes em/rem/px/% in the margin shorthand ("1em 2rem 10px 5%")', function () {
+    [$doc, $map] = resolveDoc(
+        'html { font-size: 20px } p { font-size: 10px; margin: 1em 2rem 10px 5% }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    // top: 1em against p's own font-size (10px) -> 10
+    expect($style->marginTop->value)->toBe(10.0);
+    // right: 2rem against html's font-size (20px) -> 40
+    expect($style->marginRight->isPercent)->toBeFalse();
+    expect($style->marginRight->value)->toBe(40.0);
+    // bottom: plain px, unaffected
+    expect($style->marginBottom->value)->toBe(10.0);
+    // left: %, still deferred to layout (LengthPercentage::percent, never resolved here)
+    expect($style->marginLeft->isPercent)->toBeTrue();
+    expect($style->marginLeft->value)->toBe(5.0);
+});
