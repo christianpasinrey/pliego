@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M6 — pliego: CSS language core</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M6 «CSS language core»</h1>
+<p class="meta">2026-07-06 · Previos: M0-M5 ✅ (main, CI verde, 469 tests) · Ejecución: subagent-driven · El desbloqueador de Bootstrap/Tailwind: selectores reales, rem/em, var(), calc() y colores completos.</p>
+
+<div class="task">
+  <strong>Goal:</strong> que el MOTOR DE CSS deje de ser el cuello de botella: (1) selector engine per selectors-3 subset serio — universal, combinadores (descendiente, hijo &gt;, hermanos + y ~), listas de compuestos, atributos ([attr], [attr=v], ^=, $=, *=), pseudo-clases estructurales (:root, :first-child, :last-child, :nth-child(An+B/odd/even), :not(simple)) — con especificidad correcta per spec; (2) unidades rem/em/pt/cm/mm/in (em resuelto contra font-size del elemento en computed time; rem contra la raíz — requiere threading del root font-size en el resolver); (3) custom properties: declaración --x en cualquier regla (incl. :root), var(--x, fallback) sustituido en computed-value time con herencia per css-variables-1; (4) calc() con + − × ÷ y mezcla px/em/rem/% (resolución diferida cuando mezcla % — CalcValue que Layout resuelve con resolve(base)); (5) colores rgb()/rgba()/hsl()/hsla()/transparent/currentColor + opacity (alpha multiplicativo M6: aplicado a fill colors — ExtGState real en Pdf\).<br>
+  <strong>Riesgo/estrategia:</strong> es el milestone más profundo en Css\/Style\ — tocará StylesheetParser (los selectores dejan de ser un regex), DeclarationParser (valores como mini-árbol, no strings), ComputedStyle (resolución em/rem/var), y Pdf (alpha). El cascade con especificidad ya existe y escala (specificity() pasa a (a,b,c) real). Sabberworm sigue para el parse bruto; los selectores se parsean con tokenizer propio (ya no valen regexes).
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M5 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, trailer, TDD 4-gates, baselines tests-only, specs citadas: selectors-3, css-values-3, css-variables-1, css-color-3).</li>
+  <li>Lecciones del ledger: deptrac silent-skip; comas finales; new-chaining con paréntesis; % → resolve(base); warning para todo lo excluido.</li>
+  <li>Los 469 tests + goldens M1-M5 intactos (specificity() cambia de int a comparable — los tests que asertaban ints se actualizan mecánicamente, expected values equivalentes).</li>
+  <li>Excluidos M6 con warning: :hover/:focus (sin sentido en print), :nth-of-type, ::before/::after (M7 — necesitan generar cajas), @media (M7, con print matching), @import, @font-face (M8), color-mix/lab/oklch.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Css (T1-T2)
+final readonly class SelectorParser { public function parse(string): ?ComplexSelector; }  // tokenizer propio
+final readonly class ComplexSelector {   // cadena de compuestos unidos por combinadores
+    /** @var list&lt;array{Combinator, CompoundSelector}&gt; */ ...
+    public function matches(\Dom\Element): bool;          // right-to-left walk
+    public function specificity(): Specificity;           // (a,b,c) per selectors-3 §17
+}
+enum Combinator { case Descendant; case Child; case NextSibling; case SubsequentSibling; }
+final readonly class Specificity implements comparable-por-método { int $a,$b,$c; compareTo(): int }
+
+// Css values (T3-T4)
+final readonly class CssLength { float $value; LengthUnit $unit; }   // sustituye strings en el parser
+enum LengthUnit { case Px; case Em; case Rem; case Percent; case Pt; case Cm; case Mm; case In; }
+final readonly class CalcValue { /* árbol de operaciones */ public function resolve(ResolutionContext): float; }
+final readonly class ResolutionContext { float $emBase; float $remBase; ?float $percentBase; }
+// LengthPercentage ABSORBE CssLength/CalcValue: resolve() gana contexto (em/rem se resuelven en
+// computed time en ComputedStyle::compute con fontSize propio/raíz; % y calc-con-% siguen diferidos a Layout).
+
+// Style (T4)
+// StyleResolver: pasa rootFontSize + custom properties heredadas (array&lt;string,string&gt; en ComputedStyle,
+// resolución de var() ANTES de DeclarationParser typing — sustitución textual per css-variables-1 §3).
+
+// Pdf (T5)
+// PdfCanvas: alpha — ExtGState /GS dict con /ca /CA; Color gana ?float $alpha; rgba/hsla/opacity lo alimentan.</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 SelectorParser +<br/>Specificity (a,b,c)"] --> T2["T2 matches() combinadores<br/>+ pseudo-clases + atributos"]
+  T2 --> T3["T3 unidades rem/em/pt/físicas<br/>+ CssLength en el parser"]
+  T3 --> T4["T4 var() + calc() +<br/>resolución en compute()"]
+  T4 --> T5["T5 colores rgb/rgba/hsl +<br/>opacity/alpha en Pdf"]
+  T5 --> T6["T6 E2E Bootstrap-like +<br/>goldens + README + playground"]
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M6-T1 — SelectorParser y Specificity (a,b,c)</h3>
+<p>Tokenizer propio de selectores (ya no regex): ident, #id, .class, *, [attr…], :pseudo(args), combinadores (espacio/&gt;/+/~), listas por coma (ya soportadas arriba — cada selector de la lista es un ComplexSelector). Specificity VO (a=ids, b=clases+atributos+pseudo-clases, c=tipos; * no cuenta; :not() cuenta su argumento) con compareTo; StyleResolver ordena por (Specificity, order) — los tests M0 de especificidad se actualizan mecánicamente. En T1 el matching sigue siendo el actual (solo compuestos simples se MATCHEAN; complejos parsean pero warning "combinator matching llega en T2" para no mentir a mitad de milestone — documented staging). Tests: parse de una batería selectors-3 (20+ casos con specificity esperada de la spec), errores → null + warning. Commit: <code>feat(css): real selector parser with spec-compliant specificity</code></p>
+</div>
+
+<div class="task">
+<h3>M6-T2 — Matching completo: combinadores, atributos, pseudo-clases</h3>
+<p>ComplexSelector::matches right-to-left (el compuesto derecho matchea el elemento; combinadores suben: Descendant = algún ancestro, Child = padre, NextSibling = hermano anterior inmediato ELEMENT, SubsequentSibling = algún hermano anterior). Atributos: presencia, =, ^=, $=, *=, ~= (case-sensitive M6, i-flag warning). Pseudo: :root, :first-child, :last-child, :nth-child(An+B|odd|even) per selectors-3 §6.5 (parser de An+B propio), :not(compound simple; complejo dentro → warning). DOM 8.4: OJO ->children no existe — hermanos vía previousElementSibling, padre vía parentElement. El staging warning de T1 se retira. Tests: matriz de matching (30+ casos incl. tabla rayada :nth-child(odd), .card &gt; p, ul li, h2 + p, [data-x^="pre"]) verificados contra el comportamiento de navegador documentado. Commit: <code>feat(css): full selector matching with combinators and structural pseudo-classes</code></p>
+</div>
+
+<div class="task">
+<h3>M6-T3 — Unidades: rem/em/pt/cm/mm/in</h3>
+<p>CssLength (valor+unidad) sustituye el parse ad-hoc: DeclarationParser produce CssLength para propiedades length; LengthPercentage gana los casos (px directo; pt/cm/mm/in → px por factor exacto 96dpi en parse time; em/rem quedan SIMBÓLICAS hasta compute). ComputedStyle::compute: em → fontSize del PROPIO elemento (font-size en em → contra el del PADRE per spec); rem → root font-size (StyleResolver lo captura del html/:root computado, default 16, y lo threadea — nuevo parámetro del contexto de resolución). line-height number sigue aparte. Todos los sitios con LengthPercentage se benefician sin tocarse (la resolución pasa en compute; % sigue diferido). Tests: em contra propio/padre (el caso trampa font-size:2em), rem contra :root font-size custom, físicos exactos (1in=96px, 1pt=96/72...), mezclas en shorthands. Commit: <code>feat(css): em, rem and physical units resolved at computed-value time</code></p>
+</div>
+
+<div class="task">
+<h3>M6-T4 — var() y calc()</h3>
+<p><strong>var()</strong> per css-variables-1: declaraciones --x capturadas en cualquier regla (valor crudo, sin typing); ComputedStyle lleva array&lt;string,string&gt; $customProperties HEREDADO (fusión padre→hijo, propias ganan); la sustitución de var(--x, fallback) ocurre ANTES del typing de DeclarationParser en compute-time (por elemento: cascade de declaraciones crudas → sustitución → typing) — esto REORDENA el pipeline de estilos: DeclarationParser deja de ejecutarse en parse-time para reglas con var() (estrategia: parse-time typing como hoy para reglas SIN var — fast path; con var → declaración cruda diferida a compute; documented). Ciclos de var → valor garbage per spec (invalid at computed-value time → unset + warning). <strong>calc()</strong> per css-values-3 §8: parser de expresiones (+ − × ÷, paréntesis, unidades mezcladas); px/em/rem/pt se pliegan en compute (em/rem ya resolubles ahí); si contiene % → CalcValue diferido dentro de LengthPercentage y Layout lo resuelve con la base (resolve(base) ya es el patrón). División por cero / tipos incompatibles → warning + descartar. Tests: var con fallback, herencia, override por especificidad, ciclo; calc anidado, mezcla rem+%+px contra base conocida, precedencia. Commit: <code>feat(css): custom properties and calc expressions</code></p>
+</div>
+
+<div class="task">
+<h3>M6-T5 — Colores completos y alpha en el PDF</h3>
+<p>Color::fromCss += rgb()/rgba() (0-255 y %), hsl()/hsla() (conversión exacta css-color-3 §4.2.4), transparent (alpha 0), keyword set ampliado a los 148 named colors (tabla generada, no a mano), currentColor (sentinela resuelto en compute contra color). Color gana ?float $alpha (null = opaco). opacity (propiedad, 0-1) multiplicativa sobre los colores del elemento (M6: afecta fill de fondos/texto/bordes propios — la semántica de grupo real llega con transparency groups, documentado). Pdf\: ExtGState — PdfWriter registra /GS dicts (/ca /CA), PdfCanvas emite /GSn gs antes de ops con alpha≠1, deduplicados por valor; pageResources gana /ExtGState. Ghostscript E2E: rgba overlay renderiza válido. Tests: conversiones hsl exactas contra la tabla de la spec, alpha en bytes del stream (gs op presente y dedupe), transparent no pinta. Commit: <code>feat(css): full color syntax with alpha rendering via extgstate</code></p>
+</div>
+
+<div class="task">
+<h3>M6-T6 — E2E Bootstrap-like, goldens, README, playground</h3>
+<p>E2E "bootstrap-like snippet": un fragmento REAL de CSS estilo Bootstrap (variables :root --bs-*, selectores .table &gt; tbody &gt; tr:nth-child(odd), rem everywhere, calc, rgba) sobre una tabla + tarjetas → render correcto verificado por FragmentDumper con valores hand-computed clave (rayado alterno aplicado, rem escalado, alpha en bytes) + 0 warnings. 2 goldens (nth-child rayado; var+calc). README M6 (selectores/unidades/var/calc/colores soportados + excluidos). Playground: sample con :root variables y una tabla rayada — que el usuario vea CSS moderno funcionando. Commit: <code>test: bootstrap-like css e2e; README and playground for M6</code></p>
+</div>
+
+</body>
+</html>
