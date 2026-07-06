@@ -843,3 +843,65 @@ it('lets an !important var() declaration beat a later, more specific normal decl
     assert($p !== null);
     expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
 });
+
+// --- M7-T1 housekeeping, finding 2: IACVT (css-variables-1 §3) — a var() with no fallback and
+// no matching custom property must compute to INHERIT (inherited properties) / INITIAL
+// (everything else), never to whatever a PREVIOUS, lower-priority rule already set for the same
+// property. Review probe: "p{color:red} p{color:var(--missing)}" used to stay red.
+
+it('THE probe: an unresolved var() with no fallback falls back to the inherited value, not the earlier cascade winner (inherited property)', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'body { color: blue } p { color: red } p { color: var(--missing) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // color inherits: falls to the parent's computed color (blue), NOT the earlier "red" winner.
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 255));
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('an unresolved var() with no fallback falls back to the initial value for a non-inherited property, not the earlier cascade winner', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'p { background-color: red } p { background-color: var(--missing) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // background-color does not inherit; its initial value is "no background" (null), not red.
+    expect($map->get($p)->backgroundColor)->toBeNull();
+    expect($warnings)->not->toBeEmpty();
+});
+
+// --- M7-T1 housekeeping, finding 6: VarResolver never substitutes a var( that is written
+// literally INSIDE a quoted string value of a custom property (css-syntax-3: a string token is
+// opaque). There is no `content` property in this engine, so the probe uses font-family (any
+// string is accepted there, see DeclarationParser::KEYWORD_PROPERTIES['font-family']).
+
+it('keeps a var() literally inside a quoted custom property value un-substituted end to end (font-family)', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --a: "var(--b)"; --b: Arial; } p { font-family: var(--a); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // font-family trims the surrounding quotes but must NOT have substituted --b: the literal
+    // text "var(--b)" survives, proving --b (Arial) was never touched.
+    expect($map->get($p)->fontFamily)->toBe('var(--b)');
+});
+
+it('unsets every longhand of a shorthand when its var() substitution fails, not just the ones the fallback text would have produced', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'p { margin: 5px } p { margin: var(--missing) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    // margin does not inherit: every side falls back to the initial value 0, not the earlier 5px.
+    expect($style->marginTop->value)->toBe(0.0);
+    expect($style->marginRight->value)->toBe(0.0);
+    expect($style->marginBottom->value)->toBe(0.0);
+    expect($style->marginLeft->value)->toBe(0.0);
+    expect($warnings)->not->toBeEmpty();
+});

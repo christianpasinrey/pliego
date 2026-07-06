@@ -54,3 +54,22 @@ it('uses the fallback when a cyclic reference is used with one', function () {
     $resolver = new VarResolver(['--a' => 'var(--b)', '--b' => 'var(--a)']);
     expect($resolver->substitute('var(--a, black)'))->toBe('black');
 });
+
+// --- M7-T1 housekeeping: var( inside a quoted string is never a real function call --------
+
+it('does not substitute a var() that is written literally inside a quoted string', function () {
+    $resolver = new VarResolver(['--a' => '"var(--b)"', '--b' => 'green']);
+    expect($resolver->substitute('var(--a)'))->toBe('"var(--b)"');
+});
+
+it('still substitutes a real var() call that follows a quoted string containing the literal text', function () {
+    $resolver = new VarResolver(['--b' => 'green']);
+    expect($resolver->substitute('"var(--x)" var(--b)'))->toBe('"var(--x)" green');
+});
+
+it('honors an escaped quote inside the string so it does not end the string early', function () {
+    $resolver = new VarResolver(['--b' => 'green']);
+    // The string is `"a\"var(` (escaped quote), so the "var(" a few chars later is still inside
+    // the (still-open) string, followed by the real var(--b) outside of any quotes.
+    expect($resolver->substitute('"a\\"var(" var(--b)'))->toBe('"a\\"var(" green');
+});

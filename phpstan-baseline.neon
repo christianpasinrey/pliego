@@ -1063,6 +1063,12 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access property \$fontFamily on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$fontSizePx on mixed\.$#'
 			identifier: property.nonObject
 			count: 7
@@ -1203,13 +1209,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 101
+			count: 102
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 92
+			count: 93
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

@@ -689,6 +689,23 @@ final class DeclarationParser
             return $this->warn("Unsupported shorthand for $property: $value");
         }
         /** @var list<LengthPercentage|CssLength|CalcExpr> $lengths */
+        // M7-T1 housekeeping (CSS 2.2 §8.4, sign-check parity with the padding-* longhands):
+        // padding-top/right/bottom/left already reject a negative value at the LENGTH_PERCENTAGE_
+        // PROPERTIES branch above (line ~120) — but that branch never runs for the shorthand form,
+        // because expandBoxShorthand() builds "padding-top" etc. directly as already-typed values,
+        // bypassing DeclarationParser::parse('padding-top', ...) entirely. Before this fix,
+        // "padding: -5px" (or a mixed "padding: 10px -5px") slipped through unwarned. Adjudication
+        // (M7-T1 brief): drop the WHOLE shorthand with a SINGLE warning when ANY component is
+        // negative — simpler and more defensible than silently zeroing only the negative sides
+        // (which would produce a half-applied padding no author asked for). margin stays fully
+        // permissive (CSS 2.2 §8.3: negative margins are valid), so this check is padding-only.
+        if ($property === 'padding') {
+            foreach ($lengths as $length) {
+                if (self::rawValueOf($length) < 0.0) {
+                    return $this->warn("Negative value not allowed in padding shorthand: $value");
+                }
+            }
+        }
         [$top, $right, $bottom, $left] = match (count($lengths)) {
             1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
             2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],

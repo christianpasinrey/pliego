@@ -32,6 +32,46 @@ it('accepts negative margin (valid per CSS 2.2)', function () {
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
+// --- M7-T1 housekeeping, finding 3: padding shorthand sign-check parity with the longhands -----
+
+it('drops the whole padding shorthand with one warning when the single value is negative', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding', '-5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('drops the whole padding shorthand with one warning when only one of several values is negative', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding', '10px -5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('accepts an all-non-negative padding shorthand unchanged', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding', '10px 5%');
+    expect($result)->toEqual([
+        'padding-top' => LengthPercentage::px(10.0),
+        'padding-right' => LengthPercentage::percent(5.0),
+        'padding-bottom' => LengthPercentage::px(10.0),
+        'padding-left' => LengthPercentage::percent(5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still accepts a negative margin shorthand (margin stays permissive, unlike padding)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', '10px -5px');
+    expect($result)->toEqual([
+        'margin-top' => LengthPercentage::px(10.0),
+        'margin-right' => LengthPercentage::px(-5.0),
+        'margin-bottom' => LengthPercentage::px(10.0),
+        'margin-left' => LengthPercentage::px(-5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
 it('parses font-weight keywords and numeric 400/700', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('font-weight', 'normal'))->toBe(['font-weight' => 400]);

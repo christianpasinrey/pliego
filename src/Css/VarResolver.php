@@ -43,7 +43,8 @@ final class VarResolver
     {
         $result = '';
         $pos = 0;
-        while (($varPos = stripos($text, 'var(', $pos)) !== false) {
+        $length = strlen($text);
+        while (($varPos = $this->findNextUnquotedVarCall($text, $pos, $length)) !== null) {
             $result .= substr($text, $pos, $varPos - $pos);
             $parenStart = $varPos + 3;
             $parenEnd = $this->findMatchingParen($text, $parenStart);
@@ -61,6 +62,45 @@ final class VarResolver
         }
         $result .= substr($text, $pos);
         return $result;
+    }
+
+    /**
+     * M7-T1 housekeeping (css-syntax-3 §4.3.5: a <string-token> is opaque — its contents are never
+     * re-tokenized): finds the next "var(" (case-insensitive) OUTSIDE of a quoted string, starting
+     * at $pos. Before this fix, substituteText() used a plain stripos() that would happily "find"
+     * var( even when it was sitting inside a literal string value, e.g. a custom property declared
+     * as `--a: "var(--b)"` — the review probe wants that string to survive untouched (font-family
+     * gets the literal text "var(--b)", never the substituted --b) instead of being silently
+     * rewritten as if it were a real function call. Escaped quotes (backslash) inside the string
+     * are honored so a stray `\"` doesn't end the string early.
+     */
+    private function findNextUnquotedVarCall(string $text, int $pos, int $length): ?int
+    {
+        $quote = null;
+        while ($pos < $length) {
+            $char = $text[$pos];
+            if ($quote !== null) {
+                if ($char === '\\' && $pos + 1 < $length) {
+                    $pos += 2;
+                    continue;
+                }
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                $pos++;
+                continue;
+            }
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                $pos++;
+                continue;
+            }
+            if (($char === 'v' || $char === 'V') && $pos + 4 <= $length && strncasecmp(substr($text, $pos, 4), 'var(', 4) === 0) {
+                return $pos;
+            }
+            $pos++;
+        }
+        return null;
     }
 
     /** @param list<string> $stack */

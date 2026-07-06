@@ -11,16 +11,16 @@ use Pliego\Css\Value\Length;
 use Pliego\Css\VarResolver;
 use Pliego\Css\WarningCollector;
 
-final readonly class StyleResolver
+final class StyleResolver
 {
     /** @param list<StyleSource> $sources */
     public function __construct(
-        private array $sources,
+        private readonly array $sources,
         // M6-T4: mismo patrón que Layout\*FormattingContext/Paginator (WarningCollector opcional
         // compartido, ver Engine) — recibe los warnings de var()/calc() que solo pueden detectarse
         // aquí (ciclos, referencias desconocidas, % en una propiedad sin soporte de %, división por
         // cero cuyo divisor depende de em/rem propios del elemento).
-        private ?WarningCollector $warnings = null,
+        private readonly ?WarningCollector $warnings = null,
     ) {
         $this->declarationParser = new DeclarationParser();
     }
@@ -29,7 +29,28 @@ final readonly class StyleResolver
      * sustituidas — DeclarationParser es stateless entre llamadas salvo su buffer de warnings,
      * que se drena tras cada uso (ver resolveDeferred()); reusarla evita crear un objeto nuevo por
      * cada declaración diferida de cada elemento. */
-    private DeclarationParser $declarationParser;
+    private readonly DeclarationParser $declarationParser;
+
+    /**
+     * M7-T1 housekeeping (M6 final-review finding): allRules() concatenaba TODAS las reglas de
+     * TODAS las StyleSource en cada llamada — una vez POR ELEMENTO del documento, vía
+     * matchedDeclarationsAndCustomProperties() — en vez de una vez por resolve(). A 500 reglas ×
+     * 4000 elementos eso son 4000 concatenaciones de un array de 500, medido en ~841ms en la
+     * review. Las StyleSource son inmutables durante un resolve() (constructor readonly, sin
+     * setters), así que el resultado nunca cambia entre elementos del MISMO árbol — se computa una
+     * única vez y se cachea aquí. NO puede ser readonly (a diferencia de $sources/$warnings/
+     * $declarationParser arriba): necesita reescribirse a null en cada resolve() (ver ahí) para que
+     * una segunda llamada a resolve() en la misma instancia (con las mismas $sources, pero
+     * potencialmente invocada desde un test o Engine que reutiliza el resolver) no herede un
+     * $rulesCache "atascado" de forma sorprendente — aunque en la práctica el resultado sería
+     * idéntico (las fuentes no cambian), resetear el cache al empezar resolve() documenta la
+     * invariante "el cache vive dentro del ámbito de UN resolve()" en vez de "vive para siempre en
+     * la instancia", evitando que un futuro cambio (p.ej. StyleSource mutable) reintroduzca un bug
+     * de cache obsoleto sin que nadie lo note aquí.
+     *
+     * @var list<StyleRule>|null
+     */
+    private ?array $rulesCache = null;
 
     /** css-values-3 §5.2: font-size initial value — base de rem hasta que se resuelva el
      * font-size real del documentElement (ver resolveRoot()). */
@@ -37,6 +58,9 @@ final readonly class StyleResolver
 
     public function resolve(\Dom\HTMLDocument $document): StyleMap
     {
+        // M7-T1: ver docblock de $rulesCache — recalculado a demanda por allRules() en su primer
+        // uso de ESTE resolve(), nunca reutilizado de una llamada anterior.
+        $this->rulesCache = null;
         $map = new StyleMap();
         $root = $document->documentElement;
         if ($root !== null) {
@@ -140,7 +164,24 @@ final readonly class StyleResolver
                     continue; // ya incorporada a $customProperties arriba.
                 }
                 if ($value instanceof DeferredDeclaration) {
-                    foreach ($this->resolveDeferred($property, $value->rawValue, $customProperties) as $resolvedProperty => $resolvedValue) {
+                    $resolved = $this->resolveDeferred($property, $value->rawValue, $customProperties);
+                    // M7-T1 fix (css-variables-1 §3, IACVT): un array vacío aquí significa
+                    // "invalid at computed-value time" (sustitución fallida SIN fallback, o texto
+                    // sustituido que DeclarationParser::parse() rechaza) — la corrección es tratar
+                    // la declaración como si NUNCA se hubiera escrito, no como un no-op. Antes de
+                    // esta tarea un no-op dejaba filtrarse el valor de una regla ANTERIOR y de menor
+                    // especificidad para la MISMA propiedad (bug de la review: "p{color:red}
+                    // p{color:var(--missing)}" seguía en rojo) — unset() fuerza que
+                    // ComputedStyle::compute() vea la propiedad como no declarada en absoluto, así
+                    // que cae a SU regla real de herencia (inherit para las heredadas, initial para
+                    // el resto — ninguna de las dos es "el valor que ganaba antes en el cascade").
+                    if ($resolved === []) {
+                        foreach ($this->longhandsOf($property) as $longhand) {
+                            unset($declarations[$longhand]);
+                        }
+                        continue;
+                    }
+                    foreach ($resolved as $resolvedProperty => $resolvedValue) {
                         $declarations[$resolvedProperty] = $resolvedValue;
                     }
                     continue;
@@ -183,10 +224,50 @@ final readonly class StyleResolver
     /** @return list<StyleRule> */
     private function allRules(): array
     {
+        if ($this->rulesCache !== null) {
+            return $this->rulesCache;
+        }
         $rules = [];
         foreach ($this->sources as $source) {
             $rules = [...$rules, ...$source->rules()];
         }
-        return $rules;
+        return $this->rulesCache = $rules;
+    }
+
+    /**
+     * M7-T1 housekeeping (css-variables-1 §3, IACVT): qué propiedades TIPADAS deja "sin valor" una
+     * declaración diferida que resulta invalid-at-computed-value-time (ver resolveDeferred()) —
+     * para un longhand es la propiedad misma; para un shorthand son TODOS los longhands que
+     * expandBoxShorthand()/expandBorderShorthand()/parseFlexShorthand()/expandGapShorthand()
+     * producirían en caso de éxito, porque IACVT invalida el shorthand COMPLETO, no una mezcla
+     * parcial. La lista es deliberadamente la de DeclarationParser (misma fuente de verdad que la
+     * expansión real), no una copia con drift propio.
+     *
+     * @return list<string>
+     */
+    private function longhandsOf(string $property): array
+    {
+        return match ($property) {
+            'margin' => ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+            'padding' => ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'],
+            'gap' => ['row-gap', 'column-gap'],
+            'flex' => ['flex-grow', 'flex-shrink', 'flex-basis'],
+            'border' => [
+                ...self::borderLonghandsForSide('top'),
+                ...self::borderLonghandsForSide('right'),
+                ...self::borderLonghandsForSide('bottom'),
+                ...self::borderLonghandsForSide('left'),
+            ],
+            'border-top', 'border-right', 'border-bottom', 'border-left' => self::borderLonghandsForSide(
+                substr($property, strlen('border-')),
+            ),
+            default => [$property],
+        };
+    }
+
+    /** @return list<string> */
+    private static function borderLonghandsForSide(string $side): array
+    {
+        return ["border-$side-width", "border-$side-style", "border-$side-color"];
     }
 }
