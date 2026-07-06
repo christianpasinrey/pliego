@@ -63,7 +63,19 @@ final class BlockFlowContext implements FormattingContext
         return $this->flexContext;
     }
 
-    public function layout(BlockBox $box, Rect $containingBlock): BoxFragment
+    /**
+     * M4-T5 (carry-over fix from T4's review): $usedWidthOverride, cuando no es null, es el
+     * ancho BORDER-BOX que un FormattingContext exterior (FlexFormattingContext) ya resolvió
+     * para esta caja (§9.7) y que DEBE ganar sobre cualquier width propio declarado en CSS —
+     * antes de este parámetro, un item flex con su propio `width` ignoraba por completo el
+     * tamaño resuelto por flex-grow/shrink (BlockFlowContext solo miraba $style->width, nunca
+     * el containingBlock), dejando huecos o solapes visibles frente a lo que hace un navegador
+     * real. Cuando se pasa, el override sustituye ENTERAMENTE la rama de "width propio" de
+     * abajo (auto o declarado, box-sizing incluido: el valor ya llega en convención border-box
+     * uniforme, ver el docblock de adjudicación en FlexFormattingContext) — el resto del método
+     * (posición, hijos, altura de contenido) no cambia en absoluto.
+     */
+    public function layout(BlockBox $box, Rect $containingBlock, ?float $usedWidthOverride = null): BoxFragment
     {
         $style = $box->style;
         // CSS 2.2 §10.2/§10.3.3/§8.3: todo porcentaje de width/margin-*/padding-* se resuelve
@@ -88,22 +100,28 @@ final class BlockFlowContext implements FormattingContext
         $borderTop = $style->borderTop->widthPx;
         $borderBottom = $style->borderBottom->widthPx;
 
-        // Falso positivo verificado (ver task-8-report.md): PHPStan resuelve `?LengthPercentage`
-        // como no-nulo solo cuando el nullsafe y el `??` conviven en la misma expresión; separar
-        // en dos sentencias hace desaparecer el aviso sin cambiar tipo ni comportamiento.
-        $declaredWidth = $style->width;
-        $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
-        if ($declaredWidthPx === null) {
-            // width: auto — el border-box ocupa lo que quede del containing block tras los
-            // márgenes; box-sizing solo importa cuando hay un ancho declarado explícitamente.
-            $borderBoxWidth = $cbWidth - $marginLeft - $marginRight;
-            $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
-        } elseif ($style->boxSizing === 'border-box') {
-            $borderBoxWidth = $declaredWidthPx;
+        if ($usedWidthOverride !== null) {
+            $borderBoxWidth = $usedWidthOverride;
             $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
         } else {
-            $contentWidth = $declaredWidthPx;
-            $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
+            // Falso positivo verificado (ver task-8-report.md): PHPStan resuelve
+            // `?LengthPercentage` como no-nulo solo cuando el nullsafe y el `??` conviven en la
+            // misma expresión; separar en dos sentencias hace desaparecer el aviso sin cambiar
+            // tipo ni comportamiento.
+            $declaredWidth = $style->width;
+            $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
+            if ($declaredWidthPx === null) {
+                // width: auto — el border-box ocupa lo que quede del containing block tras los
+                // márgenes; box-sizing solo importa cuando hay un ancho declarado explícitamente.
+                $borderBoxWidth = $cbWidth - $marginLeft - $marginRight;
+                $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
+            } elseif ($style->boxSizing === 'border-box') {
+                $borderBoxWidth = $declaredWidthPx;
+                $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
+            } else {
+                $contentWidth = $declaredWidthPx;
+                $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
+            }
         }
 
         $contentX = $x + $borderLeft + $paddingLeft;
@@ -186,8 +204,12 @@ final class BlockFlowContext implements FormattingContext
      * M4-T4: PÚBLICO (era privado) — FlexFormattingContext reutiliza este mismo método para sus
      * items ImageBox, sin duplicar el sizing de replaced elements (resolveReplacedSize no cambia:
      * es agnóstico a flex/bloque, el sizing de un <img> es el mismo eje a eje en ambos contextos).
+     *
+     * M4-T5: $usedWidthOverride, análogo al de layout() (ver su docblock) — un ImageBox item con
+     * su propio width/attr/intrínseco sufre el mismo problema de carry-over que un BlockBox, ver
+     * resolveReplacedSize().
      */
-    public function layoutImage(ImageBox $box, Rect $containingBlock): BoxFragment
+    public function layoutImage(ImageBox $box, Rect $containingBlock, ?float $usedWidthOverride = null): BoxFragment
     {
         $style = $box->style;
         $cbWidth = $containingBlock->width;
@@ -209,7 +231,7 @@ final class BlockFlowContext implements FormattingContext
         $borderTop = $style->borderTop->widthPx;
         $borderBottom = $style->borderBottom->widthPx;
 
-        [$contentWidth, $contentHeight] = $this->resolveReplacedSize($box, $cbWidth);
+        [$contentWidth, $contentHeight] = $this->resolveReplacedSize($box, $cbWidth, $usedWidthOverride);
 
         $contentX = $x + $borderLeft + $paddingLeft;
         $contentY = $y + $borderTop + $paddingTop;
@@ -247,9 +269,18 @@ final class BlockFlowContext implements FormattingContext
      * traen border-box restado o no: en el momento en que se usan para derivar el otro eje, ya
      * son valores de content box.
      *
+     * M4-T5: $usedWidthOverride, cuando no es null, es el ancho BORDER-BOX ya resuelto por
+     * FlexFormattingContext (§9.7) — gana sobre CSS width, atributo HTML width e intrínseco por
+     * igual (misma prioridad absoluta que en BlockFlowContext::layout(), ver su docblock);
+     * SIEMPRE se interpreta como border-box, sea cual sea el box-sizing propio de la imagen
+     * (adjudicación "border-box main size" del brief, ya documentada en FlexFormattingContext).
+     * El alto NO se toca por el override (el eje principal de un contenedor row es el ancho): se
+     * resuelve igual que sin override (CSS > attr > derivado del ratio con el ancho YA
+     * sobrescrito, si ningún alto propio existe).
+     *
      * @return array{0: float, 1: float} content width/height en px
      */
-    private function resolveReplacedSize(ImageBox $box, float $cbWidth): array
+    private function resolveReplacedSize(ImageBox $box, float $cbWidth, ?float $usedWidthOverride = null): array
     {
         $style = $box->style;
         $intrinsicWidth = (float) $box->intrinsicWidth;
@@ -264,17 +295,24 @@ final class BlockFlowContext implements FormattingContext
         $declaredHeight = $style->height;
         $declaredHeightPx = $declaredHeight?->px;
 
+        $paddingBorderX = $style->paddingLeft->resolve($cbWidth) + $style->paddingRight->resolve($cbWidth)
+            + $style->borderLeft->widthPx + $style->borderRight->widthPx;
+        $paddingBorderY = $style->paddingTop->resolve($cbWidth) + $style->paddingBottom->resolve($cbWidth)
+            + $style->borderTop->widthPx + $style->borderBottom->widthPx;
+
         if ($style->boxSizing === 'border-box') {
-            $paddingBorderX = $style->paddingLeft->resolve($cbWidth) + $style->paddingRight->resolve($cbWidth)
-                + $style->borderLeft->widthPx + $style->borderRight->widthPx;
-            $paddingBorderY = $style->paddingTop->resolve($cbWidth) + $style->paddingBottom->resolve($cbWidth)
-                + $style->borderTop->widthPx + $style->borderBottom->widthPx;
             if ($declaredWidthPx !== null) {
                 $declaredWidthPx = max(0.0, $declaredWidthPx - $paddingBorderX);
             }
             if ($declaredHeightPx !== null) {
                 $declaredHeightPx = max(0.0, $declaredHeightPx - $paddingBorderY);
             }
+        }
+
+        if ($usedWidthOverride !== null) {
+            $width = max(0.0, $usedWidthOverride - $paddingBorderX);
+            $height = $declaredHeightPx ?? $box->attrHeight ?? ($ratio > 0.0 ? $width * $ratio : $intrinsicHeight);
+            return [$width, $height];
         }
 
         $width = $declaredWidthPx ?? $box->attrWidth;

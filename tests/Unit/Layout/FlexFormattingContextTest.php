@@ -57,6 +57,27 @@ it('THE CARD: an auto-basis flex:1 item takes exactly the remaining space next t
     expect($imgFrag->rect->y)->toBe($divFrag->rect->y); // same line
 });
 
+// --- CARRY-OVER FIX (T4 review): an item with its own declared width must still grow ----------
+
+it('CARRY-OVER: an item with its own declared width still grows via flex-grow, no gap left behind', function () {
+    // Container 400px; A declares width:100px but flex-grow:1 (browsers grow it to fill the
+    // leftover); B declares width:100px, flex-grow:0 (stays at 100). Before the fix, A's own
+    // BlockFlowContext branch ignored the resolved flex main size entirely and rendered at
+    // 100px, leaving a 200px hole between A and B instead of A growing to 300px.
+    $a = new BlockBox(flexStyle(['width' => LengthPercentage::px(100.0), 'flex-grow' => 1.0]), [], 'div');
+    $b = new BlockBox(flexStyle(['width' => LengthPercentage::px(100.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(400.0)]), [$a, $b], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$aFrag, $bFrag] = $frag->children;
+    assert($aFrag instanceof BoxFragment && $bFrag instanceof BoxFragment);
+
+    expect($aFrag->rect->x)->toBe(0.0);
+    expect($aFrag->rect->width)->toBe(300.0); // grown from its own 100px to fill the leftover
+    expect($bFrag->rect->x)->toBe(300.0); // flush against A, no 200px hole
+    expect($bFrag->rect->width)->toBe(100.0);
+});
+
 // --- flex-grow 2:1 splits the leftover proportionally ---------------------------------------
 
 it('splits leftover space 2:1 between two flex-grow items with a zero basis', function () {
@@ -219,6 +240,133 @@ it('a single flex item with no grow renders identical geometry to the same box l
     assert($plainItemFrag instanceof BoxFragment);
 
     expect($flexItemFrag->rect)->toEqual($plainItemFrag->rect);
+});
+
+// --- M4-T5: the flex container fragment is ATOMIC for pagination purposes --------------------
+
+it('marks the flex container fragment as atomic (BoxFragment::$atomic === true)', function () {
+    $item = new BlockBox(flexStyle(), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(100.0)]), [$item], 'div');
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    expect($frag->atomic)->toBeTrue();
+});
+
+it('marks an empty flex container fragment as atomic too', function () {
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(100.0)]), [], 'div');
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    expect($frag->atomic)->toBeTrue();
+});
+
+// --- M4-T5 §9.3 wrap: items split into flex LINES when their sum overflows the main size ------
+
+it('wraps 3 items into 2 flex lines of different cross sizes, stacked with row-gap between them', function () {
+    // Container 200px wide, no gaps between items on the same line (column-gap: 0), row-gap: 10
+    // between LINES. Item widths 80/80/80 (flex-basis, no grow/shrink): item1+item2 = 160 <= 200
+    // fits on line 1; item3 would push it to 240 > 200 => opens line 2 on its own.
+    $item1 = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(80.0)]), 'a.jpg', 80, 30, null, 30.0);
+    $item2 = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(80.0)]), 'b.jpg', 80, 50, null, 50.0);
+    $item3 = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(80.0)]), 'c.jpg', 80, 20, null, 20.0);
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'flex-wrap' => 'wrap', 'row-gap' => Length::px(10.0)]),
+        [$item1, $item2, $item3],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$f1, $f2, $f3] = $frag->children;
+    assert($f1 instanceof BoxFragment && $f2 instanceof BoxFragment && $f3 instanceof BoxFragment);
+
+    // Line 1: item1 (h30) + item2 (h50), cross size = max(30,50) = 50, both at y=0.
+    expect($f1->rect->x)->toBe(0.0);
+    expect($f1->rect->y)->toBe(0.0);
+    expect($f1->rect->height)->toBe(30.0); // definite cross size (attrHeight), no stretch
+    expect($f2->rect->x)->toBe(80.0);
+    expect($f2->rect->y)->toBe(0.0);
+    expect($f2->rect->height)->toBe(50.0);
+
+    // Line 2 starts at y = 50 (line 1 cross) + 10 (row-gap): item3 back at x=0.
+    expect($f3->rect->x)->toBe(0.0);
+    expect($f3->rect->y)->toBe(60.0);
+    expect($f3->rect->height)->toBe(20.0);
+
+    // Container height hugs both lines: 50 + 10 (row-gap) + 20 = 80.
+    expect($frag->rect->height)->toBe(80.0);
+});
+
+it('keeps a single item wider than the container on its own line, unsplit, when wrap is enabled', function () {
+    $wide = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(150.0)]), 'wide.jpg', 150, 40, null, 40.0);
+    $narrow = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(50.0)]), 'narrow.jpg', 50, 20, null, 20.0);
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(100.0), 'flex-wrap' => 'wrap', 'row-gap' => Length::px(5.0)]),
+        [$wide, $narrow],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$wideFrag, $narrowFrag] = $frag->children;
+    assert($wideFrag instanceof BoxFragment && $narrowFrag instanceof BoxFragment);
+
+    // The wide item alone overflows the 100px container but is NOT split/shrunk: it stays at its
+    // full 150px hypothetical size on its own line (first item in a line is never rejected).
+    expect($wideFrag->rect->width)->toBe(150.0);
+    expect($wideFrag->rect->x)->toBe(0.0);
+    expect($wideFrag->rect->y)->toBe(0.0);
+
+    // Line 2 (narrow alone) starts at y = 40 (line 1 cross) + 5 (row-gap).
+    expect($narrowFrag->rect->y)->toBe(45.0);
+    expect($narrowFrag->rect->x)->toBe(0.0);
+});
+
+// --- M4-T5: flex-direction: column ------------------------------------------------------------
+
+it('column: stacks 3 items vertically with their own CSS heights and row-gap between them, auto height hugs content', function () {
+    $childStyle = flexStyle();
+    $a = new BlockBox(flexStyle(['height' => Length::px(30.0)], $childStyle), [], 'div');
+    $b = new BlockBox(flexStyle(['height' => Length::px(40.0)], $childStyle), [], 'div');
+    $c = new BlockBox(flexStyle(['height' => Length::px(50.0)], $childStyle), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'flex-direction' => 'column', 'row-gap' => Length::px(10.0)]),
+        [$a, $b, $c],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$aFrag, $bFrag, $cFrag] = $frag->children;
+    assert($aFrag instanceof BoxFragment && $bFrag instanceof BoxFragment && $cFrag instanceof BoxFragment);
+
+    expect($aFrag->rect->y)->toBe(0.0);
+    expect($aFrag->rect->height)->toBe(30.0);
+    expect($bFrag->rect->y)->toBe(40.0); // 30 + 10 (row-gap, the main-axis gap in column)
+    expect($bFrag->rect->height)->toBe(40.0);
+    expect($cFrag->rect->y)->toBe(90.0); // 40 + 40 + 10
+    expect($cFrag->rect->height)->toBe(50.0);
+
+    // Cross size (width): align-items defaults to Stretch, none of the items has an own width ->
+    // all three stretch to the container's full content width.
+    expect($aFrag->rect->width)->toBe(200.0);
+    expect($bFrag->rect->width)->toBe(200.0);
+    expect($cFrag->rect->width)->toBe(200.0);
+
+    // Auto container height hugs the 3 items + 2 gaps: 30 + 40 + 50 + 2*10 = 140.
+    expect($frag->rect->height)->toBe(140.0);
+});
+
+it('column: align-items stretch widens an auto-width item but leaves one with its own declared width untouched', function () {
+    $auto = new BlockBox(flexStyle(['height' => Length::px(20.0)]), [], 'div');
+    $ownWidth = new BlockBox(flexStyle(['height' => Length::px(20.0), 'width' => LengthPercentage::px(100.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(300.0), 'flex-direction' => 'column']),
+        [$auto, $ownWidth],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$autoFrag, $ownFrag] = $frag->children;
+    assert($autoFrag instanceof BoxFragment && $ownFrag instanceof BoxFragment);
+
+    expect($autoFrag->rect->width)->toBe(300.0); // stretched to the full content width
+    expect($ownFrag->rect->width)->toBe(100.0); // its own width wins, falls back to flex-start
+    expect($ownFrag->rect->x)->toBe(0.0);
 });
 
 // --- empty flex container: no items, still resolves a sane box ------------------------------

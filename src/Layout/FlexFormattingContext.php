@@ -10,20 +10,32 @@ use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Style\AlignItems;
+use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
+use Pliego\Style\FlexDirection;
+use Pliego\Style\FlexWrap;
 use Pliego\Style\JustifyContent;
 use Pliego\Text\FontCatalog;
 
 /**
- * css-flexbox-1 §9, restringido a UNA sola línea en flex-direction:row (M4-T4; wrap y column
- * llegan en M4-T5 — ver brief). $flexDirection/$flexWrap del contenedor se LEEN pero esta clase
- * SIEMPRE aplica el algoritmo de fila única sea cual sea su valor: no hay todavía un canal de
- * warnings en tiempo de layout (el constructor de esta clase, fijado por el contrato del
- * milestone en T1/T3, no recibe un WarningCollector) para avisar del fallback, así que queda
- * documentado aquí en vez de silencioso — T5, que SÍ implementa wrap/column, es quien
- * probablemente tenga que abrir ese canal si decide seguir sin silencio.
+ * css-flexbox-1 §9. M4-T5 añade wrap (§9.3, solo en row: ver splitIntoLines()), flex-direction:
+ * column (ver layoutColumnContainer()) y paginación atómica (ver $atomic más abajo); M4-T4 dejaba
+ * la clase restringida a una sola línea en row. order, align-self, align-content, inline-flex,
+ * flex-basis:content, *-reverse y writing modes siguen fuera de alcance (M4, ver brief) — caen a
+ * warning y fallback en DeclarationParser/ComputedStyle, nunca llegan aquí; no hay canal de
+ * warnings EN TIEMPO DE LAYOUT (el constructor de esta clase, fijado por el contrato del
+ * milestone en T1/T3, no recibe un WarningCollector), así que cualquier simplificación adicional
+ * de esta tarea queda documentada en el método correspondiente en vez de silenciosa.
+ *
+ * PAGINACIÓN ATÓMICA (brief T5): el BoxFragment que este contexto devuelve para el CONTENEDOR
+ * (nunca para un item individual) se marca `atomic: true` — Paginator lo trata como una unidad
+ * indivisible frente al push-down de página (ver Paginator::flatten()/relocate()): cruza un
+ * límite de página y cabe entera en una sola → se empuja ENTERA (con todo su subárbol); es más
+ * alta que una página → se queda donde cae, sin partirse (misma limitación ya documentada para
+ * texto/imágenes demasiado altos, sin canal de warnings en Paginator tampoco — nota para M5).
  *
  * RUPTURA DE CICLO (BlockFlowContext <-> FlexFormattingContext): un contenedor flex puede tener
  * items que a su vez son bloques normales (necesitan BlockFlowContext) o incluso OTROS
@@ -132,65 +144,150 @@ final readonly class FlexFormattingContext implements FormattingContext
         if ($items === []) {
             $lineCross = $declaredContentHeight ?? 0.0;
             $height = $lineCross + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
-            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders);
+            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true);
         }
 
-        // §9.2 (base size) + §9.7 (longitudes flexibles) — ver resolveMainSizes(). Puramente
-        // aritmético, independiente de cualquier layout real todavía.
+        if ($style->flexDirection === FlexDirection::Column) {
+            return $this->layoutColumnContainer(
+                $style,
+                $items,
+                $x,
+                $y,
+                $contentX,
+                $contentTop,
+                $contentWidth,
+                $declaredContentHeight,
+                $paddingBottom,
+                $borderBottom,
+                $borderBoxWidth,
+                $borders,
+            );
+        }
+
+        // §9.3 (wrap): parte $items en líneas — ver splitIntoLines(). flex-wrap:nowrap (default)
+        // siempre produce UNA sola línea con TODOS los items (misma llamada, mismo resultado
+        // exacto que T4 antes de esta tarea: la condición de apertura de línea en
+        // splitIntoLines() solo se evalúa cuando $style->flexWrap === Wrap).
+        $lines = $this->splitIntoLines($items, $contentWidth, $style->columnGapPx, $style->flexWrap);
+
+        // Con una sola línea, la altura declarada del contenedor (si la hay) sigue forzando el
+        // cross size de ESA línea (comportamiento T4 intacto, ver layoutRowLine()). Con 2+ líneas
+        // no hay align-content (fuera de alcance, ver docblock de clase): cada línea se limita a
+        // su propio máximo natural, documentado — la altura declarada solo actúa como SUELO del
+        // total (ver más abajo), nunca reparte el sobrante entre líneas.
+        $singleLineForcedCross = count($lines) === 1 ? $declaredContentHeight : null;
+
+        $finalFragments = [];
+        $cursorY = $contentTop;
+        $lineCrossSizes = [];
+        foreach ($lines as $lineItems) {
+            [$lineFragments, $lineCross] = $this->layoutRowLine($lineItems, $contentWidth, $contentX, $cursorY, $style, $singleLineForcedCross);
+            foreach ($lineFragments as $fragment) {
+                $finalFragments[] = $fragment;
+            }
+            $lineCrossSizes[] = $lineCross;
+            $cursorY += $lineCross + $style->rowGapPx;
+        }
+
+        $linesCount = count($lineCrossSizes);
+        $naturalTotalCross = array_sum($lineCrossSizes) + ($linesCount > 1 ? $style->rowGapPx * ($linesCount - 1) : 0.0);
+        $totalCross = $linesCount > 1 && $declaredContentHeight !== null
+            ? max($declaredContentHeight, $naturalTotalCross)
+            : $naturalTotalCross;
+
+        $contentBottom = $contentTop + $totalCross;
+        $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
+
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true);
+    }
+
+    /**
+     * css-flexbox-1 §9.3: agrupa $items (en orden de documento) en líneas flex. flex-wrap:nowrap
+     * (el default) nunca abre una línea nueva — todos los items caen en una sola, EXACTAMENTE el
+     * comportamiento de M4-T4 (overflow permitido, ver resolveMainSizes()). Con wrap, se acumula
+     * el tamaño hipotético EXTERIOR (hypotheticalMainSize + márgenes horizontales) de cada item +
+     * el column-gap que le precede; en cuanto añadirlo desbordaría $contentWidth, se abre una
+     * línea nueva — salvo que la línea actual esté vacía (el PRIMER item de una línea nunca se
+     * rechaza: "un item solo más ancho que el contenedor se queda en su línea, sin partir", brief).
+     *
+     * @param non-empty-list<BlockBox|ImageBox> $items
+     * @return non-empty-list<non-empty-list<BlockBox|ImageBox>>
+     */
+    private function splitIntoLines(array $items, float $contentWidth, float $columnGapPx, FlexWrap $wrap): array
+    {
+        $lines = [];
+        /** @var list<BlockBox|ImageBox> $currentLine */
+        $currentLine = [];
+        $currentSum = 0.0;
+        foreach ($items as $item) {
+            $outer = $this->hypotheticalMainSize($item, $contentWidth)
+                + $item->style->marginLeft->resolve($contentWidth) + $item->style->marginRight->resolve($contentWidth);
+            if ($currentLine === []) {
+                $currentLine[] = $item;
+                $currentSum = $outer;
+                continue;
+            }
+            $withGap = $currentSum + $columnGapPx + $outer;
+            if ($wrap === FlexWrap::Wrap && $withGap > $contentWidth) {
+                $lines[] = $currentLine;
+                $currentLine = [$item];
+                $currentSum = $outer;
+                continue;
+            }
+            $currentLine[] = $item;
+            $currentSum = $withGap;
+        }
+        // $items es non-empty-list (garantizado por el único call site, ver layout(): el branch
+        // de items===[] ya retornó antes) => el bucle de arriba corre al menos una vez y
+        // $currentLine SIEMPRE tiene, como mínimo, el último item — nunca queda vacío aquí.
+        $lines[] = $currentLine;
+        return $lines;
+    }
+
+    /**
+     * Cuerpo del algoritmo de UNA línea row (§9.2/9.7/9.5/9.4/9.8), extraído sin cambios de M4-T4
+     * para que splitIntoLines()+wrap puedan invocarlo una vez por línea, apilando el resultado en
+     * el eje cruzado (vertical) con row-gap entre líneas (ver layout()). $forcedCross —altura
+     * declarada del contenedor— solo se pasa cuando hay UNA sola línea (ver layout()): con 2+, no
+     * hay align-content, cada línea se limita a su máximo natural.
+     *
+     * @param non-empty-list<BlockBox|ImageBox> $items items de ESTA línea
+     * @return array{0: list<Fragment>, 1: float} fragments (orden de documento) + cross size de la línea
+     */
+    private function layoutRowLine(array $items, float $contentWidth, float $contentX, float $lineTop, ComputedStyle $style, ?float $forcedCross): array
+    {
         [$resolvedMain, $marginsX] = $this->resolveMainSizes($items, $contentWidth, $style->columnGapPx);
-        // §9.5 (posición en el eje principal) — también aritmético, independiente del eje cruzado.
         $finalX = self::mainAxisPositions($resolvedMain, $marginsX, $contentWidth, $contentX, $style->columnGapPx, $style->justifyContent);
 
-        // §9.4 paso 1: cada item se layoutea con su main size resuelto para MEDIR su cross size
-        // natural (el alto que produce su propio contenido) — necesario antes de conocer el cross
-        // size de la línea (depende del máximo de todos los items, o de la altura declarada del
-        // contenedor).
         $natural = [];
         foreach ($items as $i => $item) {
-            $natural[$i] = $this->layoutItem($item, new Rect($finalX[$i], $contentTop, $resolvedMain[$i] + $marginsX[$i], INF));
+            $natural[$i] = $this->layoutItem($item, new Rect($finalX[$i], $lineTop, $resolvedMain[$i] + $marginsX[$i], INF), $resolvedMain[$i]);
         }
 
         $crossSizes = [];
         foreach ($natural as $i => $fragment) {
             $crossSizes[$i] = $fragment->rect->height;
         }
-        // §9.4 paso 7 (line cross size): el máximo de los items, salvo que el contenedor declare
-        // su propia altura (ver arriba) — entonces esa altura manda, con overflow permitido.
-        $lineCross = $declaredContentHeight ?? max($crossSizes);
+        $lineCross = $forcedCross ?? max($crossSizes);
 
-        // §9.4/§9.8 (align-items): stretch estira los items SIN cross size definido (ver
-        // hasDefiniteCrossSize()) al cross size de la línea; el resto (incl. stretch sobre un
-        // item con cross size definido, que cae a flex-start per spec) se posiciona según su
-        // propio cross size. Solo Center/FlexEnd necesitan desplazar el item hacia abajo — como
-        // BlockFlowContext/layoutImage posicionan siempre desde arriba (contentTop), ese
-        // desplazamiento exige un SEGUNDO layout del item a la Y correcta (no un simple parche de
-        // coordenadas: los hijos del fragment llevan coordenadas ABSOLUTAS, no relativas al
-        // padre, así que mover solo el rect exterior dejaría el contenido interior desalineado).
         $finalFragments = [];
         foreach ($items as $i => $item) {
             $itemCross = $crossSizes[$i];
             if ($style->alignItems === AlignItems::Stretch && !self::hasDefiniteCrossSize($item)) {
-                // Aproximación documentada por el brief: SIN re-layout interno del contenido —
-                // solo se agranda el rect del BoxFragment (fondo/bordes pintan hasta el nuevo
-                // alto); los hijos quedan en las coordenadas absolutas que ya tenían, ancladas
-                // arriba ("contenido arriba").
                 $finalFragments[] = self::withHeight($natural[$i], $lineCross);
                 continue;
             }
             $offset = match ($style->alignItems) {
                 AlignItems::Center => ($lineCross - $itemCross) / 2.0,
                 AlignItems::FlexEnd => $lineCross - $itemCross,
-                default => 0.0, // FlexStart, o Stretch con cross size definido (cae a flex-start)
+                default => 0.0,
             };
             $finalFragments[] = $offset !== 0.0
-                ? $this->layoutItem($item, new Rect($finalX[$i], $contentTop + $offset, $resolvedMain[$i] + $marginsX[$i], INF))
+                ? $this->layoutItem($item, new Rect($finalX[$i], $lineTop + $offset, $resolvedMain[$i] + $marginsX[$i], INF), $resolvedMain[$i])
                 : $natural[$i];
         }
 
-        $contentBottom = $contentTop + $lineCross;
-        $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
-
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders);
+        return [$finalFragments, $lineCross];
     }
 
     /**
@@ -215,16 +312,27 @@ final readonly class FlexFormattingContext implements FormattingContext
         return $items;
     }
 
-    private function layoutItem(BlockBox|ImageBox $item, Rect $itemRect): BoxFragment
+    /**
+     * M4-T5 (carry-over fix): $usedWidthOverride es el ancho BORDER-BOX que este contexto ya
+     * resolvió para el item (§9.7 en row; stretch de cross size en column, ver layoutColumn())
+     * — se pasa SIEMPRE (nunca condicionalmente a si el item declara su propio width), porque
+     * cuando el item NO tiene width propio el override coincide exactamente con lo que el
+     * cálculo "auto llena el containing width" ya producía (ver docblock de clase), y cuando SÍ
+     * lo tiene, es lo único que evita el hueco/solape documentado en el ledger de T4. Un item que
+     * es él mismo OTRO contenedor flex anidado no recibe override: su propio layout() vuelve a
+     * resolver su caja igual que cualquier contenedor flex normal (el override es un mecanismo
+     * de ITEM, no de contenedor).
+     */
+    private function layoutItem(BlockBox|ImageBox $item, Rect $itemRect, ?float $usedWidthOverride = null): BoxFragment
     {
         if ($item instanceof ImageBox) {
-            return $this->blockFlow->layoutImage($item, $itemRect);
+            return $this->blockFlow->layoutImage($item, $itemRect, $usedWidthOverride);
         }
         if ($item->style->display === Display::Flex) {
             // Item que es él mismo otro contenedor flex (anidado) — ver docblock de clase.
             return $this->layout($item, $itemRect);
         }
-        return $this->blockFlow->layout($item, $itemRect);
+        return $this->blockFlow->layout($item, $itemRect, $usedWidthOverride);
     }
 
     /**
@@ -240,7 +348,12 @@ final readonly class FlexFormattingContext implements FormattingContext
         return $item instanceof ImageBox && ($item->style->height !== null || $item->attrHeight !== null);
     }
 
-    /** Aproximación de stretch (ver §9.4/§9.8 en layout()): agranda el rect sin re-layout interno. */
+    /**
+     * Aproximación de stretch/resolución de main size en column (ver §9.4/§9.8 en layout() y
+     * layoutColumnContainer()): agranda o encoge el rect sin re-layout interno. $atomic del
+     * fragmento original se PRESERVA (un item que es él mismo un contenedor flex anidado sigue
+     * siendo atómico frente a Paginator tras este ajuste geométrico).
+     */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
         return new BoxFragment(
@@ -248,6 +361,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->background,
             $fragment->children,
             $fragment->borders,
+            $fragment->atomic,
         );
     }
 
@@ -420,6 +534,213 @@ final readonly class FlexFormattingContext implements FormattingContext
         foreach ($resolvedMain as $i => $main) {
             $positions[$i] = $cursor;
             $cursor += $marginsX[$i] + $main + $columnGapPx + $extraGap;
+        }
+        return $positions;
+    }
+
+    /**
+     * flex-direction: column — eje principal VERTICAL (brief M4-T5). No soporta wrap (fuera de
+     * alcance de esta tarea: ningún test la ejercita en combinación con column, ver brief; una
+     * columna es siempre una única "línea" vertical, columnGapPx del contenedor queda sin uso en
+     * este eje).
+     *
+     * §9.2 (base, adaptado a altura): flex-basis en px manda (% se resuelve contra la altura
+     * DECLARADA del contenedor si la hay, o 0 si es auto — mismo criterio "sin containing block
+     * real, % contra 0" que IntrinsicSizer); auto → el height CSS propio del item si lo declara
+     * (BlockFlowContext nunca lo aplicaría por sí solo, ver su docblock — de ahí que el ajuste
+     * final de altura pase SIEMPRE por withHeight(), ver más abajo) o, si tampoco lo declara, su
+     * altura NATURAL: layoutear con el content width del contenedor y medir (mismo patrón que la
+     * medición de cross size en row, pero en el eje principal).
+     *
+     * §9.7 (grow/shrink): sin CLAMP a un "min-content de bloque" (a diferencia de row: no hay
+     * concepto de min-content-height en este motor, css-flexbox-1 §4.5 lo definiría como el alto
+     * natural mismo, pero clampar+redistribuir en dos pasadas no lo ejercita ningún test
+     * requerido — overflow permitido, documentado, igual criterio "soft" que el resto del motor).
+     * Sin altura DECLARADA en el contenedor, el main size es indefinido: ni grow/shrink ni
+     * justify-content tienen sentido (huecos libres = 0 por construcción, la columna se limita a
+     * apilar las bases con el gap — "hugs content", brief).
+     *
+     * Gap: el eje principal en column usa row-gap (roles intercambiados respecto a row, ver
+     * columnAxisPositions()). Cross axis (horizontal): stretch (default) estira los items sin
+     * ancho propio al content width del contenedor vía el override del carry-over fix (ver
+     * layoutColumnItem()); un item con su propio width cae a flex-start (mismo criterio que row).
+     *
+     * @param non-empty-list<BlockBox|ImageBox> $items
+     */
+    private function layoutColumnContainer(
+        ComputedStyle $style,
+        array $items,
+        float $x,
+        float $y,
+        float $contentX,
+        float $contentTop,
+        float $contentWidth,
+        ?float $declaredContentHeight,
+        float $paddingBottom,
+        float $borderBottom,
+        float $borderBoxWidth,
+        BorderSet $borders,
+    ): BoxFragment {
+        $n = count($items);
+        $base = [];
+        $marginsY = [];
+        $grow = [];
+        $shrink = [];
+        foreach ($items as $i => $item) {
+            $itemStyle = $item->style;
+            $marginsY[$i] = $itemStyle->marginTop->resolve($contentWidth) + $itemStyle->marginBottom->resolve($contentWidth);
+            $grow[$i] = $itemStyle->flexGrow;
+            $shrink[$i] = $itemStyle->flexShrink;
+
+            if ($itemStyle->flexBasis !== null) {
+                $base[$i] = $itemStyle->flexBasis->resolve($declaredContentHeight ?? 0.0);
+                continue;
+            }
+            $ownHeightPx = $itemStyle->height?->px;
+            if ($ownHeightPx !== null) {
+                $base[$i] = $ownHeightPx;
+                continue;
+            }
+            // Altura natural: layout con el content width del contenedor (el cross size fija el
+            // ancho, el alto queda libre) — SOLO se usa para medir, se descarta (la posición
+            // final de este item se resuelve en una segunda pasada, ver más abajo, una vez
+            // conocido su finalY — el mismo patrón "dos pasadas" que row usa para su cross size).
+            $base[$i] = $this->layoutItem($item, new Rect($contentX, 0.0, $contentWidth, INF))->rect->height;
+        }
+
+        $gapsTotal = $n > 1 ? $style->rowGapPx * ($n - 1) : 0.0;
+        $resolvedMain = $base;
+
+        if ($declaredContentHeight !== null) {
+            $sumOuterBase = array_sum($base) + array_sum($marginsY);
+            $free = $declaredContentHeight - $sumOuterBase - $gapsTotal;
+            if ($free > 0.0) {
+                $sumGrow = array_sum($grow);
+                if ($sumGrow > 0.0) {
+                    foreach ($items as $i => $item) {
+                        $resolvedMain[$i] = $base[$i] + $free * ($grow[$i] / $sumGrow);
+                    }
+                }
+            } elseif ($free < 0.0) {
+                $sumShrinkBase = 0.0;
+                foreach ($items as $i => $item) {
+                    $sumShrinkBase += $shrink[$i] * $base[$i];
+                }
+                if ($sumShrinkBase > 0.0) {
+                    $deficit = abs($free);
+                    foreach ($items as $i => $item) {
+                        $resolvedMain[$i] = max(0.0, $base[$i] - $deficit * (($shrink[$i] * $base[$i]) / $sumShrinkBase));
+                    }
+                }
+            }
+        }
+
+        $finalY = self::columnAxisPositions($resolvedMain, $marginsY, $declaredContentHeight, $contentTop, $style->rowGapPx, $style->justifyContent);
+
+        $finalFragments = [];
+        foreach ($items as $i => $item) {
+            $stretchCandidate = $style->alignItems === AlignItems::Stretch && !self::hasDefiniteCrossSizeColumn($item);
+            $widthOverride = $stretchCandidate ? $contentWidth : null;
+
+            $frag = $this->layoutColumnItem($item, $contentX, $finalY[$i], $contentWidth, $widthOverride, $resolvedMain[$i]);
+            $itemCrossWidth = $frag->rect->width;
+            $offset = match ($style->alignItems) {
+                AlignItems::Center => ($contentWidth - $itemCrossWidth) / 2.0,
+                AlignItems::FlexEnd => $contentWidth - $itemCrossWidth,
+                default => 0.0, // FlexStart, o Stretch ya a ancho completo / con ancho propio
+            };
+            if ($offset !== 0.0) {
+                $frag = $this->layoutColumnItem($item, $contentX + $offset, $finalY[$i], $contentWidth, $widthOverride, $resolvedMain[$i]);
+            }
+            $finalFragments[] = $frag;
+        }
+
+        $sumOuterResolved = array_sum($resolvedMain) + array_sum($marginsY);
+        $naturalContentHeight = $sumOuterResolved + $gapsTotal;
+        $lineCross = $declaredContentHeight ?? $naturalContentHeight;
+
+        $contentBottom = $contentTop + $lineCross;
+        $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
+
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true);
+    }
+
+    /**
+     * Layoutea un item de columna en ($x, $y) y fuerza su altura al main size YA resuelto
+     * (§9.7) — BlockFlowContext nunca produciría esa altura por sí solo (no soporta height en
+     * bloques, ver su docblock; y aunque la soportara, el valor final aquí puede venir de
+     * flex-grow/shrink, no de su propio CSS), así que se ajusta vía withHeight() (mismo mecanismo
+     * geométrico que align-items:stretch en row: sin re-layout interno, contenido anclado
+     * arriba). El ancho, en cambio, SÍ es real (no geométrico): $widthOverride, cuando no es
+     * null, reutiliza el mecanismo de carry-over fix (ver layoutItem()) para estirar el item al
+     * content width del contenedor.
+     */
+    private function layoutColumnItem(BlockBox|ImageBox $item, float $x, float $y, float $contentWidth, ?float $widthOverride, float $resolvedHeight): BoxFragment
+    {
+        $frag = $this->layoutItem($item, new Rect($x, $y, $widthOverride ?? $contentWidth, INF), $widthOverride);
+        return abs($frag->rect->height - $resolvedHeight) > 0.0001 ? self::withHeight($frag, $resolvedHeight) : $frag;
+    }
+
+    /**
+     * §9.4 análogo para column: un item tiene cross size (ANCHO, aquí) definido cuando declara su
+     * propio width CSS — un BlockBox sin width propio SIEMPRE lo llena vía BlockFlowContext (no
+     * hay shrink-to-fit en este motor, documentado en su docblock), así que es candidato a
+     * stretch; un ImageBox con width CSS o atributo HTML width propios tampoco se estira (mismo
+     * criterio que hasDefiniteCrossSize() para row/altura), pero uno puramente intrínseco sí,
+     * para poder llenar el contenedor cuando align-items:stretch lo pide.
+     */
+    private static function hasDefiniteCrossSizeColumn(BlockBox|ImageBox $item): bool
+    {
+        if ($item instanceof ImageBox) {
+            return $item->style->width !== null || $item->attrWidth !== null;
+        }
+        return $item->style->width !== null;
+    }
+
+    /**
+     * css-flexbox-1 §9.5 análogo para column: eje principal vertical, gap = row-gap (roles
+     * intercambiados respecto a row, brief: "columnGap ↔ rowGap roles swap"). justify-content
+     * solo distribuye leftover cuando el contenedor declara altura ($availableHeight !== null) —
+     * con auto, no hay leftover que repartir (el contenido MANDA la altura), justify-content
+     * queda sin efecto observable, documentado en el brief ("auto height → hugs content, justify
+     * moot").
+     *
+     * @param array<int, float> $resolvedMain
+     * @param array<int, float> $marginsY
+     * @return array<int, float> y del borde de MARGEN (no border-box) de cada item, mismo índice
+     */
+    private static function columnAxisPositions(
+        array $resolvedMain,
+        array $marginsY,
+        ?float $availableHeight,
+        float $contentTop,
+        float $rowGapPx,
+        JustifyContent $justifyContent,
+    ): array {
+        $n = count($resolvedMain);
+        $gapsTotal = $n > 1 ? $rowGapPx * ($n - 1) : 0.0;
+
+        $startOffset = 0.0;
+        $extraGap = 0.0;
+        if ($availableHeight !== null) {
+            $sumOuter = 0.0;
+            foreach ($resolvedMain as $i => $main) {
+                $sumOuter += $main + $marginsY[$i];
+            }
+            $leftover = $availableHeight - $sumOuter - $gapsTotal;
+            $startOffset = match ($justifyContent) {
+                JustifyContent::Center => $leftover / 2.0,
+                JustifyContent::FlexEnd => $leftover,
+                default => 0.0,
+            };
+            $extraGap = ($justifyContent === JustifyContent::SpaceBetween && $n > 1) ? $leftover / ($n - 1) : 0.0;
+        }
+
+        $positions = [];
+        $cursor = $contentTop + $startOffset;
+        foreach ($resolvedMain as $i => $main) {
+            $positions[$i] = $cursor;
+            $cursor += $marginsY[$i] + $main + $rowGapPx + $extraGap;
         }
         return $positions;
     }
