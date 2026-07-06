@@ -54,19 +54,22 @@ use Pliego\Text\FontCatalog;
  * de que BlockFlowContext::layout() nunca examina el display del BOX que se le pasa como raíz,
  * solo el de sus HIJOS (mismo gap documentado en ese docblock para el <body> raíz).
  *
- * ADJUDICACIÓN "border-box main size" (brief): el tamaño resuelto de un item en el eje principal
- * (§9.2 base / §9.7 resuelto) se trata UNIFORMEMENTE como su ancho BORDER-BOX, sea cual sea la
- * fuente (flex-basis, width CSS, o max-content) — ver hypotheticalMainSize(). Al layoutear el
- * item, esta clase pasa un Rect cuyo width = tamaño resuelto + márgenes del item, y dado que
- * BlockFlowContext ya trata width:auto como "llena el containing width menos márgenes", un item
- * SIN width propio (el caso normal: flex-basis:auto tomó el max-content) reproduce el tamaño
- * resuelto exactamente. DIVERGENCIA DOCUMENTADA: un item que SÍ declara su propio width CSS (o,
- * para ImageBox, su propio width/attr/intrínseco) hace que BlockFlowContext/layoutImage ignoren
- * el Rect recibido y usen ESE width en su lugar — si flex-grow/shrink ajustó el tamaño resuelto
- * por encima/debajo de ese width declarado, el resultado RENDERIZADO sigue el width propio del
- * item, no el ajuste de flex (BlockFlowContext no tiene mecanismo de "override" de width, ver
- * brief). Ninguno de los tests requeridos ejercita este conflicto (el item con width propio de
- * "LA TARJETA" tiene flex-grow:0, así que nunca diverge).
+ * ADJUDICACIÓN "border-box main size" (brief, contrato ACTUAL tras el M4 final-review — ver
+ * Finding 1): el tamaño resuelto de un item en el eje principal (§9.2 base / §9.7 resuelto) se
+ * trata UNIFORMEMENTE como su ancho BORDER-BOX, sea cual sea la fuente (flex-basis, width CSS, o
+ * max-content) — ver hypotheticalMainSize(). Ese tamaño resuelto SIEMPRE GANA sobre cualquier
+ * width propio que el item declare, para CUALQUIER tipo de item: BlockBox normal y ImageBox vía
+ * el parámetro $usedWidthOverride de BlockFlowContext::layout()/layoutImage() (mecanismo desde
+ * T5), y —desde el M4 final-review— también un item que es él mismo OTRO contenedor
+ * `display:flex` anidado, vía el mismo parámetro en FlexFormattingContext::layout() (ver
+ * layoutItem() y el docblock de ese método). Antes de esa corrección, un item flex anidado era el
+ * ÚNICO tipo de item que NO recibía el override: su propio layout() volvía a resolver su width CSS
+ * declarado desde cero, reproduciendo para ese caso concreto el mismo hueco/solape que T5 ya había
+ * cerrado para BlockBox/ImageBox — ver FlexFormattingContextTest "a nested display:flex item
+ * receives the resolved width override too". Un item SIN width propio (el caso normal:
+ * flex-basis:auto tomó el max-content) coincide con este mecanismo trivialmente, porque
+ * BlockFlowContext ya trata width:auto como "llena el containing width menos márgenes" — el
+ * override simplemente confirma ese mismo número.
  */
 final readonly class FlexFormattingContext implements FormattingContext
 {
@@ -81,7 +84,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $this->blockFlow->setFlexContext($this);
     }
 
-    public function layout(BlockBox $container, Rect $containingBlock): BoxFragment
+    public function layout(BlockBox $container, Rect $containingBlock, ?float $usedWidthOverride = null): BoxFragment
     {
         $style = $container->style;
         // Resolución de la propia caja del contenedor: EL MISMO cálculo que BlockFlowContext hace
@@ -108,17 +111,31 @@ final readonly class FlexFormattingContext implements FormattingContext
         $borderTop = $style->borderTop->widthPx;
         $borderBottom = $style->borderBottom->widthPx;
 
-        $declaredWidth = $style->width;
-        $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
-        if ($declaredWidthPx === null) {
-            $borderBoxWidth = $cbWidth - $marginLeft - $marginRight;
-            $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
-        } elseif ($style->boxSizing === 'border-box') {
-            $borderBoxWidth = $declaredWidthPx;
+        // M4 final-review Finding 1: $usedWidthOverride, cuando no es null, es el ancho BORDER-BOX
+        // que un FlexFormattingContext EXTERIOR (un contenedor flex del que este contenedor es,
+        // él mismo, un item DIRECTO — ver layoutItem()) ya resolvió para esta caja vía §9.7. Mismo
+        // parámetro y mismo criterio de "gana sobre cualquier width propio declarado" que
+        // BlockFlowContext::layout() (ver su docblock de T5): antes de este parámetro, un item
+        // que era OTRO contenedor flex anidado ignoraba por completo el ajuste de flex-grow/shrink
+        // de su padre y volvía a resolver su propio width CSS desde cero, reproduciendo el mismo
+        // hueco/solape que T5 ya arregló para items BlockBox/ImageBox normales — el bug era
+        // exactamente el mismo, solo que layoutItem() nunca pasaba el override en este caso.
+        if ($usedWidthOverride !== null) {
+            $borderBoxWidth = $usedWidthOverride;
             $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
         } else {
-            $contentWidth = $declaredWidthPx;
-            $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
+            $declaredWidth = $style->width;
+            $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
+            if ($declaredWidthPx === null) {
+                $borderBoxWidth = $cbWidth - $marginLeft - $marginRight;
+                $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
+            } elseif ($style->boxSizing === 'border-box') {
+                $borderBoxWidth = $declaredWidthPx;
+                $contentWidth = max(0.0, $borderBoxWidth - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
+            } else {
+                $contentWidth = $declaredWidthPx;
+                $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
+            }
         }
 
         $contentX = $x + $borderLeft + $paddingLeft;
@@ -251,6 +268,23 @@ final readonly class FlexFormattingContext implements FormattingContext
      * declarada del contenedor— solo se pasa cuando hay UNA sola línea (ver layout()): con 2+, no
      * hay align-content, cada línea se limita a su máximo natural.
      *
+     * M4 final-review Finding 2(a): §9.4 define el cross size de una línea como el máximo de los
+     * OUTER cross size de sus items — border-box MÁS márgenes en el eje cruzado (margin-top +
+     * margin-bottom aquí, en row) — no el border-box a secas. Antes de esta corrección,
+     * $crossSizes solo miraba `$fragment->rect->height` (border-box): un item con margin-top>0 ya
+     * pintaba su caja desplazada hacia abajo ese margen (BlockFlowContext/layoutImage lo aplican
+     * incondicionalmente al posicionar, con o sin flex), pero la línea nunca reservaba ESE espacio
+     * al calcular su propio cross size ni, por tanto, la altura del contenedor — el fondo de la
+     * caja del item quedaba pintado por debajo del borde inferior del propio contenedor flex.
+     * $crossMarginsY se reutiliza también para el stretch target de más abajo (el margen no se
+     * estira, solo el border-box entre ambos). NOTA (finding 4 del review, solo documentación):
+     * el % de estos márgenes verticales se resuelve contra $contentWidth — el mismo criterio css
+     * 2.2 §10.3 ("todo margin en % usa el ancho del containing block, incluso los verticales") ya
+     * aplicado a marginsX/marginsY en el resto de esta clase; NO es una base distinta por ser
+     * cross-axis en vez de main-axis, es la MISMA base contentWidth en ambos casos — la única
+     * base realmente "dual" en este método es otra (ver el comentario junto a $marginsX en
+     * resolveMainSizes()).
+     *
      * @param non-empty-list<BlockBox|ImageBox> $items items de ESTA línea
      * @return array{0: list<Fragment>, 1: float} fragments (orden de documento) + cross size de la línea
      */
@@ -264,9 +298,12 @@ final readonly class FlexFormattingContext implements FormattingContext
             $natural[$i] = $this->layoutItem($item, new Rect($finalX[$i], $lineTop, $resolvedMain[$i] + $marginsX[$i], INF), $resolvedMain[$i]);
         }
 
+        $crossMarginsY = [];
         $crossSizes = [];
         foreach ($natural as $i => $fragment) {
-            $crossSizes[$i] = $fragment->rect->height;
+            $itemStyle = $items[$i]->style;
+            $crossMarginsY[$i] = $itemStyle->marginTop->resolve($contentWidth) + $itemStyle->marginBottom->resolve($contentWidth);
+            $crossSizes[$i] = $fragment->rect->height + $crossMarginsY[$i];
         }
         $lineCross = $forcedCross ?? max($crossSizes);
 
@@ -274,7 +311,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         foreach ($items as $i => $item) {
             $itemCross = $crossSizes[$i];
             if ($style->alignItems === AlignItems::Stretch && !self::hasDefiniteCrossSize($item)) {
-                $finalFragments[] = self::withHeight($natural[$i], $lineCross);
+                $stretchTarget = max(0.0, $lineCross - $crossMarginsY[$i]);
+                $finalFragments[] = self::withHeight($natural[$i], $stretchTarget);
                 continue;
             }
             $offset = match ($style->alignItems) {
@@ -318,10 +356,14 @@ final readonly class FlexFormattingContext implements FormattingContext
      * — se pasa SIEMPRE (nunca condicionalmente a si el item declara su propio width), porque
      * cuando el item NO tiene width propio el override coincide exactamente con lo que el
      * cálculo "auto llena el containing width" ya producía (ver docblock de clase), y cuando SÍ
-     * lo tiene, es lo único que evita el hueco/solape documentado en el ledger de T4. Un item que
-     * es él mismo OTRO contenedor flex anidado no recibe override: su propio layout() vuelve a
-     * resolver su caja igual que cualquier contenedor flex normal (el override es un mecanismo
-     * de ITEM, no de contenedor).
+     * lo tiene, es lo único que evita el hueco/solape documentado en el ledger de T4. M4
+     * final-review Finding 1: un item que es él mismo OTRO contenedor flex anidado SÍ recibe el
+     * override ahora — antes de esta corrección se descartaba para este caso concreto (ver el
+     * docblock de FlexFormattingContext::layout()), dejando que el item anidado volviera a
+     * resolver su propio width CSS desde cero, el mismo hueco/solape de T4 resurgiendo para este
+     * tipo de item; el override sigue siendo un mecanismo de ITEM (se reaplica en cada nivel de
+     * anidación vía la llamada recursiva de más abajo), nunca de CONTENEDOR de nivel superior (la
+     * llamada pública en layout() para el contenedor raíz nunca lo recibe).
      */
     private function layoutItem(BlockBox|ImageBox $item, Rect $itemRect, ?float $usedWidthOverride = null): BoxFragment
     {
@@ -329,8 +371,9 @@ final readonly class FlexFormattingContext implements FormattingContext
             return $this->blockFlow->layoutImage($item, $itemRect, $usedWidthOverride);
         }
         if ($item->style->display === Display::Flex) {
-            // Item que es él mismo otro contenedor flex (anidado) — ver docblock de clase.
-            return $this->layout($item, $itemRect);
+            // Item que es él mismo otro contenedor flex (anidado) — ver docblock de clase y el
+            // párrafo de Finding 1 arriba: el override viaja con él, igual que a BlockFlowContext.
+            return $this->layout($item, $itemRect, $usedWidthOverride);
         }
         return $this->blockFlow->layout($item, $itemRect, $usedWidthOverride);
     }
@@ -406,6 +449,22 @@ final readonly class FlexFormattingContext implements FormattingContext
      * hasta estabilizar, se simplifica aquí a 2 iteraciones como máximo — brief M4-T4/T5). Sin
      * items con grow>0 (o shrink>0) el/los item(s) simplemente se quedan en su base — overflow
      * permitido, sin min/max-width que limite más allá del min-content.
+     *
+     * NOTA (finding 4 del review final M4, solo documentación — no se toca el comportamiento): el
+     * $marginsX que devuelve este método, resuelto contra $contentWidth, alimenta DOS usos con
+     * bases distintas para el % — mainAxisPositions() lo usa TAL CUAL (misma base, contentWidth)
+     * para calcular $finalX, pero layoutRowLine() vuelve a pasar por delante ESE MISMO margen
+     * dentro de `resolvedMain[$i] + marginsX[$i]` como el WIDTH del Rect que se entrega a
+     * layoutItem() — y layoutItem()/BlockFlowContext::layout() (o layoutImage(), o esta misma
+     * clase para un item flex anidado, ver Finding 1) vuelven a resolver el margin-left/right
+     * del item DESDE CERO, pero contra ESE Rect->width (contentWidth ya no es la base: ahora es
+     * resolvedMain[i]+marginsX[i], un número distinto). Con márgenes en px es un no-op (mismo
+     * valor con cualquier base); con márgenes en % puede producir dos valores de margen distintos
+     * a partir de la MISMA declaración CSS — una sola vez para el bookkeeping de posición
+     * (mainAxisPositions()) y otra, potencialmente distinta, para la caja realmente pintada. Sin
+     * test en el alcance de M4 lo ejercita (ningún caso usa % en margin de un item flex), documentado
+     * aquí para que una futura tarea con % en margin sepa dónde mirar antes de asumir que ambos
+     * cálculos coinciden.
      *
      * @param list<BlockBox|ImageBox> $items
      * @return array{0: array<int, float>, 1: array<int, float>} resolvedMain (border-box, eje
@@ -640,7 +699,20 @@ final readonly class FlexFormattingContext implements FormattingContext
         $finalFragments = [];
         foreach ($items as $i => $item) {
             $stretchCandidate = $style->alignItems === AlignItems::Stretch && !self::hasDefiniteCrossSizeColumn($item);
-            $widthOverride = $stretchCandidate ? $contentWidth : null;
+            // M4 final-review Finding 2(b): el override de stretch es el ancho CONTENT del
+            // contenedor MENOS los márgenes horizontales propios del item (resueltos contra
+            // $contentWidth, mismo criterio que marginsY más arriba), no $contentWidth a secas.
+            // Antes de esta corrección, un item con margin-left/right propio se posicionaba en
+            // contentX + su marginLeft (BlockFlowContext/layoutItem lo aplican igual que a
+            // cualquier bloque) pero se le seguía forzando el ANCHO COMPLETO del contenedor,
+            // dejando su borde derecho tantos px más allá del borde de contenido como sumaran sus
+            // márgenes — el mismo hueco/solape de Finding 1/2(a), aquí en el eje cruzado de column.
+            $widthOverride = null;
+            if ($stretchCandidate) {
+                $itemMarginLeft = $item->style->marginLeft->resolve($contentWidth);
+                $itemMarginRight = $item->style->marginRight->resolve($contentWidth);
+                $widthOverride = max(0.0, $contentWidth - $itemMarginLeft - $itemMarginRight);
+            }
 
             $frag = $this->layoutColumnItem($item, $contentX, $finalY[$i], $contentWidth, $widthOverride, $resolvedMain[$i]);
             $itemCrossWidth = $frag->rect->width;

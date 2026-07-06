@@ -421,3 +421,121 @@ it('an empty flex container with a declared height resolves to that height, no i
     expect($frag->children)->toBe([]);
     expect($frag->rect->height)->toBe(40.0);
 });
+
+// --- M4 final-review Finding 1: width override must reach a nested flex-container item -------
+
+it('a nested display:flex item receives the resolved width override too, no gap left behind', function () {
+    // Container 500px, two items: `inner` is ITSELF a flex container declaring its own
+    // width:100px but flex-grow:1, `sibling` declares width:100px with no grow. §9.7: free =
+    // 500 - 100 - 100 = 300, absorbed entirely by inner (the only grow>0 item) -> inner's
+    // resolved main size = 100 + 300 = 400. Before the fix, layoutItem() skipped the override for
+    // items whose OWN display is flex (it re-invoked FlexFormattingContext::layout() with no
+    // usedWidthOverride at all), so inner's own layout() re-resolved its declared width:100px
+    // from scratch -- rendering at 100px instead of 400px and leaving a 300px hole between inner's
+    // painted right edge (100) and sibling's left edge (400), the exact T4 gap bug resurfacing for
+    // this item kind.
+    $inner = new BlockBox(flexStyle(['display' => 'flex', 'width' => LengthPercentage::px(100.0), 'flex-grow' => 1.0]), [], 'div');
+    $sibling = new BlockBox(flexStyle(['width' => LengthPercentage::px(100.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(500.0)]), [$inner, $sibling], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 600.0, INF));
+    [$innerFrag, $siblingFrag] = $frag->children;
+    assert($innerFrag instanceof BoxFragment && $siblingFrag instanceof BoxFragment);
+
+    expect($innerFrag->rect->x)->toBe(0.0);
+    expect($innerFrag->rect->width)->toBe(400.0); // grown via flex-grow, override reaches the nested container's own box resolution
+    expect($siblingFrag->rect->x)->toBe(400.0); // flush against inner's grown right edge, no 300px hole
+    expect($siblingFrag->rect->width)->toBe(100.0);
+});
+
+it('a nested display:flex item with no grow (no leftover to distribute) is unaffected by the override plumbing', function () {
+    // Regression companion to the probe above: when the resolved main size already equals the
+    // item's own declared width (no grow/shrink adjusts it), threading the override through must
+    // be a pure no-op -- same geometry with or without the fix.
+    $inner = new BlockBox(flexStyle(['display' => 'flex', 'width' => LengthPercentage::px(150.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(300.0)]), [$inner], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    $innerFrag = $frag->children[0];
+    assert($innerFrag instanceof BoxFragment);
+
+    expect($innerFrag->rect->width)->toBe(150.0);
+    expect($innerFrag->rect->x)->toBe(0.0);
+});
+
+it('a top-level flex container (no override passed in) resolves its own declared width exactly as before', function () {
+    // Regression: FlexFormattingContext::layout() is also THE entry point Engine/BlockFlowContext
+    // call with no third argument at all -- the new optional parameter must not disturb that path.
+    $item = new BlockBox(flexStyle(), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(250.0)]), [$item], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+
+    expect($frag->rect->width)->toBe(250.0);
+});
+
+// --- M4 final-review Finding 2(a): row cross-axis margins count toward line cross size --------
+
+it('row: an item cross-axis (vertical) margin counts toward the line cross size and the container height, §9.4 OUTER size', function () {
+    // item1: 20px tall, no margin. item2: 20px tall with margin-top:30 (margin-bottom:0). Outer
+    // cross size of item2 = 30 (margin-top) + 20 (height) + 0 (margin-bottom) = 50 -- the true
+    // line cross size per §9.4 (OUTER, margin-inclusive). Before the fix, the line cross was
+    // computed from BORDER-BOX heights only (max(20, 20) = 20): item2's box (already pushed down
+    // by its own margin-top, applied by BlockFlowContext regardless) painted its bottom edge at
+    // 50px while the container -- sized off the wrong (too-small) line cross -- stopped at 20px,
+    // a full 30px overflow past the container's bottom edge.
+    $item1 = new ImageBox(flexStyle(), 'a.jpg', 20, 20, 20.0, 20.0);
+    $item2 = new ImageBox(flexStyle(['margin-top' => LengthPercentage::px(30.0)]), 'b.jpg', 20, 20, 20.0, 20.0);
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(200.0)]), [$item1, $item2], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$f1, $f2] = $frag->children;
+    assert($f1 instanceof BoxFragment && $f2 instanceof BoxFragment);
+
+    expect($f2->rect->y)->toBe(30.0); // margin-top still applied to the box itself, unchanged
+    expect($f2->rect->bottom())->toBe(50.0); // 30 (margin-top) + 20 (height)
+    expect($frag->rect->height)->toBe(50.0); // container grows to the OUTER cross size, no overflow past its own bottom edge
+});
+
+it('row: align-items stretch shrinks its stretch target by the item\'s own cross-axis margins', function () {
+    // Container declares height:100 (forces the single line's cross size to 100). item has
+    // margin-top:10, margin-bottom:20 and no definite cross size -> candidate for stretch. Its
+    // OUTER box (margin-top + stretched height + margin-bottom) must fill the 100px line exactly:
+    // stretched height = 100 - 10 - 20 = 70, box top at y=10 (margin-top), box bottom at 80,
+    // leaving the declared margin-bottom of 20 below it (80 + 20 = 100).
+    $childStyle = flexStyle();
+    $item = new BlockBox(flexStyle(['margin-top' => LengthPercentage::px(10.0), 'margin-bottom' => LengthPercentage::px(20.0)], $childStyle), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(300.0), 'height' => Length::px(100.0)]), [$item], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+
+    expect($itemFrag->rect->y)->toBe(10.0);
+    expect($itemFrag->rect->height)->toBe(70.0);
+    expect($itemFrag->rect->bottom())->toBe(80.0);
+});
+
+// --- M4 final-review Finding 2(b): column stretch subtracts the item's own horizontal margins --
+
+it('column: align-items stretch subtracts the item\'s own horizontal margins from the stretch width, no overflow past the content edge', function () {
+    // Container content width 300px; item declares margin-right:20px and no width of its own ->
+    // candidate for stretch. Before the fix, the stretch override was the FULL content width
+    // (300), so the item's box (positioned at contentX + margin-left = 0) painted a 300px-wide
+    // box whose right edge landed at 300 -- 20px PAST where it should stop (300 - 20 = 280, the
+    // content edge minus its own declared margin-right).
+    $item = new BlockBox(flexStyle(['height' => Length::px(20.0), 'margin-right' => LengthPercentage::px(20.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(300.0), 'flex-direction' => 'column']),
+        [$item],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+
+    expect($itemFrag->rect->x)->toBe(0.0);
+    expect($itemFrag->rect->width)->toBe(280.0); // 300 - 20 (margin-right)
+    expect($itemFrag->rect->right())->toBe(280.0); // flush against the margin, not the raw content edge
+});

@@ -54,11 +54,13 @@ rest of flexbox-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
   - **`align-items`**: `flex-start`, `center`, `flex-end`, `stretch`
     (default). Stretch is a **geometry-only approximation**: an item
     without a definite cross size gets its `BoxFragment` (background/
-    border box) resized to the line's cross size, but its own content is
+    border box) resized to the line's cross size (minus its own
+    cross-axis margins, which are never stretched), but its own content is
     never re-laid-out or re-centered inside the new box — text/child
     boxes stay anchored where they were, and a stretched `<img>` keeps its
-    own intrinsic pixels scaled to fill the taller box rather than being
-    genuinely re-measured.
+    own intrinsic bitmap at its originally-measured pixel size: only the
+    surrounding box (background/borders) grows to fill the line, the
+    decoded image itself is never re-scaled or genuinely re-measured.
   - **`flex-grow`**/**`flex-shrink`**/**`flex-basis`** (longhands) and the
     `flex` shorthand (css-flexbox-1 §7.1.1's full keyword/number table:
     `none`, `initial`, `auto`, `<N>`, `<width>`, `<N> <M>`, etc.). An item's
@@ -67,7 +69,12 @@ rest of flexbox-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
     item that ALSO declares its own CSS `width` still grows/shrinks from
     that width as its starting point instead of being locked to it — the
     resolved flex size always wins at render time (the width only seeds the
-    hypothetical size flex-grow/shrink then adjust). Shrinking clamps each
+    hypothetical size flex-grow/shrink then adjust), and this holds for
+    every item kind: a plain block, an `<img>`, and — since the M4
+    final-review — an item that is itself a nested `display: flex`
+    container, whose own declared width is likewise overridden by its
+    parent's resolved main size instead of being re-resolved from scratch.
+    Shrinking clamps each
     item at its own min-content (the longest unbreakable word) and
     redistributes any remaining deficit in one extra pass — not the
     spec's fully iterative resolution, but stable for the two-item cases
