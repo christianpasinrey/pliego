@@ -1,0 +1,488 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Pliego\Layout;
+
+use Pliego\Box\BlockBox;
+use Pliego\Box\TableBox;
+use Pliego\Box\TableCellBox;
+use Pliego\Box\TableRowBox;
+use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderSet;
+use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Geometry\Rect;
+use Pliego\Text\FontCatalog;
+
+/**
+ * CSS 2.2 §17.5.2 (column width algorithm) + §17.6.1 (separated borders model, border-spacing).
+ *
+ * ADJUDICACIÓN (no implementa FormattingContext): la interfaz del milestone tipa
+ * `layout(BlockBox $box, Rect): BoxFragment` — una TableBox NO es una BlockBox (son cajas
+ * hermanas en el árbol, ver TableBox/BlockBox), así que esta clase no puede satisfacer esa firma
+ * sin ensuciar el contrato del interface con una unión de tipos que el resto de sus
+ * implementadores (BlockFlowContext, FlexFormattingContext) no necesitan. Se mantiene como
+ * COLABORADOR INDEPENDIENTE con su propia firma `layout(TableBox, Rect): BoxFragment` — el mismo
+ * criterio "standalone, not FormattingContext" que ya aplica de facto a InlineFlowContext (nunca
+ * implementó la interfaz, layoutea listas de runs, no una BlockBox). El texto del plan de
+ * milestone que dice "implements FormattingContext" es aspiracional/impreciso; esta nota documenta
+ * la desviación deliberada.
+ *
+ * RUPTURA DE CICLO (BlockFlowContext <-> TableFormattingContext): idéntico patrón que M4-T4 usa
+ * para Block<->Flex (ver el docblock de clase de FlexFormattingContext). El constructor —firma de
+ * contrato del milestone, `(TextMeasurer, FontCatalog, IntrinsicSizer)` + `?WarningCollector`
+ * opcional al final, igual que Flex— crea su PROPIO BlockFlowContext interno (mismos
+ * measurer/catalog/warnings) y lo conecta consigo mismo vía `BlockFlowContext::setTableContext()`
+ * (inyección perezosa: BlockFlowContext también expone una versión perezosa —autocreada la
+ * primera vez que hace falta— para cualquier caller, Engine incluido, que solo construya
+ * `new BlockFlowContext(...)` sin wiring explícito). Así, cuando el BlockFlowContext interno de
+ * este contexto layoutea el contenido de una celda y encuentra una TableBox anidada (tabla dentro
+ * de celda), vuelve a ESTA MISMA instancia sin necesitar recursión explícita aquí — análogo a como
+ * un bloque anidado con un descendiente flex encuentra el FlexFormattingContext ya wireado de su
+ * BlockFlowContext padre.
+ *
+ * Nº DE COLUMNAS (§17.2.1, sin rowspan — M6 lo difiere, ver TableCellBox): max de Σcolspan por
+ * fila (ver columnCount()); sin necesidad de rastrear una grid de celdas ocupadas porque no hay
+ * rowspan que desplace columnas entre filas — el índice de columna de una celda depende solo de
+ * las celdas QUE LA PRECEDEN EN SU PROPIA FILA.
+ *
+ * AUTO (table-layout:auto, el default, o table-layout:fixed sin width declarado — ver más abajo):
+ * min/max-content POR CELDA vía IntrinsicSizer sobre una BlockBox SINTÉTICA que envuelve
+ * `$cell->children` con el propio ComputedStyle de la celda (más barato que añadir un método
+ * dedicado a IntrinsicSizer para `list<...>` — su sizeBlock() YA suma el padding/borde propios de
+ * ESE style, exactamente "cell intrinsic = children intrinsic + cell paddings + cell borders" sin
+ * código adicional; ver cellMaxContent()/cellMinContent()). Por columna: max/min = el MAYOR entre
+ * todas las celdas de span=1 que caen en esa columna (distintas filas pueden competir por la misma
+ * columna, gana el máximo, nunca se suman). Una celda con colspan>1 reparte su EXCESO (lo que su
+ * propio min/max supera a la suma de las columnas que abarca) entre esas columnas, proporcional al
+ * max de single-span YA acumulado en cada una (partes iguales si todas están en 0) — la MISMA
+ * ponderación para el exceso de max Y el de min (adjudicación del brief: no hay una ponderación
+ * separada "por min" independiente). Ver autoColumnExtents().
+ *
+ * Ancho de tabla (auto): width declarado (resuelto contra el containing block, box-sizing
+ * reinterpretado igual que un bloque normal) si lo hay; si no, el MENOR entre el ancho que un
+ * bloque normal auto ocuparía en este containing block (cbWidth − márgenes − padding − borde
+ * propios) y Σmax de columnas + spacing total — un "shrink-to-fit" simplificado (no el algoritmo
+ * completo de CAPMIN/GRIDMIN de la spec, adjudicación del brief). available = ese content width
+ * menos el spacing total (borderSpacing×(cols+1), separated model §17.6.1). Reparto por columna
+ * (§17.5.2.2, exactamente el orden de ramas del brief): Σmax ≤ available → cada col su max (+
+ * sobrante, solo posible con width declarado mayor que el natural, repartido proporcional al max,
+ * partes iguales si Σmax=0); Σmin ≥ available → cada col su min, overflow permitido, warning
+ * ("table minimum content width exceeds available width"); intermedio → interpolación lineal
+ * min+(available−Σmin)×(max−min)/(Σmax−Σmin). Ver distributeAutoWidths().
+ *
+ * FIXED (table-layout:fixed CON width declarado — sin él, warning + fallback a auto, ver más
+ * abajo): NINGUNA llamada a IntrinsicSizer (rápido, la razón de ser de fixed). La PRIMERA fila
+ * manda: cada celda de span=1 con width propio (px o %, % contra el content width de la tabla) fija
+ * esa columna; las columnas sin declarar (incluidas las que colspan cubre, repartido a partes
+ * iguales entre sus columnas) se reparten lo que quede del available entre sí, a partes iguales.
+ * Filas siguientes NO influyen en absoluto en los anchos (documentado: si declaran menos/más
+ * celdas que cols, sus celdas simplemente ocupan lo que su colspan cubra en la grid ya fijada).
+ * Ver fixedColumnWidths().
+ *
+ * Celdas y filas: cada celda se layoutea con el BlockFlowContext interno vía el mecanismo de
+ * $usedWidthOverride (patrón M4-T5) = ancho BORDER-BOX resuelto para ella (suma de los anchos de
+ * columna que abarca + el borderSpacing INTERNO entre esas columnas, span−1 veces) — así un width
+ * propio declarado en la celda NUNCA gana sobre el ancho de columna ya decidido por el algoritmo
+ * (mismo criterio "el override siempre gana" que Flex/Block ya documentan). Altura de fila =
+ * MÁXIMO de las alturas (border-box) de fragmento de sus celdas; las celdas más bajas se ESTIRAN
+ * geometry-only a esa altura (mismo patrón que FlexFormattingContext::withHeight(): el rect crece,
+ * el contenido NO se re-layoutea ni se centra — vertical-align:top implícito, M5-T5 revisará
+ * middle/bottom). Fragmento de FILA: BoxFragment normal (atomic=false — M5-T5 lo pondrá a true
+ * para que Paginator la trate como unidad de paginación; documentado, no un bug de esta tarea),
+ * SIN bordes propios (CSS 2.2 §17.6.1: en el modelo separado, filas/row-groups NUNCA pintan borde
+ * propio, solo celdas y la tabla exterior lo hacen — sí pinta su propio background, detrás de sus
+ * celdas). Orden de pintado gratis por anidamiento de fragmentos: tabla → fila → celda → contenido.
+ *
+ * border-spacing (un solo valor para ambos ejes, T2 ya documenta esa simplificación): horizontal
+ * antes de la primera columna, entre columnas, y después de la última (spacing×(cols+1) total);
+ * vertical idéntico entre/alrededor de filas, acumulado fila a fila en vez de precalculado (no
+ * hace falta conocer el nº de filas de antemano: cada iteración añade el spacing tras la fila,
+ * incluida la última, así el cursor final YA incluye el spacing de cierre sin caso especial).
+ */
+final readonly class TableFormattingContext
+{
+    private BlockFlowContext $blockFlow;
+
+    public function __construct(
+        private TextMeasurer $measurer,
+        private FontCatalog $catalog,
+        private IntrinsicSizer $sizer,
+        private ?WarningCollector $warnings = null,
+    ) {
+        $this->blockFlow = new BlockFlowContext($measurer, $catalog, $warnings);
+        $this->blockFlow->setTableContext($this);
+    }
+
+    private function warn(string $message): void
+    {
+        $this->warnings?->addWarning($message);
+    }
+
+    public function layout(TableBox $table, Rect $containingBlock): BoxFragment
+    {
+        $style = $table->style;
+        $cbWidth = $containingBlock->width;
+
+        // Resolución de la propia caja de la tabla — EL MISMO cálculo que BlockFlowContext/
+        // FlexFormattingContext hacen para cualquier bloque (márgenes/padding/borde), duplicado a
+        // propósito (~15 líneas, patrón ya autorizado en M4-T5/FlexFormattingContext: extraerlo a
+        // un trait compartido no aporta claridad aquí). El width, a diferencia de un bloque
+        // normal, NO se resuelve aquí mismo — depende del algoritmo de columnas (auto/fixed) más
+        // abajo, así que solo se calculan margen/padding/borde en esta sección.
+        $marginLeft = $style->marginLeft->resolve($cbWidth);
+        $marginRight = $style->marginRight->resolve($cbWidth);
+        $marginTop = $style->marginTop->resolve($cbWidth);
+        $x = $containingBlock->x + $marginLeft;
+        $y = $containingBlock->y + $marginTop;
+
+        $paddingLeft = $style->paddingLeft->resolve($cbWidth);
+        $paddingRight = $style->paddingRight->resolve($cbWidth);
+        $paddingTop = $style->paddingTop->resolve($cbWidth);
+        $paddingBottom = $style->paddingBottom->resolve($cbWidth);
+        $borderLeft = $style->borderLeft->widthPx;
+        $borderRight = $style->borderRight->widthPx;
+        $borderTop = $style->borderTop->widthPx;
+        $borderBottom = $style->borderBottom->widthPx;
+
+        $cols = self::columnCount($table->rows);
+        $borderSpacing = $style->borderSpacingPx;
+        $spacingTotal = $borderSpacing * ($cols + 1);
+
+        $declaredWidth = $style->width;
+        $declaredWidthPx = $declaredWidth?->resolve($cbWidth);
+
+        if ($style->tableLayout === 'fixed' && $declaredWidthPx !== null) {
+            $gridWidth = self::contentWidthFromDeclared($declaredWidthPx, $style->boxSizing, $paddingLeft, $paddingRight, $borderLeft, $borderRight);
+            $available = max(0.0, $gridWidth - $spacingTotal);
+            $colWidths = $this->fixedColumnWidths($table->rows, $cols, $gridWidth, $available);
+        } else {
+            // CSS 2.2 §17.5.2: "if 'table-layout' is 'fixed'... [but] 'width' is 'auto'... use
+            // automatic table layout" — adjudicación del brief: en vez de silenciar el caso, se
+            // avisa (una sola vez, aquí) de que fixed no se está aplicando.
+            if ($style->tableLayout === 'fixed') {
+                $this->warn('table-layout: fixed without a declared width falls back to auto');
+            }
+            [$colMax, $colMin] = $this->autoColumnExtents($table->rows, $cols);
+            $sumMax = array_sum($colMax);
+            if ($declaredWidthPx !== null) {
+                $gridWidth = self::contentWidthFromDeclared($declaredWidthPx, $style->boxSizing, $paddingLeft, $paddingRight, $borderLeft, $borderRight);
+            } else {
+                $autoContentWidth = max(0.0, $cbWidth - $marginLeft - $marginRight - $paddingLeft - $paddingRight - $borderLeft - $borderRight);
+                $gridWidth = min($autoContentWidth, $sumMax + $spacingTotal);
+            }
+            $available = max(0.0, $gridWidth - $spacingTotal);
+            $colWidths = $this->distributeAutoWidths($colMax, $colMin, $available);
+        }
+
+        $borderBoxWidth = $gridWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
+        $contentX = $x + $borderLeft + $paddingLeft;
+        $cursorY = $y + $borderTop + $paddingTop + $borderSpacing;
+
+        $rowFragments = [];
+        foreach ($table->rows as $row) {
+            [$rowFragment, $rowBottom] = $this->layoutRow($row, $colWidths, $borderSpacing, $contentX, $gridWidth, $cursorY);
+            $rowFragments[] = $rowFragment;
+            // El spacing tras ESTA fila se añade siempre, incluida la última — así $cursorY al
+            // salir del bucle YA es el content-bottom final (spacing de cierre incluido, §17.6.1),
+            // sin necesidad de un caso especial "solo entre filas, no tras la última".
+            $cursorY = $rowBottom + $borderSpacing;
+        }
+
+        $height = ($cursorY - $y) + $paddingBottom + $borderBottom;
+
+        return new BoxFragment(
+            new Rect($x, $y, $borderBoxWidth, $height),
+            $style->backgroundColor,
+            $rowFragments,
+            new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
+        );
+    }
+
+    /**
+     * css-tables-3 §2 / CSS 2.2 §17.2.1: max Σcolspan por fila (sin rowspan, ver docblock de clase).
+     * @param list<TableRowBox> $rows
+     */
+    private static function columnCount(array $rows): int
+    {
+        $max = 0;
+        foreach ($rows as $row) {
+            $sum = 0;
+            foreach ($row->cells as $cell) {
+                $sum += $cell->colspan;
+            }
+            $max = max($max, $sum);
+        }
+        return $max;
+    }
+
+    /**
+     * CSS 2.2 §17.5.2: min/max-content por columna a partir de celdas de span=1 (el MAYOR entre
+     * todas las que caen en esa columna, en cualquier fila) + el reparto del exceso de las celdas
+     * con colspan>1 (ver docblock de clase para la ponderación). Dos pasadas: la primera acumula
+     * los máximos de single-span de TODAS las filas (para que el reparto de colspan de la segunda
+     * ya vea el estado final, no uno parcial de su propia fila); la segunda reparte cada colspan
+     * en el orden en que se encontró (documentado: si dos celdas colspan se solapan en columnas —
+     * imposible sin rowspan salvo entre FILAS DISTINTAS de la misma columna — la segunda ve el
+     * reparto ya aplicado por la primera como parte de su ponderación).
+     *
+     * @param list<TableRowBox> $rows
+     * @return array{0: array<int, float>, 1: array<int, float>} colMax, colMin (tamaño $cols;
+     *     array<int,...> en vez de list<...> por el mismo motivo que
+     *     FlexFormattingContext::resolveMainSizes(): PHPStan no puede probar por sí solo que las
+     *     asignaciones `$arr[$i] = ...`/`$arr[$i] += ...` dentro de un bucle sobre índices
+     *     acotados producen un list sin huecos, aunque en efecto lo sea)
+     */
+    private function autoColumnExtents(array $rows, int $cols): array
+    {
+        $colMax = array_fill(0, $cols, 0.0);
+        $colMin = array_fill(0, $cols, 0.0);
+        /** @var list<array{0: int, 1: int, 2: float, 3: float}> $spans (colIndex, span, cellMax, cellMin) */
+        $spans = [];
+
+        foreach ($rows as $row) {
+            $colIndex = 0;
+            foreach ($row->cells as $cell) {
+                $cellMax = $this->cellMaxContent($cell);
+                $cellMin = $this->cellMinContent($cell);
+                if ($cell->colspan === 1) {
+                    $colMax[$colIndex] = max($colMax[$colIndex], $cellMax);
+                    $colMin[$colIndex] = max($colMin[$colIndex], $cellMin);
+                } else {
+                    $spans[] = [$colIndex, $cell->colspan, $cellMax, $cellMin];
+                }
+                $colIndex += $cell->colspan;
+            }
+        }
+
+        foreach ($spans as [$start, $span, $cellMax, $cellMin]) {
+            $weights = array_slice($colMax, $start, $span);
+            $weightSum = array_sum($weights);
+            $sliceMax = $weightSum;
+            $sliceMin = array_sum(array_slice($colMin, $start, $span));
+            $excessMax = max(0.0, $cellMax - $sliceMax);
+            $excessMin = max(0.0, $cellMin - $sliceMin);
+            for ($k = 0; $k < $span; $k++) {
+                $share = $weightSum > 0.0 ? ($weights[$k] / $weightSum) : (1.0 / $span);
+                $colMax[$start + $k] += $excessMax * $share;
+                $colMin[$start + $k] += $excessMin * $share;
+            }
+        }
+
+        return [$colMax, $colMin];
+    }
+
+    /**
+     * css-sizing-3 §4 vía IntrinsicSizer, sobre una BlockBox SINTÉTICA que envuelve
+     * `$cell->children` (misma unión de tipos que BlockBox::$children, ver TableCellBox) con el
+     * ComputedStyle de la propia celda — más barato que añadir un método `list<...>`-aware
+     * dedicado a IntrinsicSizer (adjudicación del brief): sizeBlock() ya suma el padding/borde
+     * PROPIO de ese style (el de la celda) sin código adicional aquí, satisfaciendo "cell
+     * intrinsic = children intrinsic + cell paddings + cell borders" gratis. Limitación heredada
+     * y documentada: si `$cell->children` incluye una TableBox anidada, IntrinsicSizer la salta
+     * (mismo "skip, documented, no crash" de maxContentOfChildren()/minContentOfChildren(), sin
+     * cambios en esta tarea) — una tabla anidada en celda LAYOUTEA correctamente (ver
+     * BlockFlowContext::layout(), delegación añadida en esta misma tarea) pero no aporta nada al
+     * min/max-content de la celda que la contiene; gap conocido, no cubierto por ningún test
+     * requerido de este milestone.
+     */
+    private function cellMaxContent(TableCellBox $cell): float
+    {
+        return $this->sizer->maxContentWidth(new BlockBox($cell->style, $cell->children, $cell->tag));
+    }
+
+    private function cellMinContent(TableCellBox $cell): float
+    {
+        return $this->sizer->minContentWidth(new BlockBox($cell->style, $cell->children, $cell->tag));
+    }
+
+    /**
+     * CSS 2.2 §17.5.2.2, reparto final por columna a partir de $colMax/$colMin ya resueltos (ver
+     * autoColumnExtents()) y el $available (content width de la tabla menos el spacing total).
+     * Orden de ramas EXACTO del brief (mutuamente excluyentes, primera que aplique gana):
+     *   1. Σmax ≤ available: cada columna a su max; el sobrante (solo posible si el width
+     *      declarado de la tabla es mayor que su contenido natural, ver layout()) se reparte
+     *      proporcional al max de cada columna, partes iguales si Σmax=0.
+     *   2. Σmin ≥ available: cada columna a su min (overflow permitido, sin clipping en este
+     *      motor — mismo criterio "soft" que el resto del motor), con un warning explícito.
+     *   3. Intermedio: interpolación lineal min+(available−Σmin)×(max−min)/(Σmax−Σmin) — sin
+     *      división por cero posible aquí: si Σmax=Σmin la rama 1 ya habría capturado el caso
+     *      (available ≥ Σmin = Σmax), así que llegar aquí garantiza Σmax > Σmin.
+     *
+     * @param array<int, float> $colMax
+     * @param array<int, float> $colMin
+     * @return array<int, float>
+     */
+    private function distributeAutoWidths(array $colMax, array $colMin, float $available): array
+    {
+        $cols = count($colMax);
+        if ($cols === 0) {
+            return [];
+        }
+        $sumMax = array_sum($colMax);
+        $sumMin = array_sum($colMin);
+
+        if ($sumMax <= $available) {
+            $surplus = $available - $sumMax;
+            if ($surplus <= 0.0) {
+                return $colMax;
+            }
+            $equalShare = $surplus / $cols;
+            $widths = [];
+            foreach ($colMax as $i => $max) {
+                $widths[$i] = $sumMax > 0.0 ? $max + $surplus * ($max / $sumMax) : $max + $equalShare;
+            }
+            return $widths;
+        }
+
+        if ($sumMin >= $available) {
+            $this->warn('table minimum content width exceeds available width');
+            return $colMin;
+        }
+
+        $denom = $sumMax - $sumMin;
+        $widths = [];
+        foreach ($colMax as $i => $max) {
+            $min = $colMin[$i];
+            $widths[$i] = $min + ($available - $sumMin) * (($max - $min) / $denom);
+        }
+        return $widths;
+    }
+
+    /**
+     * table-layout:fixed (§17.5.2.1): la PRIMERA fila manda, sin ninguna llamada a IntrinsicSizer.
+     * Cada celda de span=1 con width propio (px o %, % contra $gridWidth — "el ancho de la tabla",
+     * adjudicación del brief) fija esa columna; una celda con colspan>1 y width propio reparte ESE
+     * ancho a partes iguales entre las columnas que abarca (documentado: no hay señal por columna
+     * individual dentro de un colspan declarado como un solo número, a diferencia de auto donde
+     * IntrinsicSizer sí puede medir cada celda de span=1 por separado). Las columnas sin declarar
+     * (de cualquier fila posterior a la primera no importa: solo se mira `$rows[0]`) se reparten a
+     * PARTES IGUALES lo que quede de $available tras restar lo declarado.
+     *
+     * @param list<TableRowBox> $rows
+     * @return array<int, float>
+     */
+    private function fixedColumnWidths(array $rows, int $cols, float $gridWidth, float $available): array
+    {
+        /** @var array<int, float|null> $widths null = sin declarar, comparte el resto */
+        $widths = array_fill(0, $cols, null);
+
+        if ($rows !== []) {
+            $colIndex = 0;
+            foreach ($rows[0]->cells as $cell) {
+                $span = $cell->colspan;
+                $declared = $cell->style->width;
+                if ($declared !== null) {
+                    $each = $declared->resolve($gridWidth) / $span;
+                    for ($k = 0; $k < $span && $colIndex + $k < $cols; $k++) {
+                        $widths[$colIndex + $k] = $each;
+                    }
+                }
+                $colIndex += $span;
+            }
+        }
+
+        $declaredSum = 0.0;
+        $undeclared = 0;
+        foreach ($widths as $w) {
+            if ($w !== null) {
+                $declaredSum += $w;
+            } else {
+                $undeclared++;
+            }
+        }
+        $remainder = max(0.0, $available - $declaredSum);
+        $share = $undeclared > 0 ? $remainder / $undeclared : 0.0;
+
+        return array_map(static fn(?float $w): float => $w ?? $share, $widths);
+    }
+
+    /**
+     * Layoutea una fila completa: posiciona sus celdas por columna (con el borderSpacing separado
+     * antes/entre/después, §17.6.1), layoutea cada una vía el BlockFlowContext interno con
+     * $usedWidthOverride (ver docblock de clase), y estira geometry-only las más bajas a la altura
+     * máxima de la fila (vertical-align:top implícito, M5-T5 revisa middle/bottom).
+     *
+     * @param array<int, float> $colWidths
+     * @return array{0: BoxFragment, 1: float} fragmento de fila + su borde inferior absoluto
+     */
+    private function layoutRow(TableRowBox $row, array $colWidths, float $borderSpacing, float $contentX, float $gridWidth, float $rowTop): array
+    {
+        // Posiciones de borde izquierdo de cada columna (índice 0..cols), acumulando ancho +
+        // spacing; colX[cols] es el borde derecho de la última columna + su spacing de cierre (no
+        // se usa directamente, pero cae de la misma fórmula sin caso especial).
+        $colX = [$contentX + $borderSpacing];
+        $cursor = $colX[0];
+        foreach ($colWidths as $w) {
+            $cursor += $w + $borderSpacing;
+            $colX[] = $cursor;
+        }
+
+        $cellFragments = [];
+        $colIndex = 0;
+        foreach ($row->cells as $cell) {
+            $span = $cell->colspan;
+            // Invariante: colIndex nunca excede $cols dentro de esta fila (cols = max Σcolspan por
+            // fila, ver columnCount()) — colX[colIndex] y colX[colIndex+span] SIEMPRE existen.
+            $cellX = $colX[$colIndex];
+            $cellRight = $colX[$colIndex + $span] - $borderSpacing;
+            $cellWidth = max(0.0, $cellRight - $cellX);
+
+            $cellBox = new BlockBox($cell->style, $cell->children, $cell->tag);
+            $cellFragments[] = $this->blockFlow->layout($cellBox, new Rect($cellX, $rowTop, $cellWidth, INF), $cellWidth);
+            $colIndex += $span;
+        }
+
+        $rowHeight = 0.0;
+        foreach ($cellFragments as $fragment) {
+            $rowHeight = max($rowHeight, $fragment->rect->height);
+        }
+
+        $stretched = [];
+        foreach ($cellFragments as $fragment) {
+            $stretched[] = $fragment->rect->height < $rowHeight ? self::withHeight($fragment, $rowHeight) : $fragment;
+        }
+
+        // CSS 2.2 §17.6.1: en el modelo separado, una FILA nunca pinta su propio borde (solo las
+        // celdas y la tabla exterior lo hacen) — BorderSet::none() a propósito, no un descuido; su
+        // background SÍ se pinta, detrás de las celdas (orden de pintado gratis por anidamiento).
+        $rowFragment = new BoxFragment(
+            new Rect($contentX, $rowTop, $gridWidth, $rowHeight),
+            $row->style->backgroundColor,
+            $stretched,
+            BorderSet::none(),
+        );
+
+        return [$rowFragment, $rowTop + $rowHeight];
+    }
+
+    /**
+     * Mismo mecanismo geometry-only que FlexFormattingContext::withHeight() (sin duplicar código
+     * entre ambas clases porque no comparten ninguna otra cosa que justifique un trait): agranda
+     * el rect de un fragmento de celda ya calculado sin re-layoutear su contenido (que queda
+     * anclado arriba — vertical-align:top implícito, ver docblock de clase).
+     */
+    private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
+    {
+        return new BoxFragment(
+            new Rect($fragment->rect->x, $fragment->rect->y, $fragment->rect->width, $height),
+            $fragment->background,
+            $fragment->children,
+            $fragment->borders,
+            $fragment->atomic,
+        );
+    }
+
+    private static function contentWidthFromDeclared(
+        float $declaredWidthPx,
+        string $boxSizing,
+        float $paddingLeft,
+        float $paddingRight,
+        float $borderLeft,
+        float $borderRight,
+    ): float {
+        return $boxSizing === 'border-box'
+            ? max(0.0, $declaredWidthPx - $paddingLeft - $paddingRight - $borderLeft - $borderRight)
+            : $declaredWidthPx;
+    }
+}

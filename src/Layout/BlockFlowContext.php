@@ -45,11 +45,18 @@ use Pliego\Text\FontCatalog;
  * perezosamente en flexContext() (ver más abajo), para que un `display:flex` anidado a
  * cualquier profundidad siga viendo el MISMO colector que el resto del pipeline, en vez de uno
  * silencioso por accidente de wiring.
+ *
+ * M5-T4: mismo mecanismo de inyección perezosa que $flexContext, ahora también para
+ * TableFormattingContext (ver el docblock de esa clase, sección "RUPTURA DE CICLO") — un hijo
+ * TableBox se delega a $this->tableContext(), autocreada la primera vez que hace falta si nadie
+ * la wireó explícitamente (el caso normal: Engine construye `new BlockFlowContext(...)` a secas y
+ * el primer <table> que encuentra dispara la autocreación).
  */
 final class BlockFlowContext implements FormattingContext
 {
     private readonly InlineFlowContext $inline;
     private ?FlexFormattingContext $flexContext = null;
+    private ?TableFormattingContext $tableContext = null;
 
     public function __construct(
         private readonly TextMeasurer $measurer,
@@ -65,6 +72,17 @@ final class BlockFlowContext implements FormattingContext
         $this->flexContext = $flexContext;
     }
 
+    /**
+     * M5-T4: análogo a setFlexContext() — TableFormattingContext lo llama en SU propio
+     * constructor sobre el BlockFlowContext interno que crea para layoutear contenido de celda
+     * (ver el docblock "RUPTURA DE CICLO" de esa clase), así que esta instancia NUNCA pasa por la
+     * autocreación de tableContext() de más abajo.
+     */
+    public function setTableContext(TableFormattingContext $tableContext): void
+    {
+        $this->tableContext = $tableContext;
+    }
+
     private function flexContext(): FlexFormattingContext
     {
         if ($this->flexContext === null) {
@@ -76,6 +94,19 @@ final class BlockFlowContext implements FormattingContext
             );
         }
         return $this->flexContext;
+    }
+
+    private function tableContext(): TableFormattingContext
+    {
+        if ($this->tableContext === null) {
+            $this->tableContext = new TableFormattingContext(
+                $this->measurer,
+                $this->catalog,
+                new IntrinsicSizer($this->measurer, $this->catalog),
+                $this->warnings,
+            );
+        }
+        return $this->tableContext;
     }
 
     /**
@@ -171,13 +202,16 @@ final class BlockFlowContext implements FormattingContext
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
-            // M5-T3: una TableBox (M5-T4 lo consume, TableFormattingContext no existe todavía) se
-            // SALTA por completo — ni fragmento ni avance de cursor — el mismo patrón "skip,
-            // documented, no crash" ya aplicado a otros huecos temporales de este motor (nunca una
-            // excepción). Conocido/aceptado hasta T4: el hermano siguiente a una tabla puede
-            // solaparse verticalmente con donde la tabla habría caído, ya que su altura no se
-            // contabiliza aquí.
+            // M5-T4: una TableBox hija se delega ENTERA a TableFormattingContext (ver
+            // tableContext()/su docblock de clase) — reemplaza el skip de T3: el cursor SÍ avanza
+            // ahora (mismo patrón que ImageBox/display:flex justo arriba: fragmento + avance de
+            // cursor con el margin-bottom propio de la tabla, resuelto contra este mismo
+            // $contentWidth).
             if ($child instanceof TableBox) {
+                $childFragment = $this->tableContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
+                $children[] = $childFragment;
+                $contentBottom = $childFragment->rect->bottom();
+                $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
             // M4-T4: un hijo bloque con display:flex se layoutea ENTERO con FlexFormattingContext

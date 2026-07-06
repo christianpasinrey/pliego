@@ -415,12 +415,15 @@ final readonly class FlexFormattingContext implements FormattingContext
      * a mano sin pasar por el builder (p.ej. un test) — mismo espíritu "soft, documented" que el
      * resto del motor, no una excepción.
      *
-     * M5-T3: $children puede incluir TableBox (una tabla es, ella misma, un flex item DIRECTO —
+     * M5-T3/T4: $children puede incluir TableBox (una tabla es, ella misma, un flex item DIRECTO —
      * ver BlockBox::$children y wrapAnonymousFlexItems()). El filtro whitelist de abajo (solo
-     * BlockBox|ImageBox) ya la excluye SIN cambios: hasta M5-T4 una TableBox como item flex
-     * simplemente desaparece de $items (mismo patrón "skip, documented, no crash" que
-     * BlockFlowContext/IntrinsicSizer aplican en sus propios recorridos de hijos) — no participa
-     * del layout de línea ni del cálculo de tamaños, pero tampoco crashea.
+     * BlockBox|ImageBox) ya la excluye SIN cambios: M5-T4 le da a TableBox su propio
+     * TableFormattingContext (consumido desde BlockFlowContext, no desde aquí) pero DELIBERADAMENTE
+     * no la convierte en un tipo de flex item válido — sigue excluida (mismo patrón "skip,
+     * documented, no crash" que BlockFlowContext/IntrinsicSizer aplican en sus propios recorridos
+     * de hijos): una TableBox como item flex DIRECTO simplemente desaparece de $items, no participa
+     * del layout de línea ni del cálculo de tamaños, pero tampoco crashea. Sigue así como mínimo
+     * hasta M5-T6 (ver su brief); ningún test de este milestone la ejercita como item flex.
      *
      * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
      * @return list<BlockBox|ImageBox>

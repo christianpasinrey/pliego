@@ -15,11 +15,13 @@ use Pliego\Style\ComputedStyle;
  * orden de documento, marcadas TableRowBox::$isHeader según el grupo de origen (ver
  * BoxTreeBuilder::collectTableRows()).
  *
- * M5-T4 (TableFormattingContext) es quien layoutea esta caja (algoritmo de anchos §17.5.2). Hasta
- * entonces, BlockFlowContext/FlexFormattingContext/IntrinsicSizer la SALTAN explícitamente
- * ("M5-T4 lo consume", mismo patrón documentado para Display::Table en Style\Display) para que una
- * tabla como hijo de un bloque o item flex no crashee el render — simplemente no produce ningún
- * fragmento todavía.
+ * M5-T4 (TableFormattingContext) layoutea esta caja (algoritmo de anchos §17.5.2) — consumida por
+ * BlockFlowContext::layout() cuando aparece como hijo de un bloque normal (delega vía
+ * tableContext(), ver el docblock de esa clase). FlexFormattingContext SIGUE excluyéndola como
+ * item flex directo (adjudicación deliberada, no un hueco temporal — ver su docblock) e
+ * IntrinsicSizer SIGUE saltándola cuando aparece como hijo de un bloque/celda genérico (una
+ * TableBox anidada no aporta a un max/min-content ajeno, gap documentado en IntrinsicSizer) —
+ * mismo patrón "skip, documented, no crash" que ya cubría ambos casos antes de esta tarea.
  */
 final readonly class TableBox
 {

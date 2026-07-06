@@ -163,9 +163,14 @@ final class IntrinsicSizer
                 continue;
             }
             $flush();
-            // M5-T3: una TableBox hija (M5-T4 lo consume) no tiene todavía un min/max-content
-            // definido — se ignora, sin contribuir nada a este máximo, mismo patrón "skip,
-            // documented, no crash" que BlockFlowContext aplica en su bucle de layout.
+            // M5-T3/T4: una TableBox hija de un BLOQUE GENÉRICO (no de una celda — ver
+            // TableFormattingContext::cellMaxContent()/cellMinContent(), que sí le dan a una
+            // TableBox de CELDA un min/max-content propio vía esta misma clase) sigue sin aportar
+            // nada a este máximo — se ignora, mismo patrón "skip, documented, no crash" que
+            // BlockFlowContext aplica en su bucle de layout. Gap conocido y documentado, no
+            // cubierto por ningún test requerido de M5: una tabla anidada dentro de un bloque
+            // normal (o dentro de una celda, vía la misma ruta) no ensancha el max-content de ese
+            // contenedor aunque su propio contenido sea más ancho.
             if ($child instanceof TableBox) {
                 continue;
             }
@@ -189,7 +194,7 @@ final class IntrinsicSizer
                 // run (ver docblock de clase), y un <br> no es un TextRun.
                 continue;
             }
-            // M5-T3: ver el comentario análogo en maxContentOfChildren().
+            // M5-T3/T4: ver el comentario análogo en maxContentOfChildren().
             if ($child instanceof TableBox) {
                 continue;
             }
