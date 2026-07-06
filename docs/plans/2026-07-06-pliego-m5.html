@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M5 — pliego: tablas</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M5 «tablas»</h1>
+<p class="meta">2026-07-06 · Previos: M0-M4 ✅ (main, CI verde, 390 tests; documento objetivo completo) · Ejecución: subagent-driven · Objetivo: HTML ajeno/email-style (el PDF Tubuencamino original es maquetación de tabla) y el sustrato de Bootstrap (M6+).</p>
+
+<div class="task">
+  <strong>Goal:</strong> tablas CSS 2.2 §17 usables de verdad: <code>table/thead/tbody/tr/td/th</code>, algoritmo de anchos AUTO (min/max-content vía IntrinsicSizer — ya existe) y FIXED, colspan, padding/bordes/fondos por celda, <code>vertical-align</code> top/middle/bottom, <code>border-spacing</code> (modelo separado), UA defaults (<code>th</code> bold+center), y paginación partiendo ENTRE filas (filas atómicas). Más el housekeeping diferido de M4.<br>
+  <strong>Exclusiones M5 con warning (nunca silencio):</strong> <code>border-collapse: collapse</code> (M6 — separado es el default CSS), <code>rowspan</code> (M6), repetición de <code>thead</code> por página (M6), <code>caption/colgroup/col</code>, células anónimas complejas (§17.2.1 completo — M5 hace la variante mínima: texto suelto en tr/table se envuelve en celda/fila anónima).
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M4 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, trailer, TDD 4-gates, baselines tests-only, código = spec anotada §17.x).</li>
+  <li>Lecciones del ledger: deptrac silent-skip (verificar conteo); comas finales en match; new-chaining con paréntesis; Fragment::rect() método; % → resolve(cbWidth); width-override pattern (T5-M4) disponible para imponer anchos de celda.</li>
+  <li>Los 390 tests + goldens M1-M4 intactos. Un match sobre Display gana cases nuevos — grep OBLIGATORIO de todos los sitios que consultan Display.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Style (T2)
+Display += case Table; case TableRow; case TableCell; case TableHeaderGroup; case TableRowGroup;
+enum VerticalAlign { case Top; case Middle; case Bottom; }   // solo celdas M5
+ComputedStyle += float $borderSpacingPx (0, hereda per spec §17.6.1... NO: border-spacing SÍ hereda),
+  string $tableLayout ('auto'|'fixed', no hereda), VerticalAlign $verticalAlign (celdas, no hereda M5)
+
+// Box (T3)
+final readonly class TableBox { ComputedStyle $style; /** @var list&lt;TableRowBox&gt; */ array $rows; string $tag; }
+final readonly class TableRowBox { ComputedStyle $style; /** @var list&lt;TableCellBox&gt; */ array $cells; bool $isHeader; }
+final readonly class TableCellBox { ComputedStyle $style; /** @var list&lt;...&gt; children como BlockBox */ array $children; int $colspan; string $tag; }
+// BlockBox children += TableBox
+
+// Layout (T4)
+final readonly class TableFormattingContext implements FormattingContext {
+    // constructor (TextMeasurer, FontCatalog, IntrinsicSizer) + lazy BlockFlowContext (patrón M4)
+    public function layout(TableBox $table, Rect $containingBlock): BoxFragment;
+}
+// Fragment del contenedor: BoxFragment normal cuyos hijos son BoxFragments de fila (atomic=true),
+// cuyos hijos son BoxFragments de celda → Paginator parte ENTRE filas gratis (filas atómicas,
+// tabla NO atómica) con la maquinaria M4 existente.</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M4"] --> T2["T2 CSS/Style: display table,<br/>border-spacing, vertical-align, UA"]
+  T2 --> T3["T3 Box: TableBox/Row/Cell<br/>+ estructura anónima mínima"]
+  T3 --> T4["T4 TableFormattingContext:<br/>anchos auto/fixed + celdas"]
+  T4 --> T5["T5 vertical-align, filas<br/>atómicas y paginación"]
+  T5 --> T6["T6 E2E email-style<br/>+ goldens + README + playground"]
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M5-T1 — Housekeeping M4</h3>
+<p>(1) <strong>Warning channel de layout/paginación</strong>: WarningCollector (ya existe en Css\) se inyecta en BlockFlowContext/FlexFormattingContext/Paginator (constructor opcional ?WarningCollector, null = silencioso para no romper firmas de tests unitarios); Engine lo comparte; primer uso real: "flex container taller than page" y "atomic fragment taller than page" avisan. (2) <strong>Memoizar hypothetical sizes</strong> en el path de wrap (y el tercer layout por item cuando align≠0 — cachear el fragment del primer layout si el tamaño no cambió). (3) <strong>Intrinsic de flex anidado</strong>: IntrinsicSizer trata un hijo display:flex row como SUMA de max-content de items + gaps (no max). (4) <strong>basis percent(0)</strong> en el shorthand (spec §7.1.1) + tests ajustados. (5) <strong>realpath como clave de dedup</strong> de ImageRegistry/ImageLoader (M3 diferido) con fallback documentado si realpath falla. (6) Cosméticos: hoist warning sin src vacío feo; docblock collectInline. Commit: <code>chore: apply M4 final-review housekeeping and deferred items</code></p>
+</div>
+
+<div class="task">
+<h3>M5-T2 — CSS/Style: display table, border-spacing, vertical-align, UA</h3>
+<p>Display += Table/TableRow/TableCell/TableHeaderGroup/TableRowGroup (grep de TODOS los consumidores de Display — tratar como Block temporalmente con comentario "M5-T4 lo consume"). DeclarationParser: <code>display</code> acepta los valores nuevos; <code>border-spacing</code> (px, 1 valor M5; 2 valores → warning); <code>table-layout</code> auto|fixed; <code>vertical-align</code> top|middle|bottom (baseline y resto → warning; solo aplica a celdas, documentar). UA defaults: table→Table, tr→TableRow, td/th→TableCell, thead→TableHeaderGroup, tbody→TableRowGroup; th→fontWeight 700 + textAlign center; border-spacing hereda (spec §17.6.1). Tests: cascade de todos + herencia de border-spacing + UA th. Commit: <code>feat(css): table display values, border-spacing and vertical-align</code></p>
+</div>
+
+<div class="task">
+<h3>M5-T3 — Box: TableBox/TableRowBox/TableCellBox</h3>
+<p>BoxTreeBuilder: elemento Display::Table → TableBox recogiendo filas de sus hijos (thead/tbody transparentes: sus tr se aplanan en la lista de filas, thead marca isHeader); tr → TableRowBox con celdas td/th (colspan attr entero ≥1, default 1; rowspan attr → warning "rowspan not supported yet" y tratado como 1); contenido de celda = children normales (bloques/inline/imágenes — reutiliza el pipeline entero). Estructura anónima MÍNIMA (§17.2.1 reducido): texto suelto directo en table/tr → envuelto en celda anónima (fila anónima si hace falta); elemento no-fila dentro de table → celda anónima en fila propia; documentar qué NO se cubre. display:none poda. Tests: tabla completa; thead/tbody aplanados con isHeader; colspan; rowspan warning; texto suelto envuelto. Commit: <code>feat(box): table box tree with minimal anonymous structure</code></p>
+</div>
+
+<div class="task">
+<h3>M5-T4 — TableFormattingContext: anchos y layout de celdas</h3>
+<p>CSS 2.2 §17.5.2. <strong>Nº columnas</strong> = max de Σcolspan por fila. <strong>AUTO</strong>: por celda min/max-content (IntrinsicSizer sobre sus children + paddings/borders de celda); colspan reparte su min/max entre sus columnas (proporcional al max de las simples, o partes iguales si 0 — documentar); ancho de tabla = width declarado o min(cap del containing, Σmax); distribución: si Σmax ≤ disponible → cada col su max (+ sobrante proporcional SOLO si width declarado mayor, per §17.5.2.2); si Σmin ≥ disponible → cada col su min (overflow permitido); intermedio → min + proporcional a (max−min). <strong>FIXED</strong>: primera fila manda: width de celda o partes iguales del resto; sin IntrinsicSizer (rápido). <strong>Celdas</strong>: cada celda se layoutea con BlockFlowContext (lazy, patrón M4) con containing width = Σanchos de sus columnas + spacing interno de colspan − paddings/borders de celda (width-override para imponerlo); altura de fila = max(alturas de celda); las celdas se ESTIRAN a la altura de fila (geometry-only, patrón stretch M4, vertical-align llega en T5 — por ahora top). border-spacing horizontal entre columnas y vertical entre filas + alrededor (modelo separado §17.6.1). Fondos/bordes de celda pintan (BoxFragment normal); fondo de fila detrás de celdas; fondo de tabla detrás de todo. Tests hand-computed: 2 cols auto contenido asimétrico; width declarado reparte; overflow por Σmin; fixed partes iguales; colspan 2; spacing 6px. Commit: <code>feat(layout): table formatting context with auto and fixed column algorithms</code></p>
+</div>
+
+<div class="task">
+<h3>M5-T5 — vertical-align, filas atómicas y paginación</h3>
+<p><code>vertical-align</code> en celda: top (default actual), middle → contenido desplazado (rowHeight − contentHeight)/2, bottom → al fondo (patrón geometry-shift documentado: se desplazan los children fragments dentro del BoxFragment de la celda). <strong>Paginación</strong>: BoxFragment de FILA con atomic=true (la maquinaria M4 la empuja entera); la TABLA no es atómica → parte entre filas gratis. Verificar interacción: tabla dentro de flex card atómica (el átomo exterior manda); fila más alta que página se queda (warning por el canal de T1). Tests: middle/bottom hand-computed; tabla 30 filas cruza 2 páginas partiendo entre filas exactamente; fila gigante warning. Commit: <code>feat(layout): cell vertical alignment and row-atomic table pagination</code></p>
+</div>
+
+<div class="task">
+<h3>M5-T6 — E2E email-style, goldens, README, playground</h3>
+<p>E2E "email layout": réplica de la estructura del PDF Tubuencamino original como HTML de email (tabla exterior de layout con celda-foto + celda-texto por tarjeta, tabla de datos con bordes y th, multipágina partiendo entre filas, @page counters) → asserts estructurales completos + FragmentDumper (sin solapes, anchos de columna correctos a mano) + 0 warnings (salvo los esperados si usa algo excluido — mejor: 0). Golden tabla auto + golden colspan. FragmentDumper: nada nuevo (las tablas emiten BoxFragments normales). README M5 (soportado/excluido con warnings). Playground: añadir al sample una tabla de datos con th y bordes. Commit: <code>test: email-style table e2e; README and playground for M5</code></p>
+</div>
+
+</body>
+</html>
