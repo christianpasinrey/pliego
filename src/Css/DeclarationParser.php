@@ -30,7 +30,12 @@ final class DeclarationParser
     private const array NON_NEGATIVE_PROPERTIES = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width'];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
-        'display' => ['block', 'none', 'flex'],
+        // css-tables-3 §2: los 5 display values de tabla soportados en M5 (grep OBLIGATORIO
+        // hecho en ComputedStyle/BoxTreeBuilder antes de añadirlos aquí — ver Display::Table).
+        'display' => [
+            'block', 'none', 'flex',
+            'table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group',
+        ],
         'font-family' => null,
         'box-sizing' => ['content-box', 'border-box'],
         // css-flexbox-1 §5.1/§5.2/§8.2/§8.3: *-reverse, wrap-reverse, space-around/evenly y
@@ -40,6 +45,9 @@ final class DeclarationParser
         'flex-wrap' => ['nowrap', 'wrap'],
         'justify-content' => ['flex-start', 'center', 'flex-end', 'space-between'],
         'align-items' => ['stretch', 'flex-start', 'center', 'flex-end'],
+        // CSS 2.2 §17.5.2: 'auto' (initial) y 'fixed' — M5-T4 consume $tableLayout, aquí solo
+        // se valida y parsea el keyword.
+        'table-layout' => ['auto', 'fixed'],
     ];
 
     /** css-flexbox-1 §7.1.1: N sin unidad en la forma "flex: N ..." nunca admite signo (grow y
@@ -138,6 +146,12 @@ final class DeclarationParser
         }
         if ($property === 'flex-basis') {
             return $this->parseFlexBasis($value);
+        }
+        if ($property === 'border-spacing') {
+            return $this->parseBorderSpacing($value);
+        }
+        if ($property === 'vertical-align') {
+            return $this->parseVerticalAlign($value);
         }
         return $this->warn("Unsupported property: $property");
     }
@@ -338,6 +352,53 @@ final class DeclarationParser
             'none' => ['text-decoration' => false],
             'underline' => ['text-decoration' => true],
             default => $this->warn("Unsupported text-decoration: $value"),
+        };
+    }
+
+    /**
+     * CSS 2.2 §17.6.1: `border-spacing: <length> <length>?` — el primer valor es horizontal, el
+     * segundo vertical. M5 solo soporta la forma de un único valor (mismo px para ambos ejes,
+     * como consume TableFormattingContext en M5-T4); dos valores son válidos en CSS pero fuera
+     * de alcance aquí, así que caen al warning genérico en vez de tomar solo el primero (evita
+     * fingir soporte de ejes independientes que el layout no respeta). Solo admite px (no %,
+     * igual que row-gap/column-gap en LENGTH_PROPERTIES) — Length::fromCss ya rechaza % de
+     * forma natural.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBorderSpacing(string $value): array
+    {
+        $tokens = preg_split('/\s+/', trim($value)) ?: [];
+        if (count($tokens) !== 1) {
+            return $this->warn("Unsupported border-spacing (single value only in M5): $value");
+        }
+        $length = Length::fromCss($tokens[0]);
+        if ($length === null) {
+            return $this->warn("Unsupported border-spacing: $value");
+        }
+        if ($length->px < 0.0) {
+            return $this->warn("Negative value not allowed for border-spacing: $value");
+        }
+        return ['border-spacing' => $length];
+    }
+
+    /**
+     * CSS 2.2 §10.8.1: vertical-align tiene una tabla larga de keywords (baseline, sub, super,
+     * text-top, text-bottom, middle, top, bottom) más <percentage>/<length>; M5 solo soporta
+     * top|middle|bottom (los que consume TableCellBox en M5-T4) — baseline (el initial value
+     * real), sub/super/text-top/text-bottom y cualquier percentage/length caen al warning
+     * genérico, documentado en VerticalAlign.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseVerticalAlign(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        return match ($keyword) {
+            'top' => ['vertical-align' => 'top'],
+            'middle' => ['vertical-align' => 'middle'],
+            'bottom' => ['vertical-align' => 'bottom'],
+            default => $this->warn("Unsupported vertical-align: $value"),
         };
     }
 

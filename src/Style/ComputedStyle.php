@@ -13,12 +13,28 @@ use Pliego\Css\Value\LengthPercentage;
 final readonly class ComputedStyle
 {
     private const array HIDDEN_BY_DEFAULT = ['head', 'script', 'style', 'title', 'meta', 'link'];
-    /** UA stylesheet: b,strong → bold (misma mecánica que HIDDEN_BY_DEFAULT). */
-    private const array BOLD_BY_DEFAULT = ['b', 'strong'];
+    /** UA stylesheet: b,strong → bold; M5-T2 añade th (CSS 2.1 §17.2, misma mecánica que HIDDEN_BY_DEFAULT). */
+    private const array BOLD_BY_DEFAULT = ['b', 'strong', 'th'];
     /** UA stylesheet: i,em → italic. */
     private const array ITALIC_BY_DEFAULT = ['i', 'em'];
     /** UA stylesheet: a,u → underline. */
     private const array UNDERLINE_BY_DEFAULT = ['a', 'u'];
+    /** UA stylesheet M5-T2: th → text-align center (CSS 2.1 §17.2, html.css de referencia). */
+    private const array CENTER_ALIGN_BY_DEFAULT = ['th'];
+    /**
+     * UA stylesheet M5-T2: display por defecto de los elementos de tabla (CSS 2.1 §17.2 /
+     * html5 rendering hints). td y th comparten table-cell; tr/thead/tbody se mapean 1:1.
+     * tfoot/col/colgroup/caption quedan fuera del contrato M5 (no listados en el brief) y caen
+     * al default genérico (Display::Block), igual que cualquier otro tag desconocido.
+     */
+    private const array TABLE_DISPLAY_BY_TAG = [
+        'table' => Display::Table,
+        'tr' => Display::TableRow,
+        'td' => Display::TableCell,
+        'th' => Display::TableCell,
+        'thead' => Display::TableHeaderGroup,
+        'tbody' => Display::TableRowGroup,
+    ];
 
     public function __construct(
         public Display $display,
@@ -66,6 +82,16 @@ final readonly class ComputedStyle
         public float $flexGrow,
         public float $flexShrink,
         public ?LengthPercentage $flexBasis,
+        // M5-T2: border-spacing SÍ hereda (CSS 2.2 §17.6.1: "This property... is inherited"),
+        // a diferencia de casi todas las demás propiedades de caja — de ahí que caiga a
+        // $parent->borderSpacingPx en compute() en vez de al initial value 0 cuando no hay
+        // declaración propia. table-layout y vertical-align, en cambio, NO heredan (CSS 2.2
+        // §17.5.2 y §10.8.1 respectivamente): cada uno parte siempre del initial value del
+        // spec. vertical-align diverge del spec real (initial value = baseline, no soportado
+        // en M5) usando Top como default — ver VerticalAlign.
+        public float $borderSpacingPx,
+        public string $tableLayout,
+        public VerticalAlign $verticalAlign,
     ) {}
 
     public static function root(): self
@@ -110,6 +136,9 @@ final readonly class ComputedStyle
             0.0,
             1.0,
             null,
+            0.0,
+            'auto',
+            VerticalAlign::Top,
         );
     }
 
@@ -123,14 +152,29 @@ final readonly class ComputedStyle
         $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
         $displayValue = $declarations['display'] ?? null;
-        $display = in_array($tag, self::HIDDEN_BY_DEFAULT, true) ? Display::None : Display::Block;
-        if ($displayValue === 'none') {
-            $display = Display::None;
-        } elseif ($displayValue === 'flex') {
+        // M5-T2: el default por tag ahora consulta también TABLE_DISPLAY_BY_TAG antes de caer a
+        // Block — HIDDEN_BY_DEFAULT sigue teniendo prioridad (p.ej. un <title> nunca es tabla).
+        $display = match (true) {
+            in_array($tag, self::HIDDEN_BY_DEFAULT, true) => Display::None,
+            array_key_exists($tag, self::TABLE_DISPLAY_BY_TAG) => self::TABLE_DISPLAY_BY_TAG[$tag],
+            default => Display::Block,
+        };
+        $display = match ($displayValue) {
+            'none' => Display::None,
             // css-flexbox-1 §2: sigue siendo un block-level box en el flujo normal — M4-T4
             // introduce FlexFormattingContext; hasta entonces fluye como Block (ver Display::Flex).
-            $display = Display::Flex;
-        }
+            'flex' => Display::Flex,
+            'block' => Display::Block,
+            // css-tables-3 §2: las cinco display values de tabla — M5-T3/T4 construyen
+            // TableBox/TableFormattingContext a partir de estos; hasta entonces BoxTreeBuilder
+            // sigue generando un BlockBox plano (ver Display::Table y comentario del case).
+            'table' => Display::Table,
+            'table-row' => Display::TableRow,
+            'table-cell' => Display::TableCell,
+            'table-header-group' => Display::TableHeaderGroup,
+            'table-row-group' => Display::TableRowGroup,
+            default => $display,
+        };
         $length = static fn(string $key): ?Length => ($declarations[$key] ?? null) instanceof Length ? $declarations[$key] : null;
         $lengthPercentage = static fn(string $key): LengthPercentage => ($declarations[$key] ?? null) instanceof LengthPercentage ? $declarations[$key] : $zero;
         $hasLengthPercentage = static fn(string $key): bool => ($declarations[$key] ?? null) instanceof LengthPercentage;
@@ -160,6 +204,9 @@ final readonly class ComputedStyle
             $textAlignValue === 'left' => TextAlign::Left,
             $textAlignValue === 'center' => TextAlign::Center,
             $textAlignValue === 'right' => TextAlign::Right,
+            // UA stylesheet M5-T2: th → text-align center (CENTER_ALIGN_BY_DEFAULT), aplicada
+            // antes de caer a la herencia normal — misma prioridad que BOLD_BY_DEFAULT arriba.
+            in_array($tag, self::CENTER_ALIGN_BY_DEFAULT, true) => TextAlign::Center,
             default => $parent->textAlign,
         };
 
@@ -245,6 +292,26 @@ final readonly class ComputedStyle
         $flexBasisValue = $declarations['flex-basis'] ?? null;
         $flexBasis = $flexBasisValue instanceof LengthPercentage ? $flexBasisValue : null;
 
+        // M5-T2: border-spacing SÍ hereda (CSS 2.2 §17.6.1) — a diferencia de todo lo demás en
+        // esta sección, el fallback sin declaración propia es $parent->borderSpacingPx, no 0.0.
+        $borderSpacingValue = $declarations['border-spacing'] ?? null;
+        $borderSpacingPx = $borderSpacingValue instanceof Length ? $borderSpacingValue->px : $parent->borderSpacingPx;
+
+        // table-layout NO hereda (CSS 2.2 §17.5.2): initial value 'auto' siempre que no haya
+        // declaración propia, nunca $parent->tableLayout.
+        $tableLayout = ($declarations['table-layout'] ?? null) === 'fixed' ? 'fixed' : 'auto';
+
+        // vertical-align NO hereda en CSS real (CSS 2.2 §10.8.1 no lo lista entre las
+        // propiedades heredadas de §6.1) — cada elemento parte de VerticalAlign::Top (divergencia
+        // documentada del initial value real "baseline", ver VerticalAlign) cuando no hay
+        // declaración propia, nunca de $parent->verticalAlign.
+        $verticalAlign = match ($declarations['vertical-align'] ?? null) {
+            'middle' => VerticalAlign::Middle,
+            'bottom' => VerticalAlign::Bottom,
+            'top' => VerticalAlign::Top,
+            default => VerticalAlign::Top,
+        };
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -282,6 +349,9 @@ final readonly class ComputedStyle
             $flexGrow,
             $flexShrink,
             $flexBasis,
+            $borderSpacingPx,
+            $tableLayout,
+            $verticalAlign,
         );
     }
 }

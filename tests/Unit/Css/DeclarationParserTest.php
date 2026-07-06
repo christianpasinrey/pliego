@@ -457,3 +457,64 @@ it('warns on unsupported flex shorthand values', function () {
         expect($parser->drainWarnings())->not->toBeEmpty();
     }
 });
+
+// --- M5-T2: display:table*, border-spacing, table-layout, vertical-align -----------------
+
+it('accepts the 5 table display keywords alongside block/none/flex', function () {
+    $parser = new DeclarationParser();
+    foreach (['table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group'] as $value) {
+        expect($parser->parse('display', $value))->toBe(['display' => $value]);
+    }
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses border-spacing as a single px length', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-spacing', '4px'))->toEqual(['border-spacing' => Length::px(4.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on a two-value border-spacing (only one value supported in M5)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-spacing', '4px 8px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns on a percentage or garbage border-spacing', function () {
+    foreach (['50%', 'auto', ''] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('border-spacing', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects a negative border-spacing with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-spacing', '-4px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses table-layout auto/fixed and warns on unsupported values', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('table-layout', 'auto'))->toBe(['table-layout' => 'auto']);
+    expect($parser->parse('table-layout', 'fixed'))->toBe(['table-layout' => 'fixed']);
+    $result = $parser->parse('table-layout', 'bogus');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses vertical-align top/middle/bottom and warns on baseline/sub/super/percentages', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('vertical-align', 'top'))->toBe(['vertical-align' => 'top']);
+    expect($parser->parse('vertical-align', 'middle'))->toBe(['vertical-align' => 'middle']);
+    expect($parser->parse('vertical-align', 'bottom'))->toBe(['vertical-align' => 'bottom']);
+    foreach (['baseline', 'sub', 'super', 'text-top', 'text-bottom', '50%'] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('vertical-align', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});

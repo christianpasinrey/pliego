@@ -385,13 +385,13 @@ parameters:
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
-			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\BlockFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
+			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\FlexFormattingContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
 			identifier: argument.type
 			count: 2
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
-			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\FlexFormattingContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
+			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\BlockFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
 			identifier: argument.type
 			count: 2
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
@@ -649,6 +649,12 @@ parameters:
 			path: tests/Unit/Pdf/PdfWriterTest.php
 
 		-
+			message: '#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\.$#'
+			identifier: foreach.nonIterable
+			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$alignItems on mixed\.$#'
 			identifier: property.nonObject
 			count: 2
@@ -670,6 +676,12 @@ parameters:
 			message: '#^Cannot access property \$borderRight on mixed\.$#'
 			identifier: property.nonObject
 			count: 5
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$borderSpacingPx on mixed\.$#'
+			identifier: property.nonObject
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -699,7 +711,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$display on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 12
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -747,7 +759,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$fontWeight on mixed\.$#'
 			identifier: property.nonObject
-			count: 5
+			count: 8
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -799,9 +811,15 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
-			message: '#^Cannot access property \$textAlign on mixed\.$#'
+			message: '#^Cannot access property \$tableLayout on mixed\.$#'
 			identifier: property.nonObject
 			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$textAlign on mixed\.$#'
+			identifier: property.nonObject
+			count: 5
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -814,6 +832,12 @@ parameters:
 			message: '#^Cannot access property \$value on mixed\.$#'
 			identifier: property.nonObject
 			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$verticalAlign on mixed\.$#'
+			identifier: property.nonObject
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -831,13 +855,19 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 37
+			count: 62
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 35
+			count: 56
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot call method querySelectorAll\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

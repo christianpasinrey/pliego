@@ -15,6 +15,7 @@ use Pliego\Style\FontStyle;
 use Pliego\Style\JustifyContent;
 use Pliego\Style\StyleResolver;
 use Pliego\Style\TextAlign;
+use Pliego\Style\VerticalAlign;
 
 function resolveDoc(string $css, string $html): array
 {
@@ -309,4 +310,126 @@ it('computes the flex shorthand end to end through DeclarationParser + ComputedS
     expect($style->flexGrow)->toBe(2.0);
     expect($style->flexShrink)->toBe(1.0);
     expect($style->flexBasis)->toEqual(LengthPercentage::px(30.0));
+});
+
+// --- M5-T2: UA table display defaults, border-spacing, table-layout, vertical-align ------
+
+it('defaults table/tr/td/thead/tbody to their table display UA values', function () {
+    [$doc, $map] = resolveDoc(
+        '',
+        '<body><table><thead><tr><th>h</th></tr></thead><tbody><tr><td>d</td></tr></tbody></table></body>',
+    );
+    $table = $doc->querySelector('table');
+    $thead = $doc->querySelector('thead');
+    $tbody = $doc->querySelector('tbody');
+    $tr = $doc->querySelectorAll('tr');
+    $th = $doc->querySelector('th');
+    $td = $doc->querySelector('td');
+    assert($table !== null && $thead !== null && $tbody !== null && $th !== null && $td !== null);
+    expect($map->get($table)->display)->toBe(Display::Table);
+    expect($map->get($thead)->display)->toBe(Display::TableHeaderGroup);
+    expect($map->get($tbody)->display)->toBe(Display::TableRowGroup);
+    foreach ($tr as $row) {
+        expect($map->get($row)->display)->toBe(Display::TableRow);
+    }
+    expect($map->get($th)->display)->toBe(Display::TableCell);
+    expect($map->get($td)->display)->toBe(Display::TableCell);
+});
+
+it('lets author declarations override the UA table display defaults (cascade)', function () {
+    [$doc, $map] = resolveDoc('td { display: block }', '<body><table><tr><td>x</td></tr></table></body>');
+    $td = $doc->querySelector('td');
+    assert($td !== null);
+    expect($map->get($td)->display)->toBe(Display::Block);
+});
+
+it('computes display:table/table-row/table-cell/table-header-group/table-row-group from declarations on non-table tags', function () {
+    [$doc, $map] = resolveDoc(
+        'div { display: table } span { display: table-row-group }',
+        '<body><div>x</div><span>y</span></body>',
+    );
+    $div = $doc->querySelector('div');
+    $span = $doc->querySelector('span');
+    assert($div !== null && $span !== null);
+    expect($map->get($div)->display)->toBe(Display::Table);
+    expect($map->get($span)->display)->toBe(Display::TableRowGroup);
+});
+
+it('defaults th to font-weight 700 and text-align center via UA default, td stays normal/left', function () {
+    [$doc, $map] = resolveDoc('', '<body><table><tr><th>h</th><td>d</td></tr></table></body>');
+    $th = $doc->querySelector('th');
+    $td = $doc->querySelector('td');
+    assert($th !== null && $td !== null);
+    expect($map->get($th)->fontWeight)->toBe(700);
+    expect($map->get($th)->textAlign)->toBe(TextAlign::Center);
+    expect($map->get($td)->fontWeight)->toBe(400);
+    expect($map->get($td)->textAlign)->toBe(TextAlign::Left);
+});
+
+it('lets author declarations override the th UA defaults', function () {
+    [$doc, $map] = resolveDoc(
+        'th { font-weight: normal; text-align: right }',
+        '<body><table><tr><th>h</th></tr></table></body>',
+    );
+    $th = $doc->querySelector('th');
+    assert($th !== null);
+    expect($map->get($th)->fontWeight)->toBe(400);
+    expect($map->get($th)->textAlign)->toBe(TextAlign::Right);
+});
+
+it('defaults border-spacing to 0 and inherits the declared px value down the tree (CSS 2.2 §17.6.1)', function () {
+    [$doc, $map] = resolveDoc('table { border-spacing: 6px }', '<body><table><tr><td>x</td></tr></table></body>');
+    $table = $doc->querySelector('table');
+    $td = $doc->querySelector('td');
+    assert($table !== null && $td !== null);
+    expect($map->get($table)->borderSpacingPx)->toBe(6.0);
+    // border-spacing SÍ hereda: td no declara nada propio, así que hereda el valor de table.
+    expect($map->get($td)->borderSpacingPx)->toBe(6.0);
+
+    [$docPlain, $mapPlain] = resolveDoc('', '<body><table><tr><td>x</td></tr></table></body>');
+    $tablePlain = $docPlain->querySelector('table');
+    assert($tablePlain !== null);
+    expect($mapPlain->get($tablePlain)->borderSpacingPx)->toBe(0.0);
+});
+
+it('warns and drops a two-value border-spacing at parse time (single value only in M5)', function () {
+    [$doc, $map] = resolveDoc('table { border-spacing: 4px 8px }', '<body><table></table></body>');
+    $table = $doc->querySelector('table');
+    assert($table !== null);
+    expect($map->get($table)->borderSpacingPx)->toBe(0.0);
+});
+
+it('defaults table-layout to auto and does not inherit a declared fixed value', function () {
+    [$doc, $map] = resolveDoc('table { table-layout: fixed }', '<body><table><tr><td>x</td></tr></table></body>');
+    $table = $doc->querySelector('table');
+    $td = $doc->querySelector('td');
+    assert($table !== null && $td !== null);
+    expect($map->get($table)->tableLayout)->toBe('fixed');
+    // table-layout NO hereda: td cae al initial value 'auto', no al 'fixed' del padre.
+    expect($map->get($td)->tableLayout)->toBe('auto');
+});
+
+it('defaults vertical-align to Top and does not inherit a declared value', function () {
+    [$doc, $map] = resolveDoc(
+        'td { vertical-align: middle }',
+        '<body><table><tr><td>x<span>y</span></td></tr></table></body>',
+    );
+    $td = $doc->querySelector('td');
+    $span = $doc->querySelector('span');
+    assert($td !== null && $span !== null);
+    expect($map->get($td)->verticalAlign)->toBe(VerticalAlign::Middle);
+    // vertical-align NO hereda: span cae al default Top, no a Middle del padre.
+    expect($map->get($span)->verticalAlign)->toBe(VerticalAlign::Top);
+});
+
+it('computes vertical-align top/bottom from declarations', function () {
+    [$doc, $map] = resolveDoc(
+        'td.a { vertical-align: top } td.b { vertical-align: bottom }',
+        '<body><table><tr><td class="a">x</td><td class="b">y</td></tr></table></body>',
+    );
+    $a = $doc->querySelector('td.a');
+    $b = $doc->querySelector('td.b');
+    assert($a !== null && $b !== null);
+    expect($map->get($a)->verticalAlign)->toBe(VerticalAlign::Top);
+    expect($map->get($b)->verticalAlign)->toBe(VerticalAlign::Bottom);
 });
