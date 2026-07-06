@@ -141,6 +141,40 @@ it('golden: THE CARD -- a flex row of a fixed-width photo plus a flex:1 text col
     assertMatchesGolden('flex-card', new FragmentDumper()->dump($fragment));
 });
 
+it('golden: table auto layout -- 2 columns, asymmetric content, borders and border-spacing (M5-T6)', function () {
+    // 2-col table, table-layout:auto (the default): col0 is short ("Km"-sized) content, col1 is
+    // longer text -- exercises the SAME auto column algorithm as TableFormattingContextTest's "2
+    // columns sized from their own max-content" unit test, now through the real HTML/CSS pipeline
+    // (selectors, UA table display defaults, StyleResolver cascade), with a visible border on the
+    // table AND each cell (M2's border painting) plus a non-zero border-spacing (M5-T2, separated
+    // borders model §17.6.1) -- both of which shift geometry away from the bare 0-spacing/
+    // 0-border unit test, so this golden is a genuinely distinct fixture, not a duplicate.
+    $html = '<body><table class="tbl">'
+        . '<tr><td class="c">Km</td><td class="c">Un texto bastante más largo en esta celda</td></tr>'
+        . '<tr><td class="c">12,5</td><td class="c">Otro contenido de la segunda fila</td></tr>'
+        . '</table></body>';
+    $css = '.tbl { border: 1px solid #999999; border-spacing: 4px } .c { border: 1px solid #cccccc; padding: 3px 6px }';
+    $fragment = goldenLayoutHtml($html, $css, 400.0);
+
+    assertMatchesGolden('table-auto-borders-spacing', new FragmentDumper()->dump($fragment));
+});
+
+it('golden: table colspan -- a header cell spans both columns (M5-T6)', function () {
+    // 2-col table where the header row is a SINGLE <th colspan="2"> spanning both body columns --
+    // the same excess-distribution branch TableFormattingContextTest's "colspan=2 cell distributes
+    // its excess width" unit test exercises, now through the real pipeline: <thead>/<tbody> (M5-T3
+    // transparency), a real colspan HTML attribute (BoxTreeBuilder::parseColspan()), and the th's
+    // own UA-default bold+center (M5-T2) visible in the dump alongside the column-width geometry.
+    $html = '<body><table class="tbl">'
+        . '<thead><tr><th class="c" colspan="2">Resumen del día</th></tr></thead>'
+        . '<tbody><tr><td class="c">Sarria</td><td class="c">Portomarín</td></tr></tbody>'
+        . '</table></body>';
+    $css = '.tbl { border: 1px solid #999999; border-spacing: 4px } .c { border: 1px solid #cccccc; padding: 3px 6px }';
+    $fragment = goldenLayoutHtml($html, $css, 400.0);
+
+    assertMatchesGolden('table-colspan-header', new FragmentDumper()->dump($fragment));
+});
+
 it('golden: flex-wrap -- 3 fixed-width/height images wrap into 2 lines inside a 200px container (M4-T6)', function () {
     // Same numbers as FlexFormattingContextTest's wrap unit test (item widths 80/80/80 via the HTML
     // width attribute, heights 30/50/20 via the height attribute, container 200px, row-gap:10,

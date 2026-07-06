@@ -4,10 +4,10 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M4); the
+> **Not published to Packagist yet.** This is an early milestone (M5); the
 > package is not installable via Composer from a registry at this point.
 
-## Status: M4 — flexbox
+## Status: M5 — tables
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -27,8 +27,99 @@ column), `flex-wrap`, `gap`, `justify-content`, `align-items`, `flex-grow`/
 out the target document's photo+text cards the way an author would actually
 write them (`display: flex; gap: 12px` instead of stacking blocks), with the
 whole flex container treated as an atomic, indivisible unit for pagination
-purposes. It is still not a general-purpose renderer — tables/floats and the
-rest of flexbox-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
+purposes. M5 adds a **table subset** (css-tables-3 §2 / CSS 2.2 §17): the
+`<table>`/`<thead>`/`<tbody>`/`<tr>`/`<td>`/`<th>` element set with the
+separated-borders box model, auto **and** fixed column-width algorithms,
+`colspan`, `vertical-align`, and row-atomic pagination — enough to render
+third-party/email-style HTML (a classic email layout is exactly nested
+`<table>`s: a photo cell + a text cell per row, a bordered data table inside
+the text cell) without asking the author to rewrite it as flexbox first. It
+is still not a general-purpose renderer — floats and the rest of tables-to-
+spec (`border-collapse`, `rowspan`, repeating `<thead>`) are the milestones
+ahead (see [Roadmap](#roadmap)).
+
+### Supported as of M5
+
+- **Tables** (css-tables-3 §2 subset): `display: table` on `<table>` (and the
+  matching UA defaults for `<thead>`/`<tbody>`/`<tr>`/`<td>`/`<th>` — no CSS
+  needed to get real table semantics out of plain table markup) laid out by a
+  standalone `TableFormattingContext` (not `FormattingContext` — a `TableBox`
+  is a sibling of `BlockBox` in the box tree, not a specialization of it, the
+  same adjudication `InlineFlowContext` already made).
+  - **`<thead>`/`<tbody>`**: transparent row groups — they contribute no
+    level of their own to the box tree, their `<tr>`s flatten directly into
+    the table's row list in document order. `<thead>`'s rows are tagged (so
+    a future repeating-header feature has the signal it needs) but **do not
+    actually repeat per page** yet — see limitations below.
+  - **Column width algorithms** (§17.5.2): **auto** (the default) sizes each
+    column from the real min/max-content of every span-1 cell that falls in
+    it (via `IntrinsicSizer`, the same collaborator M4 already used for flex
+    sizing) — Σmax ≤ available distributes the surplus proportional to each
+    column's max; Σmin ≥ available clamps every column to its min and warns;
+    the interpolated middle case is linear between min and max. **Fixed**
+    (`table-layout: fixed` **with** a declared table width — without one it
+    warns and falls back to auto, per spec) is the fast path: the first
+    row's own declared cell widths win outright, no `IntrinsicSizer` call at
+    all, undeclared columns split the remainder equally.
+  - **`colspan`**: a spanning cell's excess width (what its own content
+    needs beyond the columns' already-accumulated single-span max) is
+    distributed across the columns it spans, proportional to each column's
+    own single-span max — equal shares when every spanned column is at 0.
+  - **Separated borders model** (§17.6.1, the only model this engine
+    implements — see `border-collapse` below): a single `border-spacing`
+    value (both axes share it, a documented simplification of the two-value
+    spec syntax) inserted before/between/after every column and every row;
+    rows paint their own background but never a border of their own — only
+    cells and the table's own outer border do.
+  - **`vertical-align`**: `top` (default), `middle`, `bottom` on table cells
+    only (this is **not** the general inline `vertical-align`, css-tables-3
+    §3's cell-specific subset) — a shorter cell in a row stretches to the
+    row's height (geometry-only, its content is never re-laid-out) and then,
+    for `middle`/`bottom`, its content shifts down within that stretched box
+    by half/all of the resulting delta.
+  - **Nested tables**: a `<table>` inside a `<td>`/`<th>` is a completely
+    ordinary case — cells reuse the exact same box-tree pipeline as any
+    other block content (blocks/inline/images/nested tables), and a nested
+    table now contributes its own real min/max-content to its host cell's
+    column-width calculation (an `IntrinsicSizer` gap closed post-review: a
+    cell whose only content was a nested table used to measure as 0-width,
+    collapsing its column to zero and visually overlapping its sibling).
+  - **Row-atomic pagination**: a `<tr>`'s `BoxFragment` is atomic (the same
+    indivisible-unit mechanism M4 introduced for a flex container) — the
+    table itself is **not** atomic, so `Paginator` descends into it freely
+    and finds each row already indivisible, splitting the table exactly
+    between rows with zero table-specific pagination code. A row taller
+    than one page is kept unsplit, with the same warning M4's oversized
+    atomic flex container already uses ("atomic fragment taller than page,
+    kept unsplit") — no separate message for tables.
+  - **Not supported, reported as a warning rather than silently ignored or
+    approximated**: `border-collapse` (any value — the property isn't
+    recognized at all, so it falls through to the generic "unsupported
+    property" warning; separated borders is the only model implemented),
+    `rowspan` (the attribute's mere presence warns and the cell is treated
+    as if it weren't there — colspan-only grid, no vertical cell merging),
+    a repeating `<thead>` per page (a `<thead>`'s rows are tagged but
+    render exactly once, wherever they fall in document order — a
+    multi-page table's header does **not** reappear on page 2+),
+    `<caption>`/`<col>`/`<colgroup>`/`<tfoot>` (no dedicated handling — a
+    `<caption>` as a direct child of `<table>` falls through the same
+    "non-row element" anonymous-wrapping path any other stray element would,
+    not a real caption placement), and `vertical-align: baseline` (or any
+    value beyond top/middle/bottom).
+  - **Loose content in a table** (bare text or a non-table-structure element
+    found directly inside `<table>`/`<tr>`): `BoxTreeBuilder` *can* wrap it
+    in an anonymous row+cell (a deliberately minimal subset of §17.2.1's full
+    anonymous-box generation — it does not merge adjacent loose siblings
+    into one shared anonymous box the way the complete algorithm would), but
+    that code path is in practice unreachable through `HtmlParser::parse()`:
+    `\Dom\HTMLDocument` already runs the full HTML5 tree-construction
+    algorithm, which performs **foster parenting** itself — any stray text
+    or non-table element written inside `<table>`/`<tr>` in source HTML is
+    hoisted out to become a preceding sibling of the table *in the DOM
+    itself*, before this engine ever sees it. The anonymous-wrapping code
+    only fires for a non-HTML5 DOM source (XML/XHTML, or a hand-built DOM),
+    verified empirically rather than a design choice — nothing in
+    `BoxTreeBuilder` assumes its input always comes from `HtmlParser`.
 
 ### Supported as of M4
 
@@ -212,10 +303,14 @@ rest of flexbox-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
   overflow is cut at the column edge instead. Either way, overflow only
   becomes visible/lossy when the neighboring column also paints into the
   shared boundary region.
-- No tables/floats (M5+); flexbox is implemented as of M4 but only the
-  subset above — see "Supported as of M4" for what's excluded (`order`,
-  `align-self`, `align-content`, `inline-flex`, `flex-basis: content`,
-  `*-reverse`, writing modes) and the stretch/column simplifications.
+- No floats/position (M6+); tables are implemented as of M5 but only the
+  subset above — see "Supported as of M5" for what's excluded
+  (`border-collapse`, `rowspan`, a repeating `<thead>` per page,
+  `<caption>`/`<col>`/`<colgroup>`/`<tfoot>`, `vertical-align: baseline`).
+  Flexbox is implemented as of M4 but only the subset above — see "Supported
+  as of M4" for what's excluded (`order`, `align-self`, `align-content`,
+  `inline-flex`, `flex-basis: content`, `*-reverse`, writing modes) and the
+  stretch/column simplifications.
 - **Images**: no indexed/palette PNG (color type 3), no interlaced (Adam7)
   PNG, no bit depths other than 8, no CMYK JPEG, no formats beyond JPEG/PNG
   (no GIF/WebP/SVG/BMP). No remote `src` (`http://`/`https://` is reported as
@@ -313,8 +408,9 @@ of flexbox/grid:
 | **M1** | Real text: styled inline runs, UAX #14 line breaking, alignment, subsetting, ToUnicode | Bold/sizes/alignment from the target document; ~10× smaller PDFs than M0's whole-font embedding |
 | **M2** | Full box model — **borders**, width/margin/padding %, `box-sizing` — plus **`@page` margins, repeating margin boxes, `counter(page)`/`counter(pages)`** ("Page X of Y") | The bordered rows and numbered footer from the target document |
 | **M3** | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject, alpha via `/SMask`), deduplicated XObjects, intrinsic + attribute sizing | The photos in the itinerary cards |
-| **M4** (this release) | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width`, atomic pagination | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
-| **M5+** | Tables → floats/position → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Tables stay necessary for third-party/email-style HTML; flex gets completed to spec in its own milestone |
+| **M4** | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width`, atomic pagination | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
+| **M5** (this release) | **Tables subset**: `table`/`thead`/`tbody`/`tr`/`td`/`th`, auto + fixed column-width algorithms, `colspan`, separated borders (`border-spacing`), cell `vertical-align`, nested tables, row-atomic pagination | Third-party/email-style HTML is built from `<table>`s, not flexbox — a classic email layout (photo cell + text cell, bordered data table inside) renders without rewriting it first |
+| **M6+** | Floats/position → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Flex gets completed to spec in its own milestone; floats round out the box model |
 
 ## License
 

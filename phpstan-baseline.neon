@@ -4,6 +4,30 @@ parameters:
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
 			identifier: offsetAccess.notFound
 			count: 1
+			path: tests/EndToEnd/EmailLayoutTest.php
+
+		-
+			message: '#^Parameter \#2 \$red of function imagecolorallocate expects int\<0, 255\>, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/EmailLayoutTest.php
+
+		-
+			message: '#^Parameter \#3 \$green of function imagecolorallocate expects int\<0, 255\>, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/EmailLayoutTest.php
+
+		-
+			message: '#^Parameter \#6 \$color of function imageline expects int, int\<0, max\>\|false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/EmailLayoutTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
 			path: tests/EndToEnd/ItineraryCompleteTest.php
 
 		-

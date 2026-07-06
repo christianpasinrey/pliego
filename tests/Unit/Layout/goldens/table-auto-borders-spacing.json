@@ -1,0 +1,262 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        400.0,
+        87.6
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                400.0,
+                87.6
+            ],
+            "background": null,
+            "borders": {
+                "top": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                },
+                "right": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                },
+                "bottom": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                },
+                "left": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                }
+            },
+            "atomic": false,
+            "children": [
+                {
+                    "type": "box",
+                    "rect": [
+                        1.0,
+                        5.0,
+                        398.0,
+                        46.4
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                5.0,
+                                5.0,
+                                49.63,
+                                46.4
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        12.0,
+                                        9.0,
+                                        26.08,
+                                        19.2
+                                    ],
+                                    "text": "Km",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 25.45
+                                }
+                            ]
+                        },
+                        {
+                            "type": "box",
+                            "rect": [
+                                58.63,
+                                5.0,
+                                336.38,
+                                46.4
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        65.63,
+                                        9.0,
+                                        293.39,
+                                        19.2
+                                    ],
+                                    "text": "Un texto bastante más largo en esta ",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 25.45
+                                },
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        65.63,
+                                        28.2,
+                                        43.05,
+                                        19.2
+                                    ],
+                                    "text": "celda",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 44.65
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        1.0,
+                        55.4,
+                        398.0,
+                        27.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                5.0,
+                                55.4,
+                                49.63,
+                                27.2
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        12.0,
+                                        59.4,
+                                        35.63,
+                                        19.2
+                                    ],
+                                    "text": "12,5",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 75.85
+                                }
+                            ]
+                        },
+                        {
+                            "type": "box",
+                            "rect": [
+                                58.63,
+                                55.4,
+                                336.38,
+                                27.2
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        65.63,
+                                        59.4,
+                                        267.2,
+                                        19.2
+                                    ],
+                                    "text": "Otro contenido de la segunda fila",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 75.85
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
