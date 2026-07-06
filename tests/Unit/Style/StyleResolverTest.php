@@ -909,12 +909,12 @@ it('unsets every longhand of a shorthand when its var() substitution fails, not 
 
 // --- M7-T2: complete UA stylesheet (CSS 2.2 Appendix D, adapted) + cascade origin ---------------
 
-it('sizes and bolds h1..h6 per the UA stylesheet (2/1.5/1.17/1/.83/.67 em)', function () {
+it('sizes and bolds h1..h6 per the UA stylesheet (2/1.5/1.17/1/.83/.75 em)', function () {
     [$doc, $map] = resolveDoc(
         '',
         '<body><h1>1</h1><h2>2</h2><h3>3</h3><h4>4</h4><h5>5</h5><h6>6</h6></body>',
     );
-    $expectedEm = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.67];
+    $expectedEm = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.75];
     foreach ($expectedEm as $tag => $em) {
         $el = $doc->querySelector($tag);
         assert($el !== null);
@@ -933,8 +933,8 @@ it('sizes h1..h6 top/bottom margins per the UA stylesheet, relative to each head
     expect($map->get($h1)->marginTop->value)->toBe(0.67 * 32.0);
     expect($map->get($h1)->marginBottom->value)->toBe(0.67 * 32.0);
     expect($map->get($h1)->marginLeft->value)->toBe(0.0);
-    // h6: font-size .67em de 16px = 10.72px; margin 1.67em 0 -> 1.67 * 10.72 = 17.9024px.
-    expect($map->get($h6)->marginTop->value)->toEqualWithDelta(1.67 * (0.67 * 16.0), 0.0001);
+    // h6: font-size .75em de 16px = 12.0px; margin 1.67em 0 -> 1.67 * 12.0 = 20.04px.
+    expect($map->get($h6)->marginTop->value)->toEqualWithDelta(1.67 * (0.75 * 16.0), 0.0001);
 });
 
 it('gives p/ul/ol/dl a 1em 0 margin and blockquote/figure a 1em 40px margin', function () {

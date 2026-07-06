@@ -36,14 +36,9 @@ use Pliego\Css\StylesheetParser;
  * sin necesidad; se deja fuera de alcance de esta tarea, documentado en vez de migrado.
  *
  * CONTENIDO NUEVO DE ESTA TAREA (Appendix D adaptada):
- *   - h1..h6: font-size 2/1.5/1.17/1/.83/.67 em, margin .67/.75/.83/1.12/1.5/1.67 em (top/bottom;
- *     left/right 0), font-weight:bold. NOTA DE FIDELIDAD AL SPEC: la tabla real de CSS 2.1
- *     Appendix D usa h6 { font-size: .75em }, no .67em — este motor sigue literalmente los
- *     valores del brief de la tarea (h1..h6: 2/1.5/1.17/1/.83/.67 em), que difieren de esa única
- *     celda; se documenta aquí la divergencia en vez de "corregirla" en silencio, por si una
- *     tarea futura decide alinear con el spec al pie de la letra. El resto de la tabla (tamaños
- *     h1-h5 y los 6 márgenes) coincide exactamente con CSS 2.1 Appendix D / los valores por
- *     defecto reales de los navegadores.
+ *   - h1..h6: font-size 2/1.5/1.17/1/.83/.75 em, margin .67/.75/.83/1.12/1.5/1.67 em (top/bottom;
+ *     left/right 0), font-weight:bold. Todas las celdas coinciden exactamente con CSS 2.2
+ *     Appendix D (spec-compliant).
  *   - p/ul/ol/dl: margin 1em 0. blockquote/figure: margin 1em 40px (left/right también
  *     desplazados, a diferencia de p/ul/ol/dl). ul/ol: padding-left 40px (marcadores de lista
  *     son M8/T3 -- css-lists-3 -- el padding ya deja sitio para ellos).
@@ -75,7 +70,7 @@ final class UserAgentStylesheet
         h3 { font-size: 1.17em; margin: .83em 0; font-weight: bold; }
         h4 { font-size: 1em; margin: 1.12em 0; font-weight: bold; }
         h5 { font-size: .83em; margin: 1.5em 0; font-weight: bold; }
-        h6 { font-size: .67em; margin: 1.67em 0; font-weight: bold; }
+        h6 { font-size: .75em; margin: 1.67em 0; font-weight: bold; }
         p, ul, ol, dl { margin: 1em 0; }
         blockquote, figure { margin: 1em 40px; }
         ul, ol { padding-left: 40px; }
