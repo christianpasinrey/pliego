@@ -13,8 +13,7 @@ use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
-use Pliego\Layout\Fragment\ImageFragment;
-use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\Fragment\GeometryShift;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Style\AlignItems;
 use Pliego\Style\ComputedStyle;
@@ -353,58 +352,15 @@ final readonly class FlexFormattingContext implements FormattingContext
             // M5-T1 (housekeeping): antes de esta tarea, un offset≠0 (center/flex-end) volvía a
             // invocar layoutItem() ENTERO con el ÚNICO cambio de sumarle $offset a la Y de
             // partida — mismo $resolvedMain[$i]/$marginsX[$i] (mismo tamaño) que el layout
-            // "natural" ya calculado unas líneas arriba. translateY() reutiliza ESE fragmento,
-            // desplazando su subárbol completo en vez de repetir el layout — seguro porque Y
-            // solo entra de forma ADITIVA en BlockFlowContext::layout()/layoutImage() (ningún
-            // cálculo depende de su valor absoluto), así que el resultado es idéntico bit a bit.
-            $finalFragments[] = $offset !== 0.0 ? self::translateY($natural[$i], $offset) : $natural[$i];
+            // "natural" ya calculado unas líneas arriba. GeometryShift::translateY() (M5-T5:
+            // extraído de esta clase, ver su docblock) reutiliza ESE fragmento, desplazando su
+            // subárbol completo en vez de repetir el layout — seguro porque Y solo entra de forma
+            // ADITIVA en BlockFlowContext::layout()/layoutImage() (ningún cálculo depende de su
+            // valor absoluto), así que el resultado es idéntico bit a bit.
+            $finalFragments[] = $offset !== 0.0 ? GeometryShift::translateY($natural[$i], $offset) : $natural[$i];
         }
 
         return [$finalFragments, $lineCross];
-    }
-
-    /**
-     * M5-T1: ver el comentario de layoutRowLine() en su call site — desplaza un BoxFragment YA
-     * calculado (y todo su subárbol) $deltaY en el eje vertical sin volver a layoutear nada.
-     */
-    private static function translateY(BoxFragment $fragment, float $deltaY): BoxFragment
-    {
-        return new BoxFragment(
-            new Rect($fragment->rect->x, $fragment->rect->y + $deltaY, $fragment->rect->width, $fragment->rect->height),
-            $fragment->background,
-            self::translateChildrenY($fragment->children, $deltaY),
-            $fragment->borders,
-            $fragment->atomic,
-        );
-    }
-
-    /**
-     * @param list<Fragment> $children
-     * @return list<Fragment>
-     */
-    private static function translateChildrenY(array $children, float $deltaY): array
-    {
-        $result = [];
-        foreach ($children as $child) {
-            $result[] = match (true) {
-                $child instanceof BoxFragment => self::translateY($child, $deltaY),
-                $child instanceof TextFragment => new TextFragment(
-                    new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
-                    $child->text,
-                    $child->baselineY + $deltaY,
-                    $child->fontSizePx,
-                    $child->color,
-                    $child->faceKey,
-                    $child->underline,
-                ),
-                $child instanceof ImageFragment => new ImageFragment(
-                    new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
-                    $child->imageKey,
-                ),
-                default => throw new \LogicException('Unknown fragment leaf: ' . $child::class),
-            };
-        }
-        return $result;
     }
 
     /**

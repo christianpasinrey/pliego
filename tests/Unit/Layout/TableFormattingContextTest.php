@@ -14,6 +14,7 @@ use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\BlockFlowContext;
+use Pliego\Layout\FlexFormattingContext;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\FragmentDumper;
@@ -21,6 +22,7 @@ use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\IntrinsicSizer;
 use Pliego\Layout\TableFormattingContext;
 use Pliego\Layout\TextMeasurer;
+use Pliego\Page\Paginator;
 use Pliego\Style\ComputedStyle;
 use Pliego\Text\FontCatalog;
 
@@ -478,9 +480,9 @@ it('a nested-table-only cell gets the nested table\'s real intrinsic width inste
     expect($nestedTextDump['rect'][0])->toBeLessThan($col1TextDump['rect'][0]);
 });
 
-// --- row fragments stay atomic:false for now (T5 flips this) / rows never paint their own border
+// --- row fragments are atomic (M5-T5), the table itself never is / rows never paint their own border
 
-it('marks the row fragment as atomic:false (T5 will flip this) and never paints its own border (separated model)', function () {
+it('marks the row fragment as atomic:true (M5-T5: Paginator splits between rows), the table itself stays atomic:false, and rows never paint their own border (separated model)', function () {
     $rowStyle = tableStyle([
         'border-top-width' => Length::px(5.0), 'border-top-style' => BorderStyle::Solid,
     ]);
@@ -491,7 +493,7 @@ it('marks the row fragment as atomic:false (T5 will flip this) and never paints 
     [$rowFrag] = $frag->children;
     assert($rowFrag instanceof BoxFragment);
 
-    expect($rowFrag->atomic)->toBeFalse();
+    expect($rowFrag->atomic)->toBeTrue();
     expect($frag->atomic)->toBeFalse();
     expect($rowFrag->borders->isVisible())->toBeFalse();
 });
@@ -514,4 +516,235 @@ it('BlockFlowContext delegates a TableBox child to TableFormattingContext and ad
     // No T3-style overlap: the sibling starts exactly where the table's border-box ends (default
     // margins are 0, so no extra gap either).
     expect($siblingFrag->rect->y)->toBe($tableFrag->rect->bottom());
+});
+
+// --- M5-T5: vertical-align middle/bottom, hand-computed shifts ---------------------------------
+
+it('vertical-align: middle shifts a shorter cell\'s content down by half the delta to the row height', function () {
+    $style = tableStyle();
+    $short = new TextRun('one line', $style);
+    $tall = [new TextRun('line one', $style), new LineBreakRun(), new TextRun('line two', $style)];
+    $cellShort = new TableCellBox(tableStyle(['vertical-align' => 'middle']), [$short], 1, 'td');
+    $cellTall = new TableCellBox($style, $tall, 1, 'td');
+    $row = new TableRowBox($style, [$cellShort, $cellTall], false);
+    $table = new TableBox($style, [$row], 'table');
+
+    // Independent oracle (NOT the code under test): the natural, un-stretched height of each
+    // cell's content, same pattern as the T4 "row height equals the tallest cell" test.
+    $blockFlow = new BlockFlowContext($this->measurer, $this->catalog);
+    $naturalShort = $blockFlow->layout(new BlockBox($style, [$short], 'td'), new Rect(0.0, 0.0, 1000.0, INF))->rect->height;
+    $naturalTall = $blockFlow->layout(new BlockBox($style, $tall, 'td'), new Rect(0.0, 0.0, 1000.0, INF))->rect->height;
+    expect($naturalTall)->toBeGreaterThan($naturalShort);
+
+    $frag = $this->ctx->layout($table, new Rect(0.0, 0.0, 1000.0, INF));
+    [$rowFrag] = $frag->children;
+    assert($rowFrag instanceof BoxFragment);
+    [$shortFrag, $tallFrag] = $rowFrag->children;
+    assert($shortFrag instanceof BoxFragment && $tallFrag instanceof BoxFragment);
+
+    // The cell's own box is still stretched to the full row height (background/border still
+    // paint over the whole row slot) -- only its CONTENT moves, per the geometry-shift pattern.
+    expect($shortFrag->rect->height)->toBe($naturalTall);
+    expect($shortFrag->rect->y)->toBe($rowFrag->rect->y);
+
+    $expectedDelta = ($naturalTall - $naturalShort) / 2.0;
+    $shortText = $shortFrag->children[0];
+    assert($shortText instanceof TextFragment);
+    expect($shortText->rect->y)->toBeGreaterThan($shortFrag->rect->y); // top-align would give exactly rect->y
+    expect($shortText->rect->y)->toEqualWithDelta($shortFrag->rect->y + $expectedDelta, 0.001);
+
+    // The tallest cell's content is never shifted (its own contentHeight already equals the row
+    // height -- delta=0, alignCell() is a no-op regardless of its vertical-align).
+    $tallFirstLine = $tallFrag->children[0];
+    assert($tallFirstLine instanceof TextFragment);
+    expect($tallFirstLine->rect->y)->toBe($tallFrag->rect->y);
+});
+
+it('vertical-align: bottom shifts a shorter cell\'s content down by the full delta to the row height', function () {
+    $style = tableStyle();
+    $short = new TextRun('one line', $style);
+    $tall = [new TextRun('line one', $style), new LineBreakRun(), new TextRun('line two', $style)];
+    $cellShort = new TableCellBox(tableStyle(['vertical-align' => 'bottom']), [$short], 1, 'td');
+    $cellTall = new TableCellBox($style, $tall, 1, 'td');
+    $row = new TableRowBox($style, [$cellShort, $cellTall], false);
+    $table = new TableBox($style, [$row], 'table');
+
+    $blockFlow = new BlockFlowContext($this->measurer, $this->catalog);
+    $naturalShort = $blockFlow->layout(new BlockBox($style, [$short], 'td'), new Rect(0.0, 0.0, 1000.0, INF))->rect->height;
+    $naturalTall = $blockFlow->layout(new BlockBox($style, $tall, 'td'), new Rect(0.0, 0.0, 1000.0, INF))->rect->height;
+
+    $frag = $this->ctx->layout($table, new Rect(0.0, 0.0, 1000.0, INF));
+    [$rowFrag] = $frag->children;
+    assert($rowFrag instanceof BoxFragment);
+    [$shortFrag, $tallFrag] = $rowFrag->children;
+    assert($shortFrag instanceof BoxFragment && $tallFrag instanceof BoxFragment);
+
+    expect($shortFrag->rect->height)->toBe($naturalTall);
+
+    $expectedDelta = $naturalTall - $naturalShort;
+    $shortText = $shortFrag->children[0];
+    assert($shortText instanceof TextFragment);
+    // Content's own bottom edge lands exactly at the cell's bottom edge (full delta, not half).
+    expect($shortText->rect->y)->toEqualWithDelta($shortFrag->rect->y + $expectedDelta, 0.001);
+    expect($shortText->rect->y + $shortText->rect->height)->toEqualWithDelta($shortFrag->rect->bottom(), 0.001);
+});
+
+// --- M5-T5: row-atomic pagination integration (real TableFormattingContext output through Paginator)
+
+it('warns and keeps a row taller than the page unsplit (M5-T1 warning channel, reused verbatim for rows)', function () {
+    // A single cell stacking many lines makes its (and therefore the row's) height comfortably
+    // exceed a small page content height -- the same documented "atomic taller than page" limit
+    // Paginator already has for flex containers, now exercised through a real table row.
+    $style = tableStyle();
+    $lines = [];
+    for ($i = 0; $i < 40; $i++) {
+        if ($i > 0) {
+            $lines[] = new LineBreakRun();
+        }
+        $lines[] = new TextRun("line {$i}", $style);
+    }
+    $cell = new TableCellBox($style, $lines, 1, 'td');
+    $row = new TableRowBox($style, [$cell], false);
+    $table = new TableBox($style, [$row], 'table');
+
+    $frag = $this->ctx->layout($table, new Rect(0.0, 0.0, 500.0, INF));
+    [$rowFrag] = $frag->children;
+    assert($rowFrag instanceof BoxFragment);
+
+    $pageHeight = 100.0;
+    expect($rowFrag->rect->height)->toBeGreaterThan($pageHeight); // sanity: really exercises the giant-row branch
+
+    $warnings = new WarningCollector();
+    $pages = iterator_to_array(new Paginator($pageHeight, $warnings)->paginate($frag));
+    expect($pages)->toHaveCount(1);
+    $keptRow = $pages[0]->fragments[0];
+    assert($keptRow instanceof BoxFragment);
+    expect($keptRow->atomic)->toBeTrue();
+    expect($keptRow->rect->height)->toBe($rowFrag->rect->height); // kept whole, not split
+    expect($warnings->drain())->toBe(['atomic fragment taller than page, kept unsplit']);
+});
+
+it('splits a 30-row table between rows exactly across page boundaries, no row straddling and spacing intact within a page', function () {
+    $borderSpacing = 4.0;
+    $style = tableStyle(['border-spacing' => Length::px($borderSpacing)]);
+    $rows = [];
+    for ($i = 0; $i < 30; $i++) {
+        $cell = new TableCellBox($style, [new TextRun("r{$i}", $style)], 1, 'td');
+        $rows[] = new TableRowBox($style, [$cell], false);
+    }
+    $table = new TableBox($style, $rows, 'table');
+
+    $frag = $this->ctx->layout($table, new Rect(0.0, 0.0, 500.0, INF));
+    expect($frag->children)->toHaveCount(30);
+    $firstRow = $frag->children[0];
+    assert($firstRow instanceof BoxFragment);
+    $rowHeight = $firstRow->rect->height;
+    // All 30 rows share the same natural height (single line of similarly-sized text, no wrapping).
+    foreach ($frag->children as $rowFrag) {
+        assert($rowFrag instanceof BoxFragment);
+        expect($rowFrag->rect->height)->toEqualWithDelta($rowHeight, 0.001);
+    }
+
+    // Force a page boundary to fall strictly INSIDE row index 15 (its middle) -- guarantees a
+    // push-down is required at that row, deterministically, without hand-tuning font metrics.
+    $row15Top = $borderSpacing + 15 * ($rowHeight + $borderSpacing);
+    $pageHeight = $row15Top + $rowHeight / 2.0;
+
+    $pages = iterator_to_array(new Paginator($pageHeight)->paginate($frag));
+    expect(count($pages))->toBeGreaterThanOrEqual(2); // the split actually happened
+
+    $rowFragmentsByPage = [];
+    foreach ($pages as $page) {
+        $rowsOnPage = [];
+        foreach ($page->fragments as $leaf) {
+            if ($leaf instanceof BoxFragment && $leaf->atomic) {
+                $rowsOnPage[] = $leaf;
+            }
+        }
+        $rowFragmentsByPage[] = $rowsOnPage;
+    }
+
+    // No row lost, none duplicated, none split (each row-atomic leaf keeps its original height).
+    $totalRows = 0;
+    $orderedTexts = [];
+    foreach ($rowFragmentsByPage as $rowsOnPage) {
+        $totalRows += count($rowsOnPage);
+        $prevBottom = null;
+        foreach ($rowsOnPage as $rowLeaf) {
+            expect($rowLeaf->rect->height)->toEqualWithDelta($rowHeight, 0.001);
+            // Lands page-locally: never straddles the page's own content height.
+            expect($rowLeaf->rect->y + $rowLeaf->rect->height)->toBeLessThanOrEqual($pageHeight + 0.001);
+            // Spacing arithmetic intact between two consecutive rows ON THE SAME PAGE.
+            if ($prevBottom !== null) {
+                expect($rowLeaf->rect->y - $prevBottom)->toEqualWithDelta($borderSpacing, 0.001);
+            }
+            $prevBottom = $rowLeaf->rect->y + $rowLeaf->rect->height;
+
+            $cellFrag = $rowLeaf->children[0];
+            assert($cellFrag instanceof BoxFragment);
+            $textFrag = $cellFrag->children[0];
+            assert($textFrag instanceof TextFragment);
+            $orderedTexts[] = $textFrag->text;
+        }
+    }
+    expect($totalRows)->toBe(30);
+    $expectedTexts = [];
+    for ($i = 0; $i < 30; $i++) {
+        $expectedTexts[] = "r{$i}";
+    }
+    expect($orderedTexts)->toBe($expectedTexts); // document order preserved across the page split
+});
+
+// --- M5-T5: a table inside a flex card -- the outer atomic flex container governs pagination ----
+
+it('a table nested inside an atomic flex card is never split at the row level: the outer atom governs pagination', function () {
+    $style = tableStyle();
+    $rows = [];
+    for ($i = 0; $i < 5; $i++) {
+        $cell = new TableCellBox($style, [new TextRun("row {$i}", $style)], 1, 'td');
+        $rows[] = new TableRowBox($style, [$cell], false);
+    }
+    $table = new TableBox($style, $rows, 'table');
+    // The "card": a plain block item (NOT itself display:flex) whose only child is the table --
+    // FlexFormattingContext delegates a non-flex item to ITS OWN internal BlockFlowContext
+    // (layoutItem(), see class docblock), which in turn delegates the nested TableBox to its
+    // own lazily-autocreated TableFormattingContext (BlockFlowContext::tableContext(), see that
+    // class's docblock) -- a DIFFERENT instance from $this->ctx, but functionally identical: the
+    // table still lays out for real, this test only cares about the resulting atomicity/nesting.
+    $card = new BlockBox($style, [$table], 'div');
+    $container = new BlockBox(tableStyle(['display' => 'flex', 'width' => LengthPercentage::px(400.0)]), [$card], 'div');
+
+    $flexCtx = new FlexFormattingContext($this->measurer, $this->catalog, $this->sizer);
+    $cardFrag = $flexCtx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+
+    expect($cardFrag->atomic)->toBeTrue(); // the flex container itself
+
+    $pageHeight = 10.0; // deliberately tiny: the card is certainly taller than this
+    expect($cardFrag->rect->height)->toBeGreaterThan($pageHeight);
+
+    $warnings = new WarningCollector();
+    $pages = iterator_to_array(new Paginator($pageHeight, $warnings)->paginate($cardFrag));
+
+    // flatten() returns at its very first check when a fragment is atomic (see Paginator
+    // docblock) -- the ENTIRE card+table+rows subtree comes out as exactly ONE leaf, never
+    // decomposed into its 5 individually-atomic row fragments.
+    expect($pages)->toHaveCount(1);
+    expect($pages[0]->fragments)->toHaveCount(1);
+    $keptWhole = $pages[0]->fragments[0];
+    assert($keptWhole instanceof BoxFragment);
+    expect($keptWhole->atomic)->toBeTrue();
+    // Only ONE warning -- for the OUTER atom, never one per inner row (Paginator's flatten()
+    // never even looks at the rows individually once the outer atomic gate returns first).
+    expect($warnings->drain())->toBe(['atomic fragment taller than page, kept unsplit']);
+
+    // The nested structure survives completely intact inside that single leaf.
+    [$cardBoxFrag] = $keptWhole->children;
+    assert($cardBoxFrag instanceof BoxFragment);
+    [$tableFrag] = $cardBoxFrag->children;
+    assert($tableFrag instanceof BoxFragment);
+    expect($tableFrag->children)->toHaveCount(5);
+    foreach ($tableFrag->children as $rowFrag) {
+        assert($rowFrag instanceof BoxFragment);
+        expect($rowFrag->atomic)->toBeTrue();
+    }
 });

@@ -10,7 +10,9 @@ use Pliego\Box\TableRowBox;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\GeometryShift;
 use Pliego\Layout\Geometry\Rect;
+use Pliego\Style\VerticalAlign;
 use Pliego\Text\FontCatalog;
 
 /**
@@ -94,12 +96,38 @@ use Pliego\Text\FontCatalog;
  * (mismo criterio "el override siempre gana" que Flex/Block ya documentan). Altura de fila =
  * MÁXIMO de las alturas (border-box) de fragmento de sus celdas; las celdas más bajas se ESTIRAN
  * geometry-only a esa altura (mismo patrón que FlexFormattingContext::withHeight(): el rect crece,
- * el contenido NO se re-layoutea ni se centra — vertical-align:top implícito, M5-T5 revisará
- * middle/bottom). Fragmento de FILA: BoxFragment normal (atomic=false — M5-T5 lo pondrá a true
- * para que Paginator la trate como unidad de paginación; documentado, no un bug de esta tarea),
- * SIN bordes propios (CSS 2.2 §17.6.1: en el modelo separado, filas/row-groups NUNCA pintan borde
- * propio, solo celdas y la tabla exterior lo hacen — sí pinta su propio background, detrás de sus
- * celdas). Orden de pintado gratis por anidamiento de fragmentos: tabla → fila → celda → contenido.
+ * el contenido NO se re-layoutea).
+ *
+ * vertical-align (M5-T5, css-tables-3 §3, solo top|middle|bottom soportados — ver VerticalAlign):
+ * top (default) es el estirado de arriba sin más — el contenido queda anclado en la parte
+ * superior de la caja YA estirada, comportamiento intacto desde T4. middle/bottom desplazan el
+ * CONTENIDO (nunca la caja de la celda en sí, que ya ocupa la altura completa de fila — su fondo/
+ * borde siguen pintándose sobre ESE rect completo) dentro de la caja estirada, vía
+ * GeometryShift::translateChildrenY() (M5-T5: extraído de FlexFormattingContext, ver el docblock
+ * de esa clase compartida). $contentHeight = la altura NATURAL del fragmento de la celda ANTES de
+ * estirar (lo que withHeight() habría dejado sin tocar); el delta se calcula contra la altura de
+ * fila ($rowHeight, que YA incluye el padding/borde propios de la celda más alta — ver
+ * layoutRow()): middle → (rowHeight − contentHeight)/2 hacia abajo; bottom → el delta completo,
+ * rowHeight − contentHeight. Una celda cuyo contentHeight YA es rowHeight (la más alta, o
+ * cualquiera sin estirar) tiene delta=0 → alignCell() no la toca, sin importar su vertical-align
+ * declarado (no-op observable, documentado).
+ *
+ * Fragmento de FILA: BoxFragment con atomic=true (M5-T5: antes T4 lo dejaba en false,
+ * documentado como pendiente) — Paginator la trata como unidad de paginación indivisible (mismo
+ * mecanismo M4-T5 que ya usa FlexFormattingContext para su contenedor, ver
+ * Paginator::flatten()/relocate()): la TABLA en sí NO es atómica, así que Paginator desciende
+ * dentro de ella libremente y encuentra sus filas —cada una, atómica— partiendo la tabla EXACTAMENTE
+ * entre filas, sin código de paginación específico para tablas (la misma maquinaria M4 genérica).
+ * Una fila más alta que la página se queda sin partir, con el warning ya existente desde M5-T1
+ * ("atomic fragment taller than page, kept unsplit") — reutilizado tal cual, sin mensaje nuevo.
+ * El espaciado vertical (border-spacing) entre la última fila de una página y la primera de la
+ * siguiente desaparece de forma natural cuando una fila se empuja entera a la página siguiente
+ * (el push-down de Paginator reposiciona su Y absoluta, el spacing ya "vivía" en esa Y original,
+ * no en un cálculo aparte) — sin caso especial en esta clase, verificado por test de integración
+ * (ver TableFormattingContextTest, "30-row table splits between rows exactly").
+ * Filas SIN bordes propios (CSS 2.2 §17.6.1: en el modelo separado, filas/row-groups NUNCA pintan
+ * borde propio, solo celdas y la tabla exterior lo hacen — sí pinta su propio background, detrás de
+ * sus celdas). Orden de pintado gratis por anidamiento de fragmentos: tabla → fila → celda → contenido.
  *
  * border-spacing (un solo valor para ambos ejes, T2 ya documenta esa simplificación): horizontal
  * antes de la primera columna, entre columnas, y después de la última (spacing×(cols+1) total);
@@ -355,8 +383,10 @@ final readonly class TableFormattingContext
     /**
      * Layoutea una fila completa: posiciona sus celdas por columna (con el borderSpacing separado
      * antes/entre/después, §17.6.1), layoutea cada una vía el BlockFlowContext interno con
-     * $usedWidthOverride (ver docblock de clase), y estira geometry-only las más bajas a la altura
-     * máxima de la fila (vertical-align:top implícito, M5-T5 revisa middle/bottom).
+     * $usedWidthOverride (ver docblock de clase), estira geometry-only las más bajas a la altura
+     * máxima de la fila y aplica vertical-align (top/middle/bottom, ver alignCell()) por celda. El
+     * fragmento de fila resultante es atomic:true (M5-T5, ver docblock de clase) — Paginator la
+     * trata como unidad de paginación indivisible.
      *
      * @param array<int, float> $colWidths
      * @return array{0: BoxFragment, 1: float} fragmento de fila + su borde inferior absoluto
@@ -374,6 +404,7 @@ final readonly class TableFormattingContext
         }
 
         $cellFragments = [];
+        $cellStyles = [];
         $colIndex = 0;
         foreach ($row->cells as $cell) {
             $span = $cell->colspan;
@@ -386,6 +417,7 @@ final readonly class TableFormattingContext
 
             $cellBox = new BlockBox($cell->style, $cell->children, $cell->tag);
             $cellFragments[] = $this->blockFlow->layout($cellBox, new Rect($cellX, $rowTop, $cellWidth, INF), $cellWidth);
+            $cellStyles[] = $cell->style;
             $colIndex += $span;
         }
 
@@ -394,29 +426,65 @@ final readonly class TableFormattingContext
             $rowHeight = max($rowHeight, $fragment->rect->height);
         }
 
-        $stretched = [];
-        foreach ($cellFragments as $fragment) {
-            $stretched[] = $fragment->rect->height < $rowHeight ? self::withHeight($fragment, $rowHeight) : $fragment;
+        $aligned = [];
+        foreach ($cellFragments as $i => $fragment) {
+            $aligned[] = self::alignCell($fragment, $cellStyles[$i]->verticalAlign, $rowHeight);
         }
 
         // CSS 2.2 §17.6.1: en el modelo separado, una FILA nunca pinta su propio borde (solo las
         // celdas y la tabla exterior lo hacen) — BorderSet::none() a propósito, no un descuido; su
         // background SÍ se pinta, detrás de las celdas (orden de pintado gratis por anidamiento).
+        // atomic:true (M5-T5): ver el docblock de clase para el porqué (Paginator parte la tabla
+        // ENTRE filas gratis, sin código de paginación específico para tablas).
         $rowFragment = new BoxFragment(
             new Rect($contentX, $rowTop, $gridWidth, $rowHeight),
             $row->style->backgroundColor,
-            $stretched,
+            $aligned,
             BorderSet::none(),
+            atomic: true,
         );
 
         return [$rowFragment, $rowTop + $rowHeight];
     }
 
     /**
+     * M5-T5: estira geometry-only la celda a $rowHeight (mismo mecanismo que
+     * FlexFormattingContext::withHeight(), ver docblock de esa clase — sin duplicar código entre
+     * ambas porque no comparten ninguna otra cosa que justifique un trait) y, si $verticalAlign no
+     * es Top, desplaza SU CONTENIDO (no la caja ya estirada, ver docblock de clase) hacia abajo vía
+     * GeometryShift::translateChildrenY(). $contentHeight es la altura NATURAL del fragmento (antes
+     * de estirar) — el mismo valor que withHeight() habría dejado como estaba si $rowHeight fuera
+     * igual a ella; una celda cuyo contentHeight YA es $rowHeight (delta=0, la más alta de la fila,
+     * o cualquiera sin estirar) no se toca pase lo que pase en $verticalAlign, sin caso especial.
+     */
+    private static function alignCell(BoxFragment $fragment, VerticalAlign $verticalAlign, float $rowHeight): BoxFragment
+    {
+        $contentHeight = $fragment->rect->height;
+        $stretched = $contentHeight < $rowHeight ? self::withHeight($fragment, $rowHeight) : $fragment;
+
+        $delta = match ($verticalAlign) {
+            VerticalAlign::Top => 0.0,
+            VerticalAlign::Middle => ($rowHeight - $contentHeight) / 2.0,
+            VerticalAlign::Bottom => $rowHeight - $contentHeight,
+        };
+        if ($delta <= 0.0) {
+            return $stretched;
+        }
+
+        return new BoxFragment(
+            $stretched->rect,
+            $stretched->background,
+            GeometryShift::translateChildrenY($stretched->children, $delta),
+            $stretched->borders,
+            $stretched->atomic,
+        );
+    }
+
+    /**
      * Mismo mecanismo geometry-only que FlexFormattingContext::withHeight() (sin duplicar código
      * entre ambas clases porque no comparten ninguna otra cosa que justifique un trait): agranda
      * el rect de un fragmento de celda ya calculado sin re-layoutear su contenido (que queda
-     * anclado arriba — vertical-align:top implícito, ver docblock de clase).
+     * anclado arriba — alignCell() se encarga después de desplazarlo si vertical-align no es top).
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
