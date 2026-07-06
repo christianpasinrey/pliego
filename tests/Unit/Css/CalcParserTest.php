@@ -80,3 +80,29 @@ it('supports unary minus on a dimension', function () {
     $expr = new CalcParser()->parse('-10px + 3px');
     expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, -7.0));
 });
+
+// --- M6-T4 fix: bare leading-decimal numbers (css-values-3 <number-token> allows ".5", no
+// digit required before the dot) — the Bootstrap literal spacer pattern
+// "calc(var(--bs-spacing) * .5)" was dropping the whole declaration before this fix. ----------
+
+it('accepts a bare leading-decimal dimension: .5rem + 1px', function () {
+    $expr = new CalcParser()->parse('.5rem + 1px');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.5, 1.0));
+});
+
+it('accepts a negative bare leading-decimal dimension: -.5rem', function () {
+    $expr = new CalcParser()->parse('-.5rem');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, -0.5, 0.0));
+});
+
+it('multiplies by a bare leading-decimal number: 1rem * .5', function () {
+    $expr = new CalcParser()->parse('1rem * .5');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.5, 0.0));
+});
+
+it('warns and returns null when a bare leading-decimal number is the whole expression: .25', function () {
+    $parser = new CalcParser();
+    $expr = $parser->parse('.25');
+    expect($expr)->toBeNull();
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

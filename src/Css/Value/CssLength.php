@@ -42,7 +42,12 @@ final readonly class CssLength
         if ($value === '0') {
             return self::zero();
         }
-        if (preg_match('/^(-?\d+(?:\.\d+)?)(px|rem|em|pt|cm|mm|in|%)$/', $value, $m) !== 1) {
+        // M6-T4 fix (Finding 1, css-values-3 §4.3.6 <number-token>): a leading digit before the
+        // dot is optional — ".5rem"/"-.5em" are valid, not just "0.5rem". Same fix as
+        // CalcParser::tokenize(), kept in sync to avoid a drift between the two sites that parse
+        // the same <number-token> grammar (here the optional sign is part of the number itself,
+        // since fromCss() matches the whole string in one shot instead of tokenizing operators).
+        if (preg_match('/^(-?(?:\d+(?:\.\d+)?|\.\d+))(px|rem|em|pt|cm|mm|in|%)$/', $value, $m) !== 1) {
             return null;
         }
         $num = (float) $m[1];

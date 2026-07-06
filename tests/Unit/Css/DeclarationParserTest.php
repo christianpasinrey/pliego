@@ -608,3 +608,27 @@ it('does not fall back to plain length parsing when a value looks like calc() bu
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M6-T4 fix, finding 2: a calc() with NO em/rem/% is a definite px value already knowable at
+// parse time — fold it and run the same non-negative check a literal value would get. ----------
+
+it('rejects a definite negative calc() for a non-negative property at parse time: padding-left:calc(-5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding-left', 'calc(-5px)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts a definite negative calc() for margin at parse time (margins may be negative)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin-left', 'calc(-5px)');
+    expect($result)->toEqual(['margin-left' => CalcExpr::of(0.0, 0.0, 0.0, -5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts a %-bearing calc() regardless of apparent sign at parse time (documented gap): padding-left:calc(10% - 999px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding-left', 'calc(10% - 999px)');
+    expect($result)->toEqual(['padding-left' => CalcExpr::of(10.0, 0.0, 0.0, -999.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});

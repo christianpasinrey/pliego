@@ -32,6 +32,19 @@ final readonly class CalcExpr
     }
 
     /**
+     * M6-T4 fix (Finding 2): true when this calc() has no em/rem/% component — i.e. it is already
+     * a definite px value, knowable WITHOUT any compute-time context (font-size, containing
+     * block). DeclarationParser::rawValueOf() uses this to fold `calc(-5px)` to -5.0 at PARSE time
+     * so the existing non-negative check applies exactly as it would to the literal `-5px` — a
+     * calc() with em/rem/% is NOT definite yet (needs ComputedStyle::compute()/Layout), so it must
+     * NOT be treated as a known value here.
+     */
+    public function isDefinite(): bool
+    {
+        return $this->percentFactor === 0.0 && $this->emFactor === 0.0 && $this->remFactor === 0.0;
+    }
+
+    /**
      * Pliega em/rem (siempre resolubles aquí, igual que CssLength en ComputedStyle::compute).
      * $percentBase es null en propiedades donde % se difiere a Layout (margin/padding/width/
      * flex-basis, igual que un LengthPercentage::percent() normal): en ese caso, si el árbol

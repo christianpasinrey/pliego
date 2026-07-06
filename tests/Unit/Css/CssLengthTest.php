@@ -69,3 +69,24 @@ it('returns null for garbage or unsupported units', function () {
     expect(CssLength::fromCss('2vh'))->toBeNull();
     expect(CssLength::fromCss(''))->toBeNull();
 });
+
+// --- M6-T4 fix: bare leading-decimal numbers (css-values-3 <number-token> allows ".5", no
+// digit required before the dot). ---------------------------------------------------------
+
+it('parses a bare leading-decimal length: .5rem', function () {
+    $css = CssLength::fromCss('.5rem');
+    expect($css?->unit)->toBe(LengthUnit::Rem);
+    expect($css?->value)->toBe(0.5);
+});
+
+it('parses a negative bare leading-decimal length: -.5em', function () {
+    $css = CssLength::fromCss('-.5em');
+    expect($css?->unit)->toBe(LengthUnit::Em);
+    expect($css?->value)->toBe(-0.5);
+});
+
+it('parses a bare leading-decimal physical length: .75pt', function () {
+    $css = CssLength::fromCss('.75pt');
+    expect($css?->unit)->toBe(LengthUnit::Px);
+    expect($css?->value)->toBe(0.75 * CssLength::PX_PER_PT);
+});

@@ -32,8 +32,24 @@ final class DeclarationParser
      * margin-* es la única excepción ahí. font-size/height (LENGTH_PROPERTIES) se rechazan
      * incondicionalmente más abajo — ambas son siempre no-negativas, así que no necesitan
      * figurar aquí (evita el "always true" que detecta PHPStan al estrechar el tipo).
+     *
+     * M6-T4 fix (Finding 2): visibilidad `public` y lista AMPLIADA a la lista COMPLETA de
+     * propiedades no-negativas del motor — antes solo cubría las 5 gateadas explícitamente aquí
+     * mismo (líneas más abajo, chequeo de literales en LENGTH_PERCENTAGE_PROPERTIES); height/
+     * row-gap/column-gap/border-*-width/border-spacing/flex-basis YA eran no-negativas siempre en
+     * sus propios sitios de parseo (chequeo incondicional, sin consultar esta constante) — añadirlas
+     * aquí no cambia ESE comportamiento (siguen rechazándose igual), solo hace la lista consultable
+     * desde `ComputedStyle::compute()`, que necesita el mismo criterio para re-chequear el signo de
+     * un CalcExpr con em/rem UNA VEZ conocido el font-size propio (ver rawValueOf() más abajo y
+     * ComputedStyle::compute() — el signo de un calc() con % sigue sin poder conocerse hasta
+     * Layout, gap documentado, ver el reporte de M6-T4 §4).
      */
-    private const array NON_NEGATIVE_PROPERTIES = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width'];
+    public const array NON_NEGATIVE_PROPERTIES = [
+        'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width',
+        'height', 'row-gap', 'column-gap',
+        'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+        'border-spacing', 'flex-basis',
+    ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
         // css-tables-3 §2: los 5 display values de tabla soportados en M5 (grep OBLIGATORIO
@@ -345,14 +361,21 @@ final class DeclarationParser
     }
 
     /** Valor crudo (sin resolver unidad simbólica) usado solo para el chequeo de negativos —
-     * Length usa ->px, LengthPercentage/CssLength usan ->value. Un CalcExpr todavía no tiene un
-     * signo conocido (depende del font-size en ComputedStyle::compute) — se trata como no
-     * negativo aquí (el chequeo de negativos para valores calc() queda fuera de alcance de esta
-     * tarea, ningún test del brief lo ejercita). */
+     * Length usa ->px, LengthPercentage/CssLength usan ->value. M6-T4 fix (Finding 2): un CalcExpr
+     * SIN componente em/rem/% es un px DEFINITIVO ya conocido en tiempo de parseo (ver
+     * CalcExpr::isDefinite()) — se pliega aquí para que el chequeo de negativos del llamador
+     * (idéntico al de un literal) atrape `calc(-5px)` en padding/width/height/gap/border-width/
+     * border-spacing/flex-basis exactamente igual que `-5px` a secas. Un calc() CON em/rem/% no
+     * tiene signo conocible todavía (depende del font-size propio, solo disponible en
+     * ComputedStyle::compute(), o del containing block, solo disponible en Layout) — se trata como
+     * no negativo AQUÍ para no rechazarlo de forma prematura/incorrecta; el caso em/rem se
+     * re-chequea en ComputedStyle::compute() en cuanto se conoce el font-size (mismo
+     * NON_NEGATIVE_PROPERTIES, ahora exportado); el caso % queda como gap documentado (depende del
+     * containing block, solo en Layout — ver el reporte de M6-T4 §4). */
     private static function rawValueOf(Length|LengthPercentage|CssLength|CalcExpr $value): float
     {
         if ($value instanceof CalcExpr) {
-            return 0.0;
+            return $value->isDefinite() ? $value->pxOffset : 0.0;
         }
         return $value instanceof Length ? $value->px : $value->value;
     }

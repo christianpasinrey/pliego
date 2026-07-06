@@ -98,7 +98,14 @@ final class CalcParser
                 $i++;
                 continue;
             }
-            if (preg_match('/\G\d+(?:\.\d+)?/', $s, $m, 0, $i) === 1) {
+            // css-values-3 §4.3.6 <number-token>: a leading digit before the dot is optional
+            // (".5"/".25" are valid numbers, not just "0.5") — the alternation tries the
+            // digit-first form first (greedier on the common case), falling back to the bare-dot
+            // form. M6-T4 fix (Finding 1): the original `\d+(?:\.\d+)?` rejected ".5" outright,
+            // dropping calc(var(--bs-spacing) * .5) — Bootstrap's literal spacer pattern — with
+            // "Invalid calc() expression". No sign here: unary minus is handled by parseUnary(),
+            // never embedded in the number token itself (see the "-10px + 3px" test).
+            if (preg_match('/\G(?:\d+(?:\.\d+)?|\.\d+)/', $s, $m, 0, $i) === 1) {
                 $numStr = $m[0];
                 $i += strlen($numStr);
                 if (preg_match('/\G(px|rem|em|pt|cm|mm|in|%)/i', $s, $um, 0, $i) === 1) {

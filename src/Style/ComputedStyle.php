@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pliego\Style;
 
+use Pliego\Css\DeclarationParser;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\CalcExpr;
@@ -283,10 +284,23 @@ final readonly class ComputedStyle
         // justo la señal de "% no soportado aquí", igual que el rechazo ya existente de "50%"
         // literal en esas mismas propiedades (ver DeclarationParser::LENGTH_PROPERTIES) — mismo
         // resultado observable (warning + valor descartado), vía un camino distinto.
+        //
+        // M6-T4 fix (Finding 2, parte 2): un CalcExpr con em/rem (sin %) no tenía signo conocible
+        // en DeclarationParser::rawValueOf() (dependía del font-size propio) — AHORA que
+        // $fontSizePx/$remBase existen, se re-chequea aquí con el MISMO
+        // DeclarationParser::NON_NEGATIVE_PROPERTIES que usaría un literal, ej. `calc(-1em)` en
+        // padding a font-size 16 → -16px → warning + valor descartado (mismo resultado observable
+        // que `padding-left: -16px` a secas). $label son siempre nombres de propiedad reales
+        // (height/row-gap/column-gap/border-$side-width/border-spacing, todas SIEMPRE no-negativas
+        // en esta rama), así que el chequeo nunca es un falso "always true/false" para PHPStan.
         $resolveCalcPure = static function (CalcExpr $expr, string $label, float $default) use ($fontSizePx, $remBase, $warnings): float {
             $folded = $expr->fold($fontSizePx, $remBase, null);
             if ($folded instanceof CalcValue) {
                 $warnings?->addWarning("calc() with % not supported for $label (percentage discarded)");
+                return $default;
+            }
+            if ($folded < 0.0 && in_array($label, DeclarationParser::NON_NEGATIVE_PROPERTIES, true)) {
+                $warnings?->addWarning("Negative value not allowed for $label (calc() resolved to $folded at compute time)");
                 return $default;
             }
             return $folded;
@@ -294,9 +308,21 @@ final readonly class ComputedStyle
         // Contraparte para longitud+porcentaje (margin/padding/width/flex-basis): % SÍ se admite,
         // pero se difiere a Layout igual que un "50%" literal — LengthPercentage::calc() envuelve
         // el CalcValue diferido, resolve($containingBlockPx) ya sabe interpretarlo (ver esa clase).
-        $resolveCalcLengthPercentage = static function (CalcExpr $expr) use ($fontSizePx, $remBase): LengthPercentage {
+        // M6-T4 fix (Finding 2, parte 2): mismo re-chequeo que $resolveCalcPure arriba, pero SOLO
+        // cuando el plegado dio un float definitivo (sin %) — si hay % el signo sigue sin poder
+        // conocerse hasta Layout (gap documentado, ver el reporte de M6-T4 §4), así que NO se
+        // chequea aquí. margin-* nunca está en NON_NEGATIVE_PROPERTIES (los márgenes SÍ admiten
+        // negativo, CSS 2.2 §8.3), así que este mismo código los deja pasar sin warning.
+        $resolveCalcLengthPercentage = static function (CalcExpr $expr, string $label) use ($fontSizePx, $remBase, $warnings): LengthPercentage {
             $folded = $expr->fold($fontSizePx, $remBase, null);
-            return $folded instanceof CalcValue ? LengthPercentage::calc($folded) : LengthPercentage::px($folded);
+            if ($folded instanceof CalcValue) {
+                return LengthPercentage::calc($folded);
+            }
+            if ($folded < 0.0 && in_array($label, DeclarationParser::NON_NEGATIVE_PROPERTIES, true)) {
+                $warnings?->addWarning("Negative value not allowed for $label (calc() resolved to $folded at compute time)");
+                return LengthPercentage::zero();
+            }
+            return LengthPercentage::px($folded);
         };
         $length = static function (string $key) use ($declarations, $resolveCssLength, $resolveCalcPure): ?Length {
             $v = $declarations[$key] ?? null;
@@ -312,7 +338,7 @@ final readonly class ComputedStyle
             return match (true) {
                 $v instanceof LengthPercentage => $v,
                 $v instanceof CssLength => LengthPercentage::px($resolveCssLength($v)),
-                $v instanceof CalcExpr => $resolveCalcLengthPercentage($v),
+                $v instanceof CalcExpr => $resolveCalcLengthPercentage($v, $key),
                 default => $zero,
             };
         };
@@ -460,7 +486,7 @@ final readonly class ComputedStyle
         $flexBasis = match (true) {
             $flexBasisValue instanceof LengthPercentage => $flexBasisValue,
             $flexBasisValue instanceof CssLength => LengthPercentage::px($resolveCssLength($flexBasisValue)),
-            $flexBasisValue instanceof CalcExpr => $resolveCalcLengthPercentage($flexBasisValue),
+            $flexBasisValue instanceof CalcExpr => $resolveCalcLengthPercentage($flexBasisValue, 'flex-basis'),
             default => null,
         };
 

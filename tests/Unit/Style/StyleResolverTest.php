@@ -712,3 +712,38 @@ it('combines var() and calc() end to end: "--w: 50%; width: calc(var(--w) - 10px
     expect($width)->not->toBeNull();
     expect($width->resolve(400.0))->toBe(190.0);
 });
+
+// --- M6-T4 fix, finding 1: bare-decimal numbers in calc() (Bootstrap's literal spacer pattern) --
+
+it('THE acceptance probe: accepts calc(var(--bs-spacing) * .5) — Bootstrap spacer pattern — with zero warnings', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        ':root { --bs-spacing: 1rem; } .btn { padding: calc(var(--bs-spacing) * .5) }',
+        '<body><p class="btn">x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(8.0);
+    expect($warnings)->toBeEmpty();
+});
+
+// --- M6-T4 fix, finding 2: calc() sign check for non-negative properties ------------------------
+
+it('rejects a calc() with em that resolves negative for a non-negative property at compute time: padding-left:calc(-1em) at font-size 16', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'p { font-size: 16px; padding-left: calc(-1em) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(0.0);
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('accepts a %-bearing calc() for a non-negative property end to end without a sign warning (documented gap): padding-left:calc(10% - 999px)', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('p { padding-left: calc(10% - 999px) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $paddingLeft = $map->get($p)->paddingLeft;
+    expect($paddingLeft->resolve(400.0))->toBe(-959.0);
+    expect($warnings)->toBeEmpty();
+});
