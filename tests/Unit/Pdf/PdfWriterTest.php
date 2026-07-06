@@ -142,3 +142,67 @@ it('still allows finish() with no writeDeferred() call at all when nothing was e
 
     expect(readAll($stream))->toStartWith('%PDF-1.7');
 });
+
+// M6-T5: ExtGState (ISO 32000-1 §8.4.5) — registerExtGState() dedups by VALUE and writes the
+// object immediately (no defer()-style ordering contract needed, see PdfWriter's docblock).
+
+it('registerExtGState() writes an ExtGState object with matching /ca and /CA', function () {
+    [$writer, $stream] = beginWriter();
+    $id = $writer->registerExtGState(0.5);
+    $writer->addPage(595.28, 841.89, '', []);
+    $writer->finish();
+    $pdf = readAll($stream);
+
+    expect($pdf)->toContain("$id 0 obj")
+        ->toContain('/Type /ExtGState')
+        ->toContain('/ca 0.500')
+        ->toContain('/CA 0.500');
+});
+
+it('registerExtGState() dedups repeated calls with the SAME value to the same object id', function () {
+    [$writer] = beginWriter();
+    $first = $writer->registerExtGState(0.5);
+    $second = $writer->registerExtGState(0.5);
+    expect($second)->toBe($first);
+});
+
+it('registerExtGState() allocates a DIFFERENT object id for a different value', function () {
+    [$writer] = beginWriter();
+    $first = $writer->registerExtGState(0.5);
+    $second = $writer->registerExtGState(0.25);
+    expect($second)->not->toBe($first);
+});
+
+it('extGStateResourceName() names ExtGStates GS1, GS2, ... in first-use order', function () {
+    [$writer] = beginWriter();
+    expect($writer->extGStateResourceName(0.5))->toBe('GS1');
+    expect($writer->extGStateResourceName(0.25))->toBe('GS2');
+    expect($writer->extGStateResourceName(0.5))->toBe('GS1'); // dedup: same name on repeat
+});
+
+it('extGStatePageResources() returns every registered ExtGState as resourceName => objectId', function () {
+    [$writer] = beginWriter();
+    $id = $writer->registerExtGState(0.5);
+    expect($writer->extGStatePageResources())->toBe(['GS1' => $id]);
+});
+
+it('addPage() merges the ExtGState resource dict into /Resources, distinct from /Font and /XObject', function () {
+    [$writer, $stream] = beginWriter();
+    $gsId = $writer->registerExtGState(0.5);
+    $writer->addPage(595.28, 841.89, '', ['F1' => 99], [], ['GS1' => $gsId]);
+    $writer->finish();
+    $pdf = readAll($stream);
+
+    expect($pdf)->toContain("/ExtGState << /GS1 $gsId 0 R >>")
+        ->toContain('/Font << /F1 99 0 R >>');
+});
+
+it('clamps registerExtGState() to [0,1]', function () {
+    [$writer] = beginWriter();
+    $writer->addPage(595.28, 841.89, '', []);
+    $overId = $writer->registerExtGState(2.0);
+    $underId = $writer->registerExtGState(-1.0);
+    $writer->finish();
+    // clamped to 1.0 and 0.0 respectively -- distinct objects, no crash.
+    expect($overId)->not->toBe($underId);
+});

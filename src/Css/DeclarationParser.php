@@ -178,6 +178,9 @@ final class DeclarationParser
         if ($property === 'vertical-align') {
             return $this->parseVerticalAlign($value);
         }
+        if ($property === 'opacity') {
+            return $this->parseOpacity($value);
+        }
         return $this->warn("Unsupported property: $property");
     }
 
@@ -620,6 +623,24 @@ final class DeclarationParser
             'bottom' => ['vertical-align' => 'bottom'],
             default => $this->warn("Unsupported vertical-align: $value"),
         };
+    }
+
+    /**
+     * M6-T5 (css-color-3 opacity / CSS Compositing §5): número unitless, clampado a [0,1] —
+     * fuera de rango NO es un warning, se clampa silenciosamente (css-values-3 §4.3: "values
+     * outside the range are not invalid, but are clamped"), a diferencia de casi todas las demás
+     * propiedades numéricas de este parser (que SÍ avisan ante un valor fuera de rango). Solo un
+     * token no-numérico produce warning.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseOpacity(string $value): array
+    {
+        $trimmed = trim($value);
+        if (preg_match('/^-?(?:\d+\.?\d*|\.\d+)$/', $trimmed) !== 1) {
+            return $this->warn("Unsupported opacity: $value");
+        }
+        return ['opacity' => max(0.0, min(1.0, (float) $trimmed))];
     }
 
     /** @return array<string, mixed> */

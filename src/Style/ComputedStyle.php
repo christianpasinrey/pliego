@@ -98,6 +98,17 @@ final readonly class ComputedStyle
         public float $borderSpacingPx,
         public string $tableLayout,
         public VerticalAlign $verticalAlign,
+        // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
+        // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
+        // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
+        // sobre los colores PROPIOS del elemento (fondo/texto/bordes/subrayado/imagen) en el
+        // punto de pintado (ver Color::withOpacity(), Layout\*FormattingContext y Paint\Painter) —
+        // NUNCA se hornea aquí en $color/$backgroundColor/border-*-color, porque esos SÍ pueden
+        // heredar o servir de currentColor para un hijo, y ese hijo NO debe heredar la opacity de
+        // este elemento (divergencia M6 documentada: cada elemento solo pinta con su PROPIA
+        // opacity, sin semántica real de "transparency group" que afecte también a los
+        // descendientes como grupo — eso es M7+).
+        public float $opacity = 1.0,
         // M6-T4 (css-variables-1 §2-3): custom properties SÍ heredan siempre (a diferencia de
         // casi todas las demás propiedades de este constructor, que no heredan por defecto) — es
         // el mecanismo de herencia el que hace que var(--bs-primary) funcione en cualquier
@@ -410,9 +421,29 @@ final readonly class ComputedStyle
 
         // color se computa antes de ensamblar los bordes: border-{side}-color por defecto
         // es currentColor (CSS 2.2 §8.5.3), es decir, el color computado de este elemento.
-        $color = ($declarations['color'] ?? null) instanceof Color ? $declarations['color'] : $parent->color;
+        //
+        // M6-T5 (css-color-3 §4.4): 'color: currentColor' es el ÚNICO caso donde el sentinel NO
+        // puede resolverse contra el propio $color (circular — todavía no existe) — CSS lo fija
+        // al valor HEREDADO del padre, exactamente igual que si 'color' no se hubiera declarado en
+        // absoluto (de ahí que ambas ramas del match converjan al mismo $parent->color).
+        $declaredColor = $declarations['color'] ?? null;
+        $color = match (true) {
+            $declaredColor instanceof Color && $declaredColor->isCurrentColor => $parent->color,
+            $declaredColor instanceof Color => $declaredColor,
+            default => $parent->color,
+        };
 
-        $borderSide = static function (string $side) use ($declarations, $color, $resolveCssLength, $resolveCalcPure): BorderSide {
+        // M6-T5: helper compartido por background-color y border-*-color — 'currentColor' (o
+        // ausencia total de declaración, ver $borderSide más abajo) resuelve al $color YA
+        // computado arriba (nunca al $parent->color: aquí currentColor SÍ puede referirse al color
+        // propio de ESTE elemento, porque ya existe).
+        $resolveCurrentColor = static fn(mixed $declared): ?Color => match (true) {
+            $declared instanceof Color && $declared->isCurrentColor => $color,
+            $declared instanceof Color => $declared,
+            default => null,
+        };
+
+        $borderSide = static function (string $side) use ($declarations, $color, $resolveCurrentColor, $resolveCssLength, $resolveCalcPure): BorderSide {
             $width = $declarations["border-$side-width"] ?? null;
             $style = $declarations["border-$side-style"] ?? null;
             $sideColor = $declarations["border-$side-color"] ?? null;
@@ -431,7 +462,7 @@ final readonly class ComputedStyle
             return new BorderSide(
                 $widthPx,
                 $resolvedStyle,
-                $sideColor instanceof Color ? $sideColor : $color,
+                $resolveCurrentColor($sideColor) ?? $color,
             );
         };
 
@@ -515,6 +546,14 @@ final readonly class ComputedStyle
             default => VerticalAlign::Top,
         };
 
+        // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
+        // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
+        // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
+        // opacity llega por un camino distinto a DeclarationParser, ej. una expansión futura de
+        // shorthand) y no debería activarse nunca desde el pipeline real.
+        $opacityValue = $declarations['opacity'] ?? null;
+        $opacity = is_float($opacityValue) ? max(0.0, min(1.0, $opacityValue)) : 1.0;
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -529,7 +568,7 @@ final readonly class ComputedStyle
             // height NO hereda (igual que width): siempre parte de las propias declaraciones del
             // elemento, nunca del padre.
             $length('height'),
-            ($declarations['background-color'] ?? null) instanceof Color ? $declarations['background-color'] : null,
+            $resolveCurrentColor($declarations['background-color'] ?? null),
             $color,
             $fontSizePx,
             is_string($declarations['font-family'] ?? null) ? $declarations['font-family'] : $parent->fontFamily,
@@ -555,6 +594,7 @@ final readonly class ComputedStyle
             $borderSpacingPx,
             $tableLayout,
             $verticalAlign,
+            $opacity,
             $customProperties,
         );
     }

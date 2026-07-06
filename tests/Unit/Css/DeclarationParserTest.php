@@ -632,3 +632,58 @@ it('accepts a %-bearing calc() regardless of apparent sign at parse time (docume
     expect($result)->toEqual(['padding-left' => CalcExpr::of(10.0, 0.0, 0.0, -999.0)]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
+
+// --- M6-T5: full color syntax reaches color/background-color/border-*-color via the SAME
+// Color::fromCss() call already exercised above for hex/keywords — these just prove rgb()/hsl()/
+// currentColor flow through the property dispatcher unchanged. -------------------------------
+
+it('parses color/background-color with rgb()/rgba()', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('color', 'rgb(139, 94, 52)'))->toEqual(['color' => new Color(139, 94, 52)]);
+    expect($parser->parse('background-color', 'rgba(0, 0, 255, 0.5)'))
+        ->toEqual(['background-color' => new Color(0, 0, 255, 0.5)]);
+});
+
+it('parses color/background-color with hsl()/hsla()', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('color', 'hsl(0, 100%, 50%)'))->toEqual(['color' => new Color(255, 0, 0)]);
+});
+
+it('parses currentColor for color/background-color/border-color as the sentinel', function () {
+    $parser = new DeclarationParser();
+    $color = $parser->parse('color', 'currentColor');
+    expect($color['color'])->toBeInstanceOf(Color::class);
+    expect($color['color']->isCurrentColor)->toBeTrue();
+    $bg = $parser->parse('background-color', 'currentColor');
+    expect($bg['background-color']->isCurrentColor)->toBeTrue();
+    $border = $parser->parse('border-top-color', 'currentColor');
+    expect($border['border-top-color']->isCurrentColor)->toBeTrue();
+});
+
+it('parses "transparent" for background-color as alpha 0', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-color', 'transparent');
+    expect($result['background-color'])->toEqual(new Color(0, 0, 0, 0.0));
+});
+
+// --- M6-T5: opacity — clamped to [0,1], NOT a warning when out of range (css-values-3 §4.3). ---
+
+it('parses opacity as a float', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('opacity', '0.5'))->toBe(['opacity' => 0.5]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('clamps opacity above 1 to 1.0 and below 0 to 0.0, without a warning', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('opacity', '2'))->toBe(['opacity' => 1.0]);
+    expect($parser->parse('opacity', '-1'))->toBe(['opacity' => 0.0]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on a non-numeric opacity value', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('opacity', 'transparent');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

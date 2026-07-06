@@ -197,6 +197,53 @@ it('resolves a border with no color declared to the element computed color (curr
     expect($style->borderTop->color)->toEqual(new Color(255, 0, 0));
 });
 
+// M6-T5: 'currentColor' as an EXPLICIT declared value (not just the implicit default above) —
+// background-color/border-*-color resolve to the element's OWN computed color; 'color:
+// currentColor' resolves to the INHERITED (parent) color instead (css-color-3 §4.4: it can't
+// refer to itself).
+
+it('resolves an explicit background-color:currentColor to the element computed color', function () {
+    [$doc, $map] = resolveDoc('p { color: #f00; background-color: currentColor }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->backgroundColor)->toEqual(new Color(255, 0, 0));
+});
+
+it('resolves an explicit border-top-color:currentColor to the element computed color', function () {
+    [$doc, $map] = resolveDoc(
+        'p { color: #0f0; border-top-style: solid; border-top-width: 2px; border-top-color: currentColor }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->borderTop->color)->toEqual(new Color(0, 255, 0));
+});
+
+it('resolves color:currentColor to the INHERITED color, not a self-reference', function () {
+    [$doc, $map] = resolveDoc('body { color: #00f } p { color: currentColor }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 255));
+});
+
+// M6-T5: opacity — non-inherited (initial value 1.0 regardless of the parent's own opacity).
+
+it('defaults opacity to 1.0 and does not inherit a parent opacity', function () {
+    [$doc, $map] = resolveDoc('body { opacity: 0.3 }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    $body = $doc->querySelector('body');
+    assert($p !== null && $body !== null);
+    expect($map->get($body)->opacity)->toBe(0.3);
+    expect($map->get($p)->opacity)->toBe(1.0);
+});
+
+it('resolves a declared opacity, clamped to [0,1]', function () {
+    [$doc, $map] = resolveDoc('p { opacity: 0.5 }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->opacity)->toBe(0.5);
+});
+
 it('zeroes the used border width when border-style is none (CSS 2.2 §8.5.3)', function () {
     [$doc, $map] = resolveDoc('p { border-top-width: 10px }', '<body><p>x</p></body>');
     $p = $doc->querySelector('p');

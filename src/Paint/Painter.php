@@ -43,8 +43,12 @@ final readonly class Painter
     private function paintFragment(Fragment $fragment, Canvas $canvas): void
     {
         if ($fragment instanceof BoxFragment) {
+            // M6-T5: opacity PROPIA de este BoxFragment multiplica el alpha de su fondo (Color::
+            // withOpacity() — no-op si opacity es 1.0, ver su docblock) — los HIJOS (pintados más
+            // abajo, vía recursión) NO reciben esta opacity (divergencia M6 documentada, ver
+            // ComputedStyle::$opacity): cada uno trae la SUYA propia.
             if ($fragment->background !== null) {
-                $canvas->fillRect($fragment->rect, $fragment->background);
+                $canvas->fillRect($fragment->rect, $fragment->background->withOpacity($fragment->opacity));
             }
             $this->paintBorders($fragment, $canvas);
             foreach ($fragment->children as $child) {
@@ -58,12 +62,16 @@ final readonly class Painter
             if ($fragment->text === '' && $fragment->rect->width === 0.0) {
                 return;
             }
+            // M6-T5: fillText() recibe el TextFragment ENTERO (a diferencia de fillRect/
+            // strokeLine, que reciben un Color suelto) — combina $fragment->color con
+            // $fragment->opacity POR DENTRO (PdfCanvas::fillText()), así que aquí no hace falta
+            // (ni se puede, sin clonar el fragmento) tocar el color de antemano.
             $canvas->fillText($fragment);
             if ($fragment->underline) {
                 $this->paintUnderline($fragment, $canvas);
             }
         } elseif ($fragment instanceof ImageFragment) {
-            $canvas->drawImage($fragment->rect, $fragment->imageKey);
+            $canvas->drawImage($fragment->rect, $fragment->imageKey, $fragment->opacity);
         }
     }
 
@@ -90,13 +98,16 @@ final readonly class Painter
         // $positionPx es NEGATIVA (bajo la baseline); restarla desplaza la Y hacia abajo (px
         // CSS: origen arriba-izquierda, Y crece hacia abajo).
         $y = $fragment->baselineY - $positionPx;
+        // M6-T5: strokeLine() recibe un Color suelto (a diferencia de fillText) — a diferencia de
+        // fillText, aquí SÍ hace falta combinar $fragment->opacity a mano (mismo Color::
+        // withOpacity() que fillRect/paintBorderSide).
         $canvas->strokeLine(
             $fragment->rect->x,
             $y,
             $fragment->rect->x + $fragment->rect->width,
             $y,
             $thicknessPx,
-            $fragment->color,
+            $fragment->color->withOpacity($fragment->opacity),
         );
     }
 
@@ -120,21 +131,24 @@ final readonly class Painter
         $bottomW = $this->effectiveWidth($borders->bottom);
         $middleHeight = $rect->height - $topW - $bottomW;
 
-        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW));
+        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW), $fragment->opacity);
         $this->paintBorderSide(
             $borders->right,
             $canvas,
             new Rect($rect->right() - $borders->right->widthPx, $rect->y + $topW, $borders->right->widthPx, $middleHeight),
+            $fragment->opacity,
         );
         $this->paintBorderSide(
             $borders->bottom,
             $canvas,
             new Rect($rect->x, $rect->bottom() - $bottomW, $rect->width, $bottomW),
+            $fragment->opacity,
         );
         $this->paintBorderSide(
             $borders->left,
             $canvas,
             new Rect($rect->x, $rect->y + $topW, $borders->left->widthPx, $middleHeight),
+            $fragment->opacity,
         );
     }
 
@@ -142,12 +156,12 @@ final readonly class Painter
      * BorderSide::$color es ?Color por tipo, aunque ComputedStyle nunca produce null (T3:
      * currentColor eager) — guardia defensiva, nunca debería activarse desde el pipeline real.
      */
-    private function paintBorderSide(BorderSide $side, Canvas $canvas, Rect $rect): void
+    private function paintBorderSide(BorderSide $side, Canvas $canvas, Rect $rect, float $opacity): void
     {
         if ($side->style !== BorderStyle::Solid || $side->widthPx <= 0.0 || $side->color === null) {
             return;
         }
-        $canvas->fillRect($rect, $side->color);
+        $canvas->fillRect($rect, $side->color->withOpacity($opacity));
     }
 
     private function effectiveWidth(BorderSide $side): float

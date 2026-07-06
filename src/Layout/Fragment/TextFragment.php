@@ -17,6 +17,11 @@ final readonly class TextFragment implements Fragment
         public Color $color,
         public string $faceKey,
         public bool $underline,
+        // M6-T5: opacity PROPIA del elemento de texto (ComputedStyle::$opacity, default 1.0) —
+        // combinada con $color->alpha en PdfCanvas::fillText()/Paint\Painter::paintUnderline()
+        // (Color::withOpacity()), nunca horneada en $color (mismo motivo que BoxFragment::
+        // $opacity: no debe filtrarse a un color HEREDADO por un descendiente).
+        public float $opacity = 1.0,
     ) {}
 
     public function rect(): Rect

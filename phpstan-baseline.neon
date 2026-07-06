@@ -127,6 +127,12 @@ parameters:
 			path: tests/Unit/Css/ColorTest.php
 
 		-
+			message: '#^Cannot access property \$alpha on Pliego\\Css\\Value\\Color\|null\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Css/ColorTest.php
+
+		-
 			message: '#^Cannot access property \$b on mixed\.$#'
 			identifier: property.nonObject
 			count: 3
@@ -143,6 +149,12 @@ parameters:
 			identifier: method.nonObject
 			count: 9
 			path: tests/Unit/Css/ColorTest.php
+
+		-
+			message: '#^Cannot access property \$isCurrentColor on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Css/DeclarationParserTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\Expectation\<Pliego\\Css\\Value\\Length\|null\>\:\:\$px\.$#'
@@ -949,6 +961,12 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access property \$backgroundColor on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$borderBottom on mixed\.$#'
 			identifier: property.nonObject
 			count: 5
@@ -975,7 +993,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$borderTop on mixed\.$#'
 			identifier: property.nonObject
-			count: 10
+			count: 11
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -987,7 +1005,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$color on mixed\.$#'
 			identifier: property.nonObject
-			count: 13
+			count: 15
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1105,6 +1123,12 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access property \$opacity on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$paddingLeft on mixed\.$#'
 			identifier: property.nonObject
 			count: 9
@@ -1173,13 +1197,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 90
+			count: 96
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 81
+			count: 87
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

@@ -89,7 +89,7 @@ final readonly class Paginator
         // T5: una caja sin fondo pero con borde visible también necesita una hoja paintable
         // (antes de T5 solo se emitía por background !== null y el borde se perdía).
         if ($box->background !== null || $box->borders->isVisible()) {
-            yield new BoxFragment($box->rect, $box->background, [], $box->borders);
+            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity);
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -112,6 +112,7 @@ final readonly class Paginator
                 $leaf->color,
                 $leaf->faceKey,
                 $leaf->underline,
+                $leaf->opacity,
             ),
             // M4-T5: un BoxFragment con hijos NO vacíos solo puede llegar aquí desde dentro del
             // subárbol de una hoja compuesta atómica (flatten() nunca aplana esos hijos por
@@ -125,11 +126,12 @@ final readonly class Paginator
                 $leaf->children !== [] ? $this->relocateChildren($leaf->children, $localY - $leaf->rect->y) : [],
                 $leaf->borders,
                 $leaf->atomic,
+                $leaf->opacity,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se
             // queda cruzando el límite sin pushear, documentado en el brief).
-            $leaf instanceof ImageFragment => new ImageFragment($rect, $leaf->imageKey),
+            $leaf instanceof ImageFragment => new ImageFragment($rect, $leaf->imageKey, $leaf->opacity),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };
     }

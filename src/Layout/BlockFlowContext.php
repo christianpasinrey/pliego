@@ -246,6 +246,7 @@ final class BlockFlowContext implements FormattingContext
             $style->backgroundColor,
             $children,
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
+            opacity: $style->opacity,
         );
     }
 
@@ -297,13 +298,17 @@ final class BlockFlowContext implements FormattingContext
         $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
         $borderBoxHeight = $contentHeight + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
 
-        $imageFragment = new ImageFragment(new Rect($contentX, $contentY, $contentWidth, $contentHeight), $box->src);
+        // M6-T5: opacity se pasa a AMBOS, la caja (su propio fondo/borde) y el ImageFragment (los
+        // píxeles de la imagen, vía ExtGState en PdfCanvas::drawImage) — mismo ComputedStyle, un
+        // único <img>, así que ambos comparten el mismo valor.
+        $imageFragment = new ImageFragment(new Rect($contentX, $contentY, $contentWidth, $contentHeight), $box->src, $style->opacity);
 
         return new BoxFragment(
             new Rect($x, $y, $borderBoxWidth, $borderBoxHeight),
             $style->backgroundColor,
             [$imageFragment],
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
+            opacity: $style->opacity,
         );
     }
 

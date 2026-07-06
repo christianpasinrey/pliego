@@ -233,6 +233,7 @@ final readonly class TableFormattingContext
             $style->backgroundColor,
             $rowFragments,
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
+            opacity: $style->opacity,
         );
     }
 
@@ -442,6 +443,7 @@ final readonly class TableFormattingContext
             $aligned,
             BorderSet::none(),
             atomic: true,
+            opacity: $row->style->opacity,
         );
 
         return [$rowFragment, $rowTop + $rowHeight];
@@ -477,6 +479,7 @@ final readonly class TableFormattingContext
             GeometryShift::translateChildrenY($stretched->children, $delta),
             $stretched->borders,
             $stretched->atomic,
+            $stretched->opacity,
         );
     }
 
@@ -494,6 +497,7 @@ final readonly class TableFormattingContext
             $fragment->children,
             $fragment->borders,
             $fragment->atomic,
+            $fragment->opacity,
         );
     }
 
