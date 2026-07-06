@@ -52,6 +52,20 @@ final readonly class ComputedStyle
         public BorderSide $borderBottom,
         public BorderSide $borderLeft,
         public string $boxSizing,
+        // M4-T1: propiedades flex — ninguna hereda (css-flexbox-1: display:flex/flex-direction/
+        // flex-wrap/gap/justify-content/align-items son propiedades del CONTENEDOR, flex-grow/
+        // shrink/basis son propiedades del ITEM; ninguna de las dos categorías está en la lista de
+        // propiedades heredadas de CSS 2.2 §6.1 ni de css-flexbox-1). Los defaults son los initial
+        // values del spec, no los del padre.
+        public FlexDirection $flexDirection,
+        public FlexWrap $flexWrap,
+        public float $rowGapPx,
+        public float $columnGapPx,
+        public JustifyContent $justifyContent,
+        public AlignItems $alignItems,
+        public float $flexGrow,
+        public float $flexShrink,
+        public ?LengthPercentage $flexBasis,
     ) {}
 
     public static function root(): self
@@ -87,6 +101,15 @@ final readonly class ComputedStyle
             $noBorder,
             $noBorder,
             'content-box',
+            FlexDirection::Row,
+            FlexWrap::NoWrap,
+            0.0,
+            0.0,
+            JustifyContent::FlexStart,
+            AlignItems::Stretch,
+            0.0,
+            1.0,
+            null,
         );
     }
 
@@ -99,9 +122,14 @@ final readonly class ComputedStyle
     {
         $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
+        $displayValue = $declarations['display'] ?? null;
         $display = in_array($tag, self::HIDDEN_BY_DEFAULT, true) ? Display::None : Display::Block;
-        if (($declarations['display'] ?? null) === 'none') {
+        if ($displayValue === 'none') {
             $display = Display::None;
+        } elseif ($displayValue === 'flex') {
+            // css-flexbox-1 §2: sigue siendo un block-level box en el flujo normal — M4-T4
+            // introduce FlexFormattingContext; hasta entonces fluye como Block (ver Display::Flex).
+            $display = Display::Flex;
         }
         $length = static fn(string $key): ?Length => ($declarations[$key] ?? null) instanceof Length ? $declarations[$key] : null;
         $lengthPercentage = static fn(string $key): LengthPercentage => ($declarations[$key] ?? null) instanceof LengthPercentage ? $declarations[$key] : $zero;
@@ -184,6 +212,39 @@ final readonly class ComputedStyle
         // independientemente de $parent->boxSizing.
         $boxSizing = $boxSizingValue === 'border-box' ? 'border-box' : 'content-box';
 
+        // M4-T1: ninguna propiedad flex hereda (ver comentario del constructor) — cada rama cae
+        // directamente al initial value del spec cuando no hay declaración propia, nunca a
+        // $parent->....
+        $flexDirection = ($declarations['flex-direction'] ?? null) === 'column'
+            ? FlexDirection::Column
+            : FlexDirection::Row;
+        $flexWrap = ($declarations['flex-wrap'] ?? null) === 'wrap' ? FlexWrap::Wrap : FlexWrap::NoWrap;
+        $justifyContent = match ($declarations['justify-content'] ?? null) {
+            'center' => JustifyContent::Center,
+            'flex-end' => JustifyContent::FlexEnd,
+            'space-between' => JustifyContent::SpaceBetween,
+            default => JustifyContent::FlexStart,
+        };
+        $alignItems = match ($declarations['align-items'] ?? null) {
+            'flex-start' => AlignItems::FlexStart,
+            'center' => AlignItems::Center,
+            'flex-end' => AlignItems::FlexEnd,
+            default => AlignItems::Stretch,
+        };
+        $rowGapValue = $declarations['row-gap'] ?? null;
+        $rowGapPx = $rowGapValue instanceof Length ? $rowGapValue->px : 0.0;
+        $columnGapValue = $declarations['column-gap'] ?? null;
+        $columnGapPx = $columnGapValue instanceof Length ? $columnGapValue->px : 0.0;
+        $flexGrowValue = $declarations['flex-grow'] ?? null;
+        $flexGrow = is_float($flexGrowValue) ? $flexGrowValue : 0.0;
+        $flexShrinkValue = $declarations['flex-shrink'] ?? null;
+        $flexShrink = is_float($flexShrinkValue) ? $flexShrinkValue : 1.0;
+        // flex-basis: la longhand/shorthand emiten 'auto' (string) o un LengthPercentage; el
+        // sentinel 'auto' y la ausencia de declaración colapsan al mismo null (= auto), igual que
+        // el resto de propiedades opcionales de este método.
+        $flexBasisValue = $declarations['flex-basis'] ?? null;
+        $flexBasis = $flexBasisValue instanceof LengthPercentage ? $flexBasisValue : null;
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -212,6 +273,15 @@ final readonly class ComputedStyle
             $borderSide('bottom'),
             $borderSide('left'),
             $boxSizing,
+            $flexDirection,
+            $flexWrap,
+            $rowGapPx,
+            $columnGapPx,
+            $justifyContent,
+            $alignItems,
+            $flexGrow,
+            $flexShrink,
+            $flexBasis,
         );
     }
 }

@@ -241,3 +241,219 @@ it('parses box-sizing content-box/border-box and warns on unsupported values', f
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M4-T1: display:flex, longhands, flex shorthand ---------------------------------------
+
+it('accepts display:flex as a keyword alongside block/none', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('display', 'flex'))->toBe(['display' => 'flex']);
+    expect($parser->parse('display', 'block'))->toBe(['display' => 'block']);
+    expect($parser->parse('display', 'none'))->toBe(['display' => 'none']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses flex-direction row/column and warns on row-reverse/column-reverse', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex-direction', 'row'))->toBe(['flex-direction' => 'row']);
+    expect($parser->parse('flex-direction', 'column'))->toBe(['flex-direction' => 'column']);
+    foreach (['row-reverse', 'column-reverse'] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('flex-direction', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('parses flex-wrap nowrap/wrap and warns on wrap-reverse', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex-wrap', 'nowrap'))->toBe(['flex-wrap' => 'nowrap']);
+    expect($parser->parse('flex-wrap', 'wrap'))->toBe(['flex-wrap' => 'wrap']);
+    $result = $parser->parse('flex-wrap', 'wrap-reverse');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses justify-content values and warns on space-around/space-evenly', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('justify-content', 'flex-start'))->toBe(['justify-content' => 'flex-start']);
+    expect($parser->parse('justify-content', 'center'))->toBe(['justify-content' => 'center']);
+    expect($parser->parse('justify-content', 'flex-end'))->toBe(['justify-content' => 'flex-end']);
+    expect($parser->parse('justify-content', 'space-between'))->toBe(['justify-content' => 'space-between']);
+    foreach (['space-around', 'space-evenly'] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('justify-content', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('parses align-items values and warns on baseline', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('align-items', 'stretch'))->toBe(['align-items' => 'stretch']);
+    expect($parser->parse('align-items', 'flex-start'))->toBe(['align-items' => 'flex-start']);
+    expect($parser->parse('align-items', 'center'))->toBe(['align-items' => 'center']);
+    expect($parser->parse('align-items', 'flex-end'))->toBe(['align-items' => 'flex-end']);
+    $result = $parser->parse('align-items', 'baseline');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses gap/row-gap/column-gap in px and warns on percentages', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('row-gap', '10px'))->toEqual(['row-gap' => Length::px(10.0)]);
+    expect($parser->parse('column-gap', '5px'))->toEqual(['column-gap' => Length::px(5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    foreach (['row-gap', 'column-gap'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '10%');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects negative row-gap/column-gap with a warning', function () {
+    foreach (['row-gap', 'column-gap'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '-5px');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('expands the gap shorthand: one value sets both axes, two set row then column', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('gap', '10px'))->toEqual([
+        'row-gap' => Length::px(10.0),
+        'column-gap' => Length::px(10.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    $parser = new DeclarationParser();
+    expect($parser->parse('gap', '10px 5px'))->toEqual([
+        'row-gap' => Length::px(10.0),
+        'column-gap' => Length::px(5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported gap shorthand (percent, extra values, garbage)', function () {
+    foreach (['10%', '1px 2px 3px', 'auto', ''] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('gap', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('parses flex-grow/flex-shrink as non-negative numbers and warns otherwise', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex-grow', '2'))->toBe(['flex-grow' => 2.0]);
+    expect($parser->parse('flex-grow', '0'))->toBe(['flex-grow' => 0.0]);
+    expect($parser->parse('flex-shrink', '1.5'))->toBe(['flex-shrink' => 1.5]);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    foreach (['flex-grow', 'flex-shrink'] as $property) {
+        foreach (['-1', 'auto', ''] as $value) {
+            $parser = new DeclarationParser();
+            $result = $parser->parse($property, $value);
+            expect($result)->toBe([]);
+            expect($parser->drainWarnings())->not->toBeEmpty();
+        }
+    }
+});
+
+it('parses flex-basis as px/%/auto and warns on content or negative values', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex-basis', '30px'))->toEqual(['flex-basis' => LengthPercentage::px(30.0)]);
+    expect($parser->parse('flex-basis', '50%'))->toEqual(['flex-basis' => LengthPercentage::percent(50.0)]);
+    expect($parser->parse('flex-basis', 'auto'))->toBe(['flex-basis' => 'auto']);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    foreach (['content', '-10px'] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('flex-basis', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+// --- M4-T1: flex shorthand, css-flexbox-1 §7.1.1 (cada fila de la tabla) -----------------
+
+it('expands "flex: none" to grow 0, shrink 0, basis auto', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', 'none'))->toBe([
+        'flex-grow' => 0.0, 'flex-shrink' => 0.0, 'flex-basis' => 'auto',
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands "flex: initial" to grow 0, shrink 1, basis auto', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', 'initial'))->toBe([
+        'flex-grow' => 0.0, 'flex-shrink' => 1.0, 'flex-basis' => 'auto',
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands "flex: auto" to grow 1, shrink 1, basis auto', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', 'auto'))->toBe([
+        'flex-grow' => 1.0, 'flex-shrink' => 1.0, 'flex-basis' => 'auto',
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands a single unitless number "flex: N" to grow N, shrink 1, basis 0', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', '2'))->toEqual([
+        'flex-grow' => 2.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::zero(),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands a single width "flex: Npx" to grow 1, shrink 1, basis N', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', '30px'))->toEqual([
+        'flex-grow' => 1.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::px(30.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands two numbers "flex: N M" to grow N, shrink M, basis 0', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', '2 3'))->toEqual([
+        'flex-grow' => 2.0, 'flex-shrink' => 3.0, 'flex-basis' => LengthPercentage::zero(),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands number + width "flex: N Mpx" to grow N, shrink 1, basis M', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', '2 30px'))->toEqual([
+        'flex-grow' => 2.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::px(30.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands three values "flex: N M Ppx" to grow N, shrink M, basis P', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', '2 3 30px'))->toEqual([
+        'flex-grow' => 2.0, 'flex-shrink' => 3.0, 'flex-basis' => LengthPercentage::px(30.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    $parser = new DeclarationParser();
+    expect($parser->parse('flex', '0 0 auto'))->toBe([
+        'flex-grow' => 0.0, 'flex-shrink' => 0.0, 'flex-basis' => 'auto',
+    ]);
+});
+
+it('warns on unsupported flex shorthand values', function () {
+    foreach (['2 3 4 5', 'red', '2 red', '2 3 red', ''] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('flex', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
