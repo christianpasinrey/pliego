@@ -127,6 +127,7 @@ final class BoxTreeBuilder
             // BlockBox resultante. Se comprueba ANTES que Display::Inline porque ambos son
             // mutuamente excluyentes (un elemento no puede tener los dos display a la vez).
             if ($childStyle->display === Display::InlineBlock) {
+                $this->warnIfFloatOrAbsoluteOnInlineBlock($childStyle);
                 $pending[] = $this->buildBlock($node, $styles);
                 continue;
             }
@@ -605,6 +606,7 @@ final class BoxTreeBuilder
                 continue;
             }
             if ($childStyle->display === Display::InlineBlock) {
+                $this->warnIfFloatOrAbsoluteOnInlineBlock($childStyle);
                 $pending[] = $this->buildBlock($node, $styles);
                 continue;
             }
@@ -663,6 +665,39 @@ final class BoxTreeBuilder
             $this->warnings->addWarningOnce(
                 'position-on-inline',
                 'position:relative/absolute on an inline-level element has no effect (not supported yet): no offset is applied',
+            );
+        }
+    }
+
+    /**
+     * M8-T1 housekeeping (M7 final-review Finding D, remaining gap): `float` y `position:absolute`
+     * declarados en un elemento `display:inline-block` tampoco tienen NINGÚN efecto en este motor,
+     * pero por una razón DISTINTA a la de warnIfFloatOrPositionOnInline() de arriba -- un
+     * inline-block SÍ genera un BlockBox real (buildBlock(), llamado justo después de este chequeo
+     * en ambos dispatch points) y SÍ se layoutea como tal, pero SIEMPRE como el token atómico que
+     * InlineFlowContext::layoutInlineBlockAtomic() coloca en la secuencia de línea -- nunca pasa
+     * por el bucle de hijos DIRECTOS de BlockFlowContext::layout(), que es el ÚNICO sitio que
+     * consulta `$child->style->float`/`position === Absolute` para sacar una caja de flujo (ver los
+     * docblocks de esos dos chequeos ahí). `position:relative`, en cambio, SÍ funciona ya sin
+     * cambios: layoutInlineBlockAtomic() delega en BlockFlowContext::layout() para la caja propia
+     * del inline-block, y ESE método aplica el shift de position:relative a CUALQUIER BlockBox que
+     * layoutea, sea cual sea quién lo invoque -- por eso este chequeo, a diferencia del de arriba,
+     * NO cubre Position::Relative (de ahí "float/position:absolute" en vez de "float/position" en
+     * el mensaje). Mismo criterio addWarningOnce que el resto de esta clase (una sola vez por
+     * causa, no por elemento).
+     */
+    private function warnIfFloatOrAbsoluteOnInlineBlock(ComputedStyle $childStyle): void
+    {
+        if ($childStyle->float !== null) {
+            $this->warnings->addWarningOnce(
+                'float-on-inline-block',
+                'float on a display:inline-block element has no effect (not supported yet): the element stays in normal inline flow as an atomic token',
+            );
+        }
+        if ($childStyle->position === Position::Absolute) {
+            $this->warnings->addWarningOnce(
+                'position-absolute-on-inline-block',
+                'position:absolute on a display:inline-block element has no effect (not supported yet): the element stays in normal inline flow as an atomic token',
             );
         }
     }

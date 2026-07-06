@@ -66,6 +66,15 @@ final class FragmentDumper
      * distinguir "este BoxFragment es la unidad de paginación indivisible que Paginator trata en
      * bloque" de un box normal aplanado hijo a hijo — información de layout real, no solo de
      * pintado, que pertenece al dump igual que rect/background/borders.
+     *
+     * M8-T1 housekeeping (M7 final-review finding): 'clipsChildren' se añade con el MISMO criterio
+     * aditivo que 'atomic' arriba — refleja BoxFragment::$clipsChildren (M7-T5, overflow:hidden),
+     * hasta ahora presente en el fragment tree real pero invisible en cualquier golden dump (ningún
+     * golden existente podía distinguir "esta caja recorta a sus descendientes en pintado" de una
+     * caja normal). Puramente aditivo: ninguna clave existente cambia de posición ni de valor, así
+     * que TODOS los goldens preexistentes solo ganan esta clave (con valor `false` en cada uno,
+     * ninguno de sus fixtures usa overflow:hidden) al regenerarlos — ver el report de esta tarea
+     * para la lista exacta de goldens regenerados.
      * @return array<string, mixed>
      */
     private function dumpBox(BoxFragment $fragment): array
@@ -76,6 +85,7 @@ final class FragmentDumper
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
             'borders' => $fragment->borders->isVisible() ? $this->borders($fragment->borders) : null,
             'atomic' => $fragment->atomic,
+            'clipsChildren' => $fragment->clipsChildren,
             'children' => array_map($this->dump(...), $fragment->children),
         ];
     }

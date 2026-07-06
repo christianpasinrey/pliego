@@ -430,6 +430,23 @@ final class BlockFlowContext implements FormattingContext
                         'float on a <table> has no effect (not supported yet): the table stays in normal flow',
                     );
                 }
+                // M8-T1 housekeeping (M7 final-review Finding D, remaining gap): `position:
+                // relative|absolute` on a <table> is ALSO a silent no-op today, same root cause as
+                // float just above -- TableFormattingContext::layout() (called right below,
+                // unconditionally) never reads $style->position at all (grep-verified: zero
+                // matches), so neither the position:relative self-shift that BlockFlowContext::
+                // layout() applies to a BlockBox (see resolveRelativeOffset()) nor the
+                // position:absolute out-of-flow branch just above (restricted to BlockBox|ImageBox,
+                // same restriction as the float branch) ever reaches a TableBox. One warning covers
+                // BOTH values (mirrors warnIfFloatOrPositionOnInline()'s single "!== Static" check),
+                // once per cause via addWarningOnce(), no behavioral change (the table stays in
+                // normal flow either way).
+                if ($child->style->position !== Position::Static) {
+                    $this->warnings?->addWarningOnce(
+                        'position-on-table',
+                        'position:relative/absolute on a <table> has no effect (not supported yet): the table stays in normal flow',
+                    );
+                }
                 $childFragment = $this->tableContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
                 $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);

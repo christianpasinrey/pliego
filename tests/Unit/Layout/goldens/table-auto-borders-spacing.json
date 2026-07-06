@@ -9,6 +9,7 @@
     "background": null,
     "borders": null,
     "atomic": false,
+    "clipsChildren": false,
     "children": [
         {
             "type": "box",
@@ -38,6 +39,7 @@
                 }
             },
             "atomic": false,
+            "clipsChildren": false,
             "children": [
                 {
                     "type": "box",
@@ -50,6 +52,7 @@
                     "background": null,
                     "borders": null,
                     "atomic": true,
+                    "clipsChildren": false,
                     "children": [
                         {
                             "type": "box",
@@ -79,6 +82,7 @@
                                 }
                             },
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
@@ -123,6 +127,7 @@
                                 }
                             },
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
@@ -165,6 +170,7 @@
                     "background": null,
                     "borders": null,
                     "atomic": true,
+                    "clipsChildren": false,
                     "children": [
                         {
                             "type": "box",
@@ -194,6 +200,7 @@
                                 }
                             },
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
@@ -238,6 +245,7 @@
                                 }
                             },
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",

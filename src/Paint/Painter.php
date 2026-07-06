@@ -59,6 +59,15 @@ final readonly class Painter
             // exactamente con ese rect). Paginator::flatten() garantiza que una caja clipsChildren
             // NUNCA llega aquí descompuesta (mismo camino que $atomic, ver su docblock), así que
             // el subárbol completo bajo el clip siempre está intacto.
+            //
+            // M8-T1 breadcrumb (preparando M8-T2, BorderRadius): clipRect() de más abajo recorta a
+            // un RECTÁNGULO puro -- correcto hoy porque ningún BoxFragment trae border-radius
+            // todavía. En cuanto M8-T2 añada BorderRadius a BoxFragment, un fragment con radios
+            // no-cero Y $clipsChildren tendrá que recortar a la forma de esquinas redondeadas de su
+            // border-box (CSS 2.2/css-backgrounds-3 §5), no a este rect -- este `if` es el sitio
+            // donde esa rama nueva se insertará (elegir clipRect() vs. el futuro
+            // clipRoundedRect()/equivalente según $fragment->borderRadius, ver PdfCanvas::
+            // clipRect() para el breadcrumb gemelo del lado PDF).
             if ($fragment->clipsChildren) {
                 $canvas->clipRect($fragment->rect);
                 foreach ($fragment->children as $child) {

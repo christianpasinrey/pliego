@@ -50,20 +50,33 @@ final class DeclarationParser
     ];
     /**
      * CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos en LENGTH_PERCENTAGE_PROPERTIES;
-     * margin-* es la única excepción ahí. font-size/height (LENGTH_PROPERTIES) se rechazan
-     * incondicionalmente más abajo — ambas son siempre no-negativas, así que no necesitan
-     * figurar aquí (evita el "always true" que detecta PHPStan al estrechar el tipo).
+     * margin-* es la única excepción ahí. font-size (parseFontSize(), aparte -- ver su propio
+     * docblock arriba, "font-size vive aparte") tiene su PROPIO chequeo incondicional, ajeno a esta
+     * constante, así que no necesita figurar aquí (evita el "always true" que detecta PHPStan al
+     * estrechar el tipo) -- height, en cambio, SÍ figura (ver más abajo, M8-T1 housekeeping).
      *
      * M6-T4 fix (Finding 2): visibilidad `public` y lista AMPLIADA a la lista COMPLETA de
      * propiedades no-negativas del motor — antes solo cubría las 5 gateadas explícitamente aquí
-     * mismo (líneas más abajo, chequeo de literales en LENGTH_PERCENTAGE_PROPERTIES); height/
-     * row-gap/column-gap/border-*-width/border-spacing/flex-basis YA eran no-negativas siempre en
-     * sus propios sitios de parseo (chequeo incondicional, sin consultar esta constante) — añadirlas
-     * aquí no cambia ESE comportamiento (siguen rechazándose igual), solo hace la lista consultable
-     * desde `ComputedStyle::compute()`, que necesita el mismo criterio para re-chequear el signo de
-     * un CalcExpr con em/rem UNA VEZ conocido el font-size propio (ver rawValueOf() más abajo y
-     * ComputedStyle::compute() — el signo de un calc() con % sigue sin poder conocerse hasta
-     * Layout, gap documentado, ver el reporte de M6-T4 §4).
+     * mismo (líneas más abajo, chequeo de literales en LENGTH_PERCENTAGE_PROPERTIES); en aquel
+     * momento height/row-gap/column-gap/border-*-width/border-spacing/flex-basis YA eran
+     * no-negativas siempre en sus propios sitios de parseo (chequeo incondicional, sin consultar
+     * esta constante) — añadirlas aquí no cambiaba ESE comportamiento (seguían rechazándose igual),
+     * solo hacía la lista consultable desde `ComputedStyle::compute()`, que necesita el mismo
+     * criterio para re-chequear el signo de un CalcExpr con em/rem UNA VEZ conocido el font-size
+     * propio (ver rawValueOf() más abajo y ComputedStyle::compute() — el signo de un calc() con %
+     * sigue sin poder conocerse hasta Layout, gap documentado, ver el reporte de M6-T4 §4).
+     *
+     * M8-T1 housekeeping (stale comment fix): la frase de arriba -- "chequeo incondicional, sin
+     * consultar esta constante" -- describía la rama LENGTH_PROPERTIES tal como era ANTES de
+     * M7-T6, pero dejó de ser cierta para sus 5 miembros preexistentes (height/row-gap/column-gap/
+     * min-height/max-height) en cuanto top/bottom se UNIERON a esa misma lista: el chequeo de signo
+     * de esa rama (más abajo, en parse()) pasó de incondicional a `in_array(...,
+     * NON_NEGATIVE_PROPERTIES, true)` PARA TODOS sus miembros, no solo top/bottom -- necesario para
+     * que top/bottom (que SÍ admiten negativo) queden excluidos sin duplicar la rama. height SÍ
+     * consulta esta constante hoy (por eso figura en la lista de abajo, línea "'height', 'row-gap',
+     * ..."), simplemente su membresía ahí siempre evalúa a "no-negativo" -- ningún comportamiento
+     * observable cambió, solo el mecanismo por el que se llega a él (ver el docblock de la rama
+     * LENGTH_PROPERTIES en parse() para el detalle completo).
      */
     public const array NON_NEGATIVE_PROPERTIES = [
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width',

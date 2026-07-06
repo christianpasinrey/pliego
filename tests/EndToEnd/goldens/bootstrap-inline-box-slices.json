@@ -9,6 +9,7 @@
     "background": null,
     "borders": null,
     "atomic": false,
+    "clipsChildren": false,
     "children": [
         {
             "type": "box",
@@ -21,6 +22,7 @@
             "background": null,
             "borders": null,
             "atomic": false,
+            "clipsChildren": false,
             "children": [
                 {
                     "type": "inline-box",

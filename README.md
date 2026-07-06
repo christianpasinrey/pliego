@@ -539,7 +539,15 @@ the rest of tables/flex-to-spec are the milestones ahead (see
   `shape-outside`, CSS columns (`column-*`), writing modes
   (`writing-mode`/`direction` beyond LTR/TTB), `::first-line`/
   `::first-letter`, and `list-style-image` — all M8+, alongside `@media`
-  and the rest of `::before`/`::after`-style generated content. Tables are
+  and the rest of `::before`/`::after`-style generated content. A `<table>`
+  next to a float is a **further, honest instance** of the block-sibling
+  gap already documented above: CSS 2.2 §9.5 forbids a table's border box
+  from overlapping a float, but this engine's `TableFormattingContext`
+  never consults the float bands (only `InlineFlowContext` does) — a
+  table is laid out at its parent's full content width exactly like any
+  other block-level box, so it can visually overlap an adjacent float
+  instead of being narrowed around it, same gap and same fix scope (M8+)
+  as the generic case. Tables are
   implemented as of M5 but only the subset above — see "Supported as of
   M5" for what's excluded (`border-collapse`, `rowspan`, a repeating
   `<thead>` per page, `<caption>`/`<col>`/`<colgroup>`/`<tfoot>`,

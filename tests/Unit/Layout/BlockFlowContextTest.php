@@ -1642,3 +1642,62 @@ it('Finding D: float on a <table> only warns ONCE even with two floated tables (
     );
     expect($warnings)->toHaveCount(1);
 });
+
+// --- M8-T1 housekeeping (M7 final-review Finding D, remaining gap): position:relative/absolute on
+// a <table> warns too (float-on-table already did, position did not) -----------------------------
+
+it('Finding D: position:relative on a <table> warns exactly once and leaves the table in normal flow (no behavioral change)', function () {
+    [$frag, $warnings] = layoutHtmlCollectingWarnings(
+        '<body><table class="t"><tr><td>x</td></tr></table><div class="sibling">sibling</div></body>',
+        '.t { position: relative; top: 50px; left: 50px }',
+    );
+    expect($warnings)->toHaveCount(1);
+    expect($warnings[0])->toContain('position:relative/absolute on a <table> has no effect');
+
+    // No behavioral change: TableFormattingContext::layout() never reads $style->position, so the
+    // table stays exactly where normal flow would put it (no shift), and the sibling below starts
+    // right after its unshifted height, same as if position had never been declared.
+    $table = $frag->children[0];
+    assert($table instanceof BoxFragment);
+    $sibling = $frag->children[1];
+    assert($sibling instanceof BoxFragment);
+    expect($table->rect->x)->toBe(0.0);
+    expect($table->rect->y)->toBe(0.0);
+    expect($sibling->rect->y)->toBe($table->rect->height);
+});
+
+it('Finding D: position:absolute on a <table> warns once too (it stays in normal flow, never removed like a real absolute box would be)', function () {
+    [$frag, $warnings] = layoutHtmlCollectingWarnings(
+        '<body><table class="t"><tr><td>x</td></tr></table><div class="sibling">sibling</div></body>',
+        '.t { position: absolute; top: 10px }',
+    );
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on a <table>')));
+    expect($posWarnings)->toHaveCount(1);
+
+    // Behavioral proof: a REAL position:absolute box is removed from flow (the next sibling
+    // would start at y=0). Here the sibling starts AFTER the table's height, proving the table
+    // stayed in normal flow despite the declaration (same no-op as float-on-table above).
+    $table = $frag->children[0];
+    assert($table instanceof BoxFragment);
+    $sibling = $frag->children[1];
+    assert($sibling instanceof BoxFragment);
+    expect($sibling->rect->y)->toBe($table->rect->height);
+});
+
+it('Finding D: position on a <table> only warns ONCE even with two positioned tables (addWarningOnce dedup)', function () {
+    [, $warnings] = layoutHtmlCollectingWarnings(
+        '<body><table class="t"><tr><td>x</td></tr></table><table class="t"><tr><td>y</td></tr></table></body>',
+        '.t { position: relative; top: 10px }',
+    );
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on a <table>')));
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: a plain <table> with no position declared emits neither the float nor the position warning', function () {
+    [, $warnings] = layoutHtmlCollectingWarnings(
+        '<body><table class="t"><tr><td>x</td></tr></table></body>',
+        '.t { width: 100px }',
+    );
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, '<table>'));
+    expect($relevant)->toBeEmpty();
+});

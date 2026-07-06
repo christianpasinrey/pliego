@@ -77,6 +77,18 @@ final class PdfCanvas implements Canvas
      * `re`, y `W n` lo fija como clipping path SIN pintarlo (`n` = "no-op paint", el operador de
      * pintado nulo -- el propio rect nunca se ve, solo recorta lo que venga después dentro de este
      * mismo scope).
+     *
+     * M8-T1 breadcrumb (preparando M8-T2, css-backgrounds-3 §5, BorderRadius): este `re` es un
+     * rectángulo puro -- CORRECTO hoy porque overflow:hidden (el único caller, ver
+     * Paint\Painter::paintFragment()) nunca se combina con border-radius (M8-T2 los introduce
+     * juntos por primera vez). Un box con `border-radius` NO-CERO y `overflow: hidden` recorta a un
+     * rectángulo de ESQUINAS REDONDEADAS (spec: el clip sigue la curva del border-box, no su bounding
+     * box), así que esta llamada tendrá que sustituirse por un path Bézier (4 arcos, mismo criterio
+     * que el `fillRoundedRect`/paths Bézier que M8-T2 añade a esta clase) cuando ESE box tenga un
+     * BorderRadius no-cero -- `clipRect()` seguirá siendo válida tal cual para el caso común
+     * (border-radius: 0, la inmensa mayoría de los overflow:hidden existentes), así que lo más
+     * probable es que M8-T2 añada un `clipRoundedRect(Rect, BorderRadius)` NUEVO en vez de mutar
+     * este método, y Painter decida cuál invocar según si el fragment trae radios no-cero.
      */
     public function clipRect(Rect $rect): void
     {

@@ -45,6 +45,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
         'background' => '#ff0000',
         'borders' => null,
         'atomic' => false,
+        'clipsChildren' => false,
         'children' => [
             [
                 'type' => 'text',
@@ -69,6 +70,7 @@ it('dumps a box fragment with no background as null', function () {
         'background' => null,
         'borders' => null,
         'atomic' => false,
+        'clipsChildren' => false,
         'children' => [],
     ]);
 });
@@ -97,6 +99,23 @@ it('dumps a box fragment with visible borders (M2-T8), a hex color per solid sid
             'left' => null,
         ],
         'atomic' => false,
+        'clipsChildren' => false,
+        'children' => [],
+    ]);
+});
+
+it('dumps a box fragment with clipsChildren true (M7-T5 overflow:hidden, M8-T1 housekeeping: newly visible in the dump)', function () {
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], BorderSet::none(), clipsChildren: true);
+
+    $dump = new FragmentDumper()->dump($box);
+
+    expect($dump)->toBe([
+        'type' => 'box',
+        'rect' => [0.0, 0.0, 100.0, 50.0],
+        'background' => null,
+        'borders' => null,
+        'atomic' => false,
+        'clipsChildren' => true,
         'children' => [],
     ]);
 });
