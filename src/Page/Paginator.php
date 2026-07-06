@@ -8,6 +8,7 @@ use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 
@@ -132,6 +133,18 @@ final readonly class Paginator
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se
             // queda cruzando el límite sin pushear, documentado en el brief).
             $leaf instanceof ImageFragment => new ImageFragment($rect, $leaf->imageKey, $leaf->opacity),
+            // M7-T4: InlineBoxFragment es una hoja simple más (sin hijos propios, ver su
+            // docblock) — flatten() nunca la aplana especialmente (no es BoxFragment, cae al
+            // `else { yield $child; }` genérico), así que solo hace falta desplazar su rect, igual
+            // que ImageFragment/TextFragment.
+            $leaf instanceof InlineBoxFragment => new InlineBoxFragment(
+                $rect,
+                $leaf->background,
+                $leaf->borders,
+                $leaf->opacity,
+                $leaf->isFirstSlice,
+                $leaf->isLastSlice,
+            ),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };
     }

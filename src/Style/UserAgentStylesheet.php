@@ -81,6 +81,17 @@ use Pliego\Css\StylesheetParser;
  *     decimal a cualquier profundidad, igual que en cualquier navegador real (el contador, no el
  *     glifo, es lo que distingue cada nivel — ver BlockFlowContext, que reinicia el contador POR
  *     CONTENEDOR, nunca por profundidad).
+ *
+ * M7-T4 (css-inline-3 reducido) — migración del INLINE_TAGS hardcoded de BoxTreeBuilder:
+ *   - `span, strong, em, b, i, a, small, code, u, kbd, samp, sub, sup { display: inline }`: ANTES
+ *     de esta tarea, BoxTreeBuilder::collectChildren()/collectInline() decidían "¿es este tag
+ *     inline?" consultando una lista de tags hardcoded (INLINE_TAGS) -- completamente al margen del
+ *     cascade. Ahora es una regla UA real como cualquiera de las de arriba: BoxTreeBuilder consulta
+ *     ComputedStyle::$display === Display::Inline (ver Display::Inline), así que un autor puede
+ *     pisar el default de CUALQUIERA de estos tags (`span { display: block }`) y, a la inversa,
+ *     declarar `display: inline` en un tag arbitrario para que se trate como inline real --
+ *     ninguna de las dos cosas era posible con el hardcoding anterior. La lista de tags es EXACTA
+ *     (mismo conjunto que BoxTreeBuilder::INLINE_TAGS traía desde M1-M7-T2).
  */
 final class UserAgentStylesheet
 {
@@ -108,6 +119,7 @@ final class UserAgentStylesheet
         code, kbd, samp { font-family: monospace; }
         hr { border-top: 1px solid; margin: .5em 0; }
         small { font-size: .83em; }
+        span, strong, em, b, i, a, small, code, u, kbd, samp, sub, sup { display: inline; }
         CSS;
 
     /** @var list<StyleRule>|null memoizado a nivel de PROCESO -- self::CSS es texto estático puro

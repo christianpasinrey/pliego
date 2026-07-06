@@ -6,6 +6,8 @@ namespace Pliego\Layout;
 
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
+use Pliego\Box\InlineBoxEnd;
+use Pliego\Box\InlineBoxStart;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
@@ -96,6 +98,15 @@ final class BlockFlowContext implements FormattingContext
         private readonly ?WarningCollector $warnings = null,
     ) {
         $this->inline = new InlineFlowContext($measurer, $catalog, $warnings);
+        // M7-T4: ruptura del ciclo constructor BlockFlowContext<->InlineFlowContext (necesario
+        // para que un display:inline-block pueda medirse/layoutearse con la maquinaria de bloque
+        // completa, ver InlineFlowContext::layoutInlineBlockAtomic()) — a diferencia de
+        // flexContext()/tableContext() (autocreación PEREZOSA, porque ESTA clase no puede
+        // pasarse a sí misma dentro de su propio constructor a esos colaboradores, que ella NO
+        // crea), aquí no hace falta pereza: $this->inline ya existe (se acaba de construir en la
+        // línea de arriba), así que el auto-wiring es inmediato y SIEMPRE ocurre (nunca queda sin
+        // wirear en el pipeline real).
+        $this->inline->setBlockContext($this);
         $this->fontFamilyResolver = new FontFamilyResolver($catalog, $warnings);
     }
 
@@ -224,7 +235,18 @@ final class BlockFlowContext implements FormattingContext
         $contentTop = $cursorY;
 
         $children = [];
-        /** @var list<TextRun|LineBreakRun> $pendingRuns secuencia inline contigua pendiente de layout */
+        /**
+         * M7-T4: += InlineBoxStart/InlineBoxEnd (caja inline real) y BlockBox (SOLO cuando su
+         * propio display es InlineBlock -- ver el dispatch del bucle de más abajo) — los tres
+         * deben permanecer en la MISMA secuencia continua que TextRun/LineBreakRun, sin disparar
+         * flushInline(), para que InlineFlowContext vea el flujo de texto completo de este bloque
+         * de una sola vez (una caja inline puede abrir antes de un límite y cerrar varias líneas
+         * después; si flushInline() cortara por medio, box-decoration-break:slice se rompería a
+         * través de una frontera que no debería existir).
+         *
+         * @var list<TextRun|LineBreakRun|InlineBoxStart|InlineBoxEnd|BlockBox> $pendingRuns
+         *     secuencia inline contigua pendiente de layout
+         */
         $pendingRuns = [];
         $flushInline = function () use (&$pendingRuns, &$children, &$cursorY, &$contentBottom, $contentX, $contentWidth, $style): void {
             if ($pendingRuns === []) {
@@ -232,7 +254,7 @@ final class BlockFlowContext implements FormattingContext
             }
             foreach ($this->inline->layout($pendingRuns, $contentX, $cursorY, $contentWidth, $style) as $line) {
                 $children[] = $line;
-                $cursorY = $line->rect->bottom();
+                $cursorY = $line->rect()->bottom();
             }
             $contentBottom = $cursorY;
             $pendingRuns = [];
@@ -250,7 +272,18 @@ final class BlockFlowContext implements FormattingContext
         $nextListItemNumber = $box->listStart ?? 1;
 
         foreach ($box->children as $child) {
-            if ($child instanceof TextRun || $child instanceof LineBreakRun) {
+            if ($child instanceof TextRun || $child instanceof LineBreakRun
+                || $child instanceof InlineBoxStart || $child instanceof InlineBoxEnd
+            ) {
+                $pendingRuns[] = $child;
+                continue;
+            }
+            // M7-T4: un BlockBox con display:inline-block es un token ATÓMICO de la secuencia de
+            // runs (BoxTreeBuilder ya lo colocó AQUÍ, mezclado con TextRun/LineBreakRun, en vez de
+            // como hijo de bloque "puro" -- ver su docblock) -- se comprueba ANTES de flushInline()
+            // para que no corte el flujo de texto continuo; cualquier OTRO BlockBox (el caso
+            // normal, un hijo de bloque real) sigue cayendo en las ramas de más abajo sin cambios.
+            if ($child instanceof BlockBox && $child->style->display === Display::InlineBlock) {
                 $pendingRuns[] = $child;
                 continue;
             }

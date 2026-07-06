@@ -61,6 +61,11 @@ final class DeclarationParser
             // lo usa vía `li { display: list-item }`, un autor puede declararlo/pisarlo igual que
             // cualquier otro valor de esta lista.
             'list-item',
+            // M7-T4 (css-inline-3 reducido): Display::Inline/InlineBlock -- 'inline' es ahora el
+            // default UA de span/strong/em/... (ver UserAgentStylesheet, migrado desde el
+            // INLINE_TAGS hardcoded de BoxTreeBuilder); 'inline-block' es puramente autor (ningún
+            // tag lo declara por defecto en esta hoja UA), el caso ".btn"/".badge" del brief.
+            'inline', 'inline-block',
         ],
         'box-sizing' => ['content-box', 'border-box'],
         // css-flexbox-1 §5.1/§5.2/§8.2/§8.3: *-reverse, wrap-reverse, space-around/evenly y

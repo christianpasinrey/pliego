@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 use Pliego\Box\BoxTreeBuilder;
 use Pliego\Css\StylesheetParser;
+use Pliego\Css\Value\Color;
 use Pliego\Css\WarningCollector;
 use Pliego\Dom\HtmlParser;
 use Pliego\Image\ImageLoader;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
@@ -35,6 +38,7 @@ function layoutImageHtml(string $html, string $css, float $width = 500.0): BoxFr
     return layoutHtml($html, $css, $width, BLOCK_FLOW_IMAGE_FIXTURES_DIR);
 }
 
+/** @return list<TextFragment> */
 function textFragments(BoxFragment $box): array
 {
     $out = [];
@@ -46,6 +50,70 @@ function textFragments(BoxFragment $box): array
         }
     }
     return $out;
+}
+
+/** M7-T4: recorrido recursivo de InlineBoxFragment (caja inline real, ver su docblock) --
+ * descendemos a través de BoxFragment (bloques normales, incluido el propio BoxFragment de un
+ * inline-block, ver layoutInlineBlockAtomic()) pero NUNCA a través de un InlineBoxFragment (no
+ * tiene hijos propios).
+ * @return list<InlineBoxFragment> */
+function inlineBoxFragments(BoxFragment $box): array
+{
+    $out = [];
+    foreach ($box->children as $child) {
+        if ($child instanceof InlineBoxFragment) {
+            $out[] = $child;
+        } elseif ($child instanceof BoxFragment) {
+            $out = [...$out, ...inlineBoxFragments($child)];
+        }
+    }
+    return $out;
+}
+
+/** M7-T4: todos los Fragment hoja (Text/InlineBox/Box-anidado), en el ORDEN en que
+ * BlockFlowContext los deja en $children -- preserva el orden de pintado real (a diferencia de
+ * textFragments()/inlineBoxFragments(), que solo filtran por tipo).
+ * @return list<Fragment> */
+function allLeaves(BoxFragment $box): array
+{
+    $out = [];
+    foreach ($box->children as $child) {
+        $out[] = $child;
+        if ($child instanceof BoxFragment) {
+            $out = [...$out, ...allLeaves($child)];
+        }
+    }
+    return $out;
+}
+
+/** M7-T4: formatea un Color NO-nulo como hex -- solo se llama tras comprobar (con
+ * expect(...)->not->toBeNull(), ver los call sites) que el background/borde en cuestión existe;
+ * el assert() aquí es la narrowing habitual de este fichero de test (ver los `assert($x
+ * instanceof Y)` ya presentes en el resto de la suite), nunca alcanzado de otra forma. */
+function hexColor(?Color $color): string
+{
+    assert($color instanceof Color);
+    return sprintf('#%02x%02x%02x', $color->r, $color->g, $color->b);
+}
+
+/** M7-T4: BoxFragment hijo cuyo background coincide con $hex -- usado para localizar la caja
+ * PROPIA de un elemento display:inline-block dentro del árbol de fragments (distinguible de
+ * cualquier BoxFragment ancestro por su color de fondo propio). */
+function findBoxByBackground(BoxFragment $box, string $hex): ?BoxFragment
+{
+    foreach ($box->children as $child) {
+        if (!$child instanceof BoxFragment) {
+            continue;
+        }
+        if ($child->background !== null && sprintf('#%02x%02x%02x', $child->background->r, $child->background->g, $child->background->b) === $hex) {
+            return $child;
+        }
+        $found = findBoxByBackground($child, $hex);
+        if ($found !== null) {
+            return $found;
+        }
+    }
+    return null;
 }
 
 it('stacks blocks vertically honouring margins', function () {
@@ -640,4 +708,204 @@ it('aligns an empty <li> marker to its content-box top + ascent (documented fall
     expect($li->children)->toHaveCount(1);
     $marker = markerOf($li);
     expect($marker->baselineY)->toBeGreaterThan($li->rect->y);
+});
+
+// --- M7-T4: real inline boxes (css-inline-3 reducido) + inline-block ---------------------------
+
+it('M7-T4 fast path: an unstyled inline element emits no InlineBoxFragment (byte-identical to pre-M7-T4)', function () {
+    $frag = layoutHtml('<body><p>Hola <span>mundo</span></p></body>', '');
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    expect(inlineBoxFragments($p))->toBe([]);
+    $lines = textFragments($p);
+    expect($lines)->toHaveCount(2);
+    expect($lines[0]->text)->toBe('Hola ');
+    expect($lines[1]->text)->toBe('mundo');
+    // Fragments sit flush against each other -- exactly the pre-M7-T4 geometry (M1-T6 test).
+    expect($lines[1]->rect->x)->toBe($lines[0]->rect->x + $lines[0]->rect->width);
+});
+
+it('M7-T4: a styled inline span paints an InlineBoxFragment sized to its content + horizontal padding (hand-computed advance)', function () {
+    $frag = layoutHtml(
+        '<body><p>before <span class="tag">mid</span> after</p></body>',
+        '.tag { background-color: #cccccc; padding: 0 5px; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    $face = $catalog->select('default', 400, false);
+    // Convención de whitespace-collapsing PRE-EXISTENTE (M1-T4, ver BoxTreeBuilder::collapse()):
+    // el espacio de frontera entre "mid" y "after" se adjunta SIEMPRE al run YA EMITIDO
+    // precedente ("mid", dentro de la caja) -- no es un efecto nuevo de esta tarea, solo se hace
+    // VISIBLE ahora porque ese run vive dentro de una caja pintable con padding.
+    $midWidth = $measurer->widthOf('mid ', $face, 16.0);
+
+    $boxes = inlineBoxFragments($p);
+    expect($boxes)->toHaveCount(1);
+    $box = $boxes[0];
+    expect($box->rect->width)->toEqualWithDelta(5.0 + $midWidth + 5.0, 0.001);
+    expect($box->isFirstSlice)->toBeTrue();
+    expect($box->isLastSlice)->toBeTrue();
+    expect($box->background)->not->toBeNull();
+    expect(hexColor($box->background))->toBe('#cccccc');
+
+    $lines = textFragments($p);
+    [$before, $mid, $after] = $lines;
+    expect($before->text)->toBe('before ');
+    expect($mid->text)->toBe('mid ');
+    expect($after->text)->toBe('after');
+    // The box starts right where the preceding text ends, padding-left sits INSIDE it.
+    expect($box->rect->x)->toEqualWithDelta($before->rect->right(), 0.001);
+    expect($mid->rect->x)->toEqualWithDelta($box->rect->x + 5.0, 0.001);
+    // The following text starts right after the box's right edge (padding-right consumed).
+    expect($after->rect->x)->toEqualWithDelta($box->rect->right(), 0.001);
+});
+
+it('M7-T4: slices a bordered inline span across two wrapped lines (lateral border only on the extreme slices)', function () {
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    $face = $catalog->select('default', 400, false);
+    $aaaSpaceWidth = $measurer->widthOf('aaa ', $face, 16.0);
+    $bbbWidth = $measurer->widthOf('bbb', $face, 16.0);
+    // Cabe "aaa" pero NO "aaa bbb" -- fuerza el wrap entre las dos palabras.
+    $availableWidth = $aaaSpaceWidth + $bbbWidth * 0.5;
+
+    $frag = layoutHtml(
+        '<body><p><span class="tag">aaa bbb</span></p></body>',
+        '.tag { border: 2px solid #000000; }',
+        $availableWidth,
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $lines = textFragments($p);
+    expect($lines)->toHaveCount(2);
+    // Convención pre-existente (ver el test anterior): el espacio de frontera cuelga del final del
+    // run YA EMITIDO ("aaa"), sin retirarse del texto -- solo su contribución al ANCHO reportado
+    // de la línea se descuenta (ver InlineFlowContext::closeLine()).
+    expect($lines[0]->text)->toBe('aaa ');
+    expect($lines[1]->text)->toBe('bbb');
+    expect($lines[1]->rect->y)->toBeGreaterThan($lines[0]->rect->y);
+
+    $boxes = inlineBoxFragments($p);
+    expect($boxes)->toHaveCount(2);
+    [$firstSlice, $lastSlice] = $boxes;
+
+    expect($firstSlice->isFirstSlice)->toBeTrue();
+    expect($firstSlice->isLastSlice)->toBeFalse();
+    expect($firstSlice->borders->left->widthPx)->toBeGreaterThan(0.0);
+    expect($firstSlice->borders->right->widthPx)->toBe(0.0);
+    expect($firstSlice->borders->top->widthPx)->toBeGreaterThan(0.0);
+    expect($firstSlice->borders->bottom->widthPx)->toBeGreaterThan(0.0);
+
+    expect($lastSlice->isFirstSlice)->toBeFalse();
+    expect($lastSlice->isLastSlice)->toBeTrue();
+    expect($lastSlice->borders->left->widthPx)->toBe(0.0);
+    expect($lastSlice->borders->right->widthPx)->toBeGreaterThan(0.0);
+    expect($lastSlice->borders->top->widthPx)->toBeGreaterThan(0.0);
+    expect($lastSlice->borders->bottom->widthPx)->toBeGreaterThan(0.0);
+});
+
+it('M7-T4: nested inline boxes (span > strong > em, distinct backgrounds) each get their own InlineBoxFragment, painted outer-before-inner', function () {
+    $frag = layoutHtml(
+        '<body><p><span class="a"><strong class="b"><em class="c">x</em></strong></span></p></body>',
+        '.a { background-color: #ff0000; } .b { background-color: #00ff00; } .c { background-color: #0000ff; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    // 3 InlineBoxFragment (span/strong/em) + 1 TextFragment ("x") -- el orden real de pintado
+    // (allLeaves, no filtrado) confirma que las 3 cajas van ANTES que el texto, exterior primero.
+    $leaves = allLeaves($p);
+    expect($leaves)->toHaveCount(4);
+    [$outer, $middle, $inner, $text] = $leaves;
+    assert($outer instanceof InlineBoxFragment && $middle instanceof InlineBoxFragment && $inner instanceof InlineBoxFragment);
+    assert($text instanceof TextFragment);
+
+    expect(hexColor($outer->background))->toBe('#ff0000');
+    expect(hexColor($middle->background))->toBe('#00ff00');
+    expect(hexColor($inner->background))->toBe('#0000ff');
+    expect($text->text)->toBe('x');
+    // Las 3 cajas comparten exactamente la misma geometría horizontal (mismo único hijo de texto,
+    // sin padding declarado en ninguna) -- lo que las distingue es el color, no el rect.
+    expect($middle->rect->x)->toBe($outer->rect->x);
+    expect($inner->rect->x)->toBe($outer->rect->x);
+});
+
+it('M7-T4: a Bootstrap-.btn-like inline-block (padding+bg+border, shrink-to-fit width) paints inline with surrounding text', function () {
+    $frag = layoutHtml(
+        '<body><p>Text <a class="btn">Click</a> more</p></body>',
+        '.btn { display: inline-block; padding: 6px 12px; background-color: #007bff; border: 1px solid #0056b3; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    $face = $catalog->select('default', 400, false);
+    $clickWidth = $measurer->widthOf('Click', $face, 16.0);
+    $expectedBorderBoxWidth = $clickWidth + 12.0 * 2 + 1.0 * 2;
+
+    $btn = findBoxByBackground($p, '#007bff');
+    expect($btn)->not->toBeNull();
+    assert($btn instanceof BoxFragment);
+    expect($btn->rect->width)->toEqualWithDelta($expectedBorderBoxWidth, 0.5);
+
+    // baseline = bottom MARGIN edge (M7 approximation, ver InlineFlowContext docblock de clase) --
+    // sin margin propio declarado, el borde inferior del btn coincide EXACTAMENTE con la baseline
+    // del texto que lo rodea (misma línea). textFragments() recorre TODO el subárbol, incluido el
+    // texto PROPIO del btn ("Click", en su propia línea interna, con su propia baseline) -- se
+    // filtra a los dos tramos EXTERIORES ("Text "/"more") para comparar baselines de la MISMA línea.
+    $lines = textFragments($p);
+    $outerTexts = array_values(array_filter($lines, static fn($l) => $l->text === 'Text ' || $l->text === 'more'));
+    expect($outerTexts)->toHaveCount(2);
+    $surroundingBaseline = $outerTexts[0]->baselineY;
+    foreach ($outerTexts as $line) {
+        expect($line->baselineY)->toEqualWithDelta($surroundingBaseline, 0.001);
+    }
+    expect($btn->rect->bottom())->toEqualWithDelta($surroundingBaseline, 0.5);
+
+    // El botón se sitúa a la derecha del primer tramo de texto ("Text ") y antes del último
+    // (" more" / "more").
+    expect($btn->rect->x)->toBeGreaterThanOrEqual($outerTexts[0]->rect->right());
+});
+
+it('M7-T4: an inline-block taller than the surrounding text grows the line height (strut + item model)', function () {
+    $frag = layoutHtml(
+        '<body><p>Row one <a class="btn">Tall</a><br>Row two</p></body>',
+        '.btn { display: inline-block; padding: 40px 12px; background-color: #000000; }',
+        800.0,
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    // "Row one" pierde el espacio de frontera que le seguía (convención pre-existente: el btn
+    // atómico y el <br> inmediatamente después nunca llegan a consumirlo -- ver el test de la
+    // caja con bordes más arriba para el mismo mecanismo).
+    $lines = textFragments($p);
+    $rowOne = null;
+    $rowTwo = null;
+    foreach ($lines as $line) {
+        if ($line->text === 'Row one') {
+            $rowOne = $line;
+        }
+        if ($line->text === 'Row two') {
+            $rowTwo = $line;
+        }
+    }
+    expect($rowOne)->not->toBeNull();
+    expect($rowTwo)->not->toBeNull();
+    assert($rowOne instanceof TextFragment && $rowTwo instanceof TextFragment);
+
+    // El btn mide (línea de "Tall" ~19.2px + 40px arriba + 40px abajo) ~= 99px de margin-box --
+    // muy por encima del lineHeight normal (~19.2px) -- la línea entera debe crecer para
+    // contenerlo, empujando "Row two" mucho más abajo que un simple avance de línea normal.
+    $btn = findBoxByBackground($p, '#000000');
+    expect($btn)->not->toBeNull();
+    assert($btn instanceof BoxFragment);
+    expect($btn->rect->height)->toBeGreaterThan(80.0);
+    expect($rowTwo->rect->y - $rowOne->rect->y)->toBeGreaterThanOrEqual($btn->rect->height - 0.5);
 });

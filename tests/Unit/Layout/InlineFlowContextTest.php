@@ -5,6 +5,8 @@ declare(strict_types=1);
 
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
+use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\InlineFlowContext;
 use Pliego\Layout\TextMeasurer;
 use Pliego\Style\ComputedStyle;
@@ -14,6 +16,23 @@ use Pliego\Text\FontCatalog;
 function inlineStyle(array $declarations = [], ?ComputedStyle $parent = null): ComputedStyle
 {
     return ComputedStyle::compute($declarations, $parent ?? ComputedStyle::root(), 'span', 16.0);
+}
+
+/**
+ * M7-T4: InlineFlowContext::layout() ahora devuelve list<Fragment> (puede incluir
+ * InlineBoxFragment/BoxFragment cuando la secuencia trae InlineBoxStart/InlineBoxEnd/BlockBox) —
+ * ninguno de los tests de este fichero (pre-M7-T4, o M7-T4 con runs planos sin cajas) usa esos
+ * tokens, así que el resultado real SIEMPRE es list<TextFragment> en la práctica; este helper
+ * hace esa garantía explícita para PHPStan en un único sitio, en vez de un assert() por test.
+ * @param list<Fragment> $fragments
+ * @return list<TextFragment>
+ */
+function textFragmentsOf(array $fragments): array
+{
+    return array_map(static function (Fragment $f): TextFragment {
+        assert($f instanceof TextFragment);
+        return $f;
+    }, $fragments);
 }
 
 beforeEach(function (): void {
@@ -29,8 +48,8 @@ it('mixes faces in one line sharing the baseline', function () {
         new TextRun('mundo', $bold),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 500.0, $normal);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $normal));
 
     expect($fragments)->toHaveCount(2);
     [$first, $second] = $fragments;
@@ -58,8 +77,8 @@ it('wraps using break opportunities across runs', function () {
         new TextRun('cinco seis', $normal),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 80.0, $normal);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 80.0, $normal));
 
     expect(count($fragments))->toBeGreaterThan(1);
 
@@ -86,12 +105,12 @@ it('centers and right-aligns lines', function () {
     $face = $this->catalog->select('default', 400, false);
     $wordWidth = $this->measurer->widthOf('Hola', $face, 16.0);
 
-    $centered = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $center);
-    $righted = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $right);
-    $lefted = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $left);
+    $centered = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $center));
+    $righted = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $right));
+    $lefted = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $left));
 
     expect($lefted[0]->rect->x)->toBe(10.0);
     expect($centered[0]->rect->x)->toEqualWithDelta(10.0 + (200.0 - $wordWidth) / 2, 0.001);
@@ -102,8 +121,8 @@ it('honours declared line-height', function () {
     $base = inlineStyle();
     $doubled = inlineStyle(['line-height' => 2.0], $base);
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $base)], 0.0, 0.0, 500.0, $doubled);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $base)], 0.0, 0.0, 500.0, $doubled));
 
     expect($fragments)->toHaveCount(1);
     // 2 x font-size (32.0) beats the 1.2 x font-size normal default (19.2).
@@ -118,8 +137,8 @@ it('breaks on LineBreakRun', function () {
         new TextRun('mundo', $normal),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 500.0, $normal);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $normal));
 
     expect($fragments)->toHaveCount(2);
     expect($fragments[0]->text)->toBe('Hola');
@@ -137,8 +156,8 @@ it('keeps M0 single-style geometry stable', function () {
     $text = 'uno dos tres cuatro cinco seis siete ocho';
     $availableWidth = 120.0;
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun($text, $style)], 0.0, 0.0, $availableWidth, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun($text, $style)], 0.0, 0.0, $availableWidth, $style));
 
     $words = explode(' ', $text);
     $spaceWidth = $this->measurer->widthOf(' ', $face, 16.0);
@@ -177,8 +196,8 @@ it('never infinite-loops on a single word wider than the line', function () {
     $style = inlineStyle();
     $runs = [new TextRun('supercalifragilisticexpialidocious', $style)];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 10.0, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 10.0, $style));
 
     expect($fragments)->toHaveCount(1);
     expect($fragments[0]->text)->toBe('supercalifragilisticexpialidocious');
@@ -192,8 +211,8 @@ it('does not wrap a white-space:pre run even when it exceeds the available width
     $text = 'a very long line that would normally wrap across multiple lines';
     $runs = [new TextRun($text, $pre)];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 50.0, $pre);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 50.0, $pre));
 
     // Un único fragmento -- BreakFinder nunca se consulta para un run 'pre' (ver
     // InlineFlowContext::layout()), así que el texto entero es una "palabra" atómica.
@@ -210,8 +229,8 @@ it('still breaks a white-space:pre run at explicit LineBreakRun boundaries (hard
         new TextRun('line two', $pre),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 500.0, $pre);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $pre));
 
     expect($fragments)->toHaveCount(2);
     expect($fragments[0]->text)->toBe('line one');
@@ -223,24 +242,24 @@ it('still breaks a white-space:pre run at explicit LineBreakRun boundaries (hard
 
 it('resolves the monospace generic keyword to the DejaVu Sans Mono face', function () {
     $style = inlineStyle(['font-family' => ['monospace']]);
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style));
 
     expect($fragments[0]->faceKey)->toBe('monospace:400:normal');
 });
 
 it('resolves the serif generic keyword to the DejaVu Serif face', function () {
     $style = inlineStyle(['font-family' => ['serif']]);
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('text', $style)], 0.0, 0.0, 500.0, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('text', $style)], 0.0, 0.0, 500.0, $style));
 
     expect($fragments[0]->faceKey)->toBe('serif:400:normal');
 });
 
 it('resolves a fallback list by picking the first name registered in the catalog', function () {
     $style = inlineStyle(['font-family' => ['Unregistered Family', 'monospace']]);
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style));
 
     expect($fragments[0]->faceKey)->toBe('monospace:400:normal');
 });
@@ -254,8 +273,8 @@ it('falls back to the default family, with a warning, when every name in the lis
     // propósito.
     $catalog = new Pliego\Text\FontCatalog();
     $catalog->register('default', 400, false, __DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
-    $fragments = new InlineFlowContext($this->measurer, $catalog, $warnings)
-        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $catalog, $warnings)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style));
 
     expect($fragments[0]->faceKey)->toBe('default:400:normal');
     expect($warnings->drain())->toContain(

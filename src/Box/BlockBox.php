@@ -17,7 +17,14 @@ final readonly class BlockBox
      * min/max-content real (bugfix post-review M5-T4, ver el docblock de esa clase);
      * FlexFormattingContext SIGUE excluyéndola como item flex directo (adjudicación deliberada, ver
      * su propio docblock).
-     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
+     *
+     * M7-T4: += InlineBoxStart/InlineBoxEnd (caja inline real, ver BoxTreeBuilder::
+     * hasVisibleInlineBox()) intercalados entre TextRun/LineBreakRun/ImageBox — un BlockBox que
+     * aparece MEZCLADO con estos (en vez de como hijo "puro" de la lista) es un elemento
+     * display:inline-block, tratado por BlockFlowContext como token atómico de la secuencia de
+     * runs en vez de como hijo de bloque normal (ver su docblock de layout()).
+     *
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd> $children
      */
     public function __construct(
         public ComputedStyle $style,

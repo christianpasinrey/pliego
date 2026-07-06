@@ -11,6 +11,7 @@ use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 
@@ -34,8 +35,28 @@ final class FragmentDumper
             $fragment instanceof TextFragment => $this->dumpText($fragment),
             $fragment instanceof BoxFragment => $this->dumpBox($fragment),
             $fragment instanceof ImageFragment => $this->dumpImage($fragment),
+            $fragment instanceof InlineBoxFragment => $this->dumpInlineBox($fragment),
             default => throw new \LogicException('Unknown fragment type: ' . $fragment::class),
         };
+    }
+
+    /**
+     * M7-T4: mismas claves 'background'/'borders' que dumpBox() (mismo helper hex()/borders()),
+     * más 'isFirstSlice'/'isLastSlice' (box-decoration-break:slice, ver InlineBoxFragment) — sin
+     * 'children'/'atomic' (esta clase no tiene ninguno de los dos: no es un contenedor, ver su
+     * docblock).
+     * @return array<string, mixed>
+     */
+    private function dumpInlineBox(InlineBoxFragment $fragment): array
+    {
+        return [
+            'type' => 'inline-box',
+            'rect' => $this->rect($fragment->rect),
+            'background' => $fragment->background === null ? null : $this->hex($fragment->background),
+            'borders' => $fragment->borders->isVisible() ? $this->borders($fragment->borders) : null,
+            'isFirstSlice' => $fragment->isFirstSlice,
+            'isLastSlice' => $fragment->isLastSlice,
+        ];
     }
 
     /**

@@ -6,6 +6,8 @@ namespace Pliego\Layout;
 
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
+use Pliego\Box\InlineBoxEnd;
+use Pliego\Box\InlineBoxStart;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
@@ -382,7 +384,14 @@ final readonly class FlexFormattingContext implements FormattingContext
      * flex-child layout delegating a TableFormattingContext (similar a BlockFlowContext pattern)
      * queda en M6+.
      *
-     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
+     * M7-T4: += InlineBoxStart/InlineBoxEnd (misma unión que BlockBox::$children) — nunca
+     * alcanzan este método en la práctica: BoxTreeBuilder::wrapAnonymousFlexItems() ya los
+     * coalesció (junto con cualquier TextRun/LineBreakRun/inline-block suelto) en un BlockBox
+     * anónimo ANTES de que este método vea $container->children, así que la rama `else` de abajo
+     * (ninguna instanceof coincide) es la única alcanzable para ellos si de alguna forma llegaran
+     * — se ignoran en silencio, igual que un TextRun/LineBreakRun suelto ya haría.
+     *
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd> $children
      * @return list<BlockBox|ImageBox>
      */
     private function flexItems(array $children): array

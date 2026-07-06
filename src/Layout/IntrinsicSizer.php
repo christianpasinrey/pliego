@@ -6,6 +6,8 @@ namespace Pliego\Layout;
 
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
+use Pliego\Box\InlineBoxEnd;
+use Pliego\Box\InlineBoxStart;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
@@ -230,10 +232,20 @@ final class IntrinsicSizer
                 $pending[] = $child;
                 continue;
             }
+            // M7-T4 (simplificación documentada, fuera de alcance reducido de esta tarea): el
+            // padding horizontal de una caja inline real NO se cuenta en min/max-content -- estos
+            // marcadores se ignoran aquí (el CONTENIDO de la caja, sus TextRun interiores, SÍ se
+            // mide con normalidad: collectChildren() los deja en la MISMA secuencia $pending,
+            // InlineBoxStart/InlineBoxEnd solo se intercalan sin cortarla).
+            if ($child instanceof InlineBoxStart || $child instanceof InlineBoxEnd) {
+                continue;
+            }
             $flush();
             // M5-T4 (bugfix): una TableBox hija de un BLOQUE GENÉRICO ya no se salta -- tiene su
             // propio max-content real (ver sizeTable()), tratada exactamente igual que cualquier
             // otro hijo BlockBox|ImageBox de esta caja (su propio ancho + sus márgenes propios).
+            // M7-T4: un BlockBox con display:inline-block cae aquí también -- ya funciona sin
+            // cambios (sizeBlock() no distingue por display salvo Flex row, ver su docblock).
             $best = max($best, $this->maxContentWidth($child) + $this->marginsX($child->style));
         }
         $flush();
@@ -252,6 +264,11 @@ final class IntrinsicSizer
             if ($child instanceof LineBreakRun) {
                 // min-content ignora los saltos forzados: solo cuenta la palabra más larga por
                 // run (ver docblock de clase), y un <br> no es un TextRun.
+                continue;
+            }
+            // M7-T4: ver el comentario análogo en maxContentOfChildren() -- mismo padding
+            // horizontal de caja inline ignorado aquí, mismo alcance reducido.
+            if ($child instanceof InlineBoxStart || $child instanceof InlineBoxEnd) {
                 continue;
             }
             // M5-T4 (bugfix): ver el comentario análogo en maxContentOfChildren() -- una TableBox

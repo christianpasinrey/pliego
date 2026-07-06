@@ -302,6 +302,12 @@ final readonly class ComputedStyle
             // Display::ListItem para por qué no necesita ninguna tabla de defaults-por-tag aquí
             // (a diferencia de TABLE_DISPLAY_BY_TAG, que sí sigue siendo hardcoded).
             'list-item' => Display::ListItem,
+            // M7-T4 (css-inline-3 reducido): 'inline' es ahora el default UA real de span/strong/
+            // em/... (ver Display::Inline) -- un autor puede declararlo/pisarlo igual que cualquier
+            // otro valor de este match. 'inline-block' no tiene ningún default de tag en esta hoja
+            // UA (puramente autor, p.ej. Bootstrap `.btn { display: inline-block }`).
+            'inline' => Display::Inline,
+            'inline-block' => Display::InlineBlock,
             default => $display,
         };
         // M6-T3: font-size se resuelve ANTES que cualquier otra propiedad porque su resultado

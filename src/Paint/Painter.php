@@ -6,9 +6,11 @@ namespace Pliego\Paint;
 
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
@@ -50,10 +52,22 @@ final readonly class Painter
             if ($fragment->background !== null) {
                 $canvas->fillRect($fragment->rect, $fragment->background->withOpacity($fragment->opacity));
             }
-            $this->paintBorders($fragment, $canvas);
+            $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $canvas);
             foreach ($fragment->children as $child) {
                 $this->paintFragment($child, $canvas);
             }
+        } elseif ($fragment instanceof InlineBoxFragment) {
+            // M7-T4: misma orden de pintado que un BoxFragment (fondo, luego bordes) — sin hijos
+            // propios que recorrer (el "contenido" de la caja son los TextFragment/BoxFragment
+            // VECINOS de esta misma línea, ya emitidos ANTES por InlineFlowContext::closeLine(),
+            // ver su docblock de "orden de emisión"). Los lados de borde suprimidos por
+            // box-decoration-break:slice (lateral en un slice no-extremo) ya llegan como
+            // BorderStyle::None desde InlineFlowContext -- paintBorders() no necesita ninguna
+            // lógica de slice-awareness propia, solo pinta lo que trae el BorderSet.
+            if ($fragment->background !== null) {
+                $canvas->fillRect($fragment->rect, $fragment->background->withOpacity($fragment->opacity));
+            }
+            $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $canvas);
         } elseif ($fragment instanceof TextFragment) {
             // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
             // rect->width === 0.0 para la línea vacía que deja un <br> forzado — nada que
@@ -120,10 +134,15 @@ final readonly class Painter
      * junta simple sin solape en las esquinas, no un miter real (eso es un milestone de bordes
      * completos posterior).
      */
-    private function paintBorders(BoxFragment $fragment, Canvas $canvas): void
+    /**
+     * M7-T4: generalizado de `(BoxFragment $fragment)` a params sueltos (rect/borders/opacity) —
+     * InlineBoxFragment necesita EXACTAMENTE la misma lógica de pintado (sin lados
+     * slice-suprimidos, ya resueltos por InlineFlowContext antes de construir su BorderSet, ver su
+     * docblock) pero no es un BoxFragment, así que ambos llamadores (paintFragment() para cada
+     * uno) pasan sus propios campos homónimos en vez de compartir un tipo común.
+     */
+    private function paintBorders(Rect $rect, BorderSet $borders, float $opacity, Canvas $canvas): void
     {
-        $rect = $fragment->rect;
-        $borders = $fragment->borders;
         // Solo el ancho de los lados VISIBLES reserva espacio para el rect vertical entre ellos
         // (un lado con style None no ocupa hueco, igual que en el modelo de caja CSS 2.2 §8.5.3:
         // "if border-style is none... the computed value of the border width is 0").
@@ -131,24 +150,24 @@ final readonly class Painter
         $bottomW = $this->effectiveWidth($borders->bottom);
         $middleHeight = $rect->height - $topW - $bottomW;
 
-        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW), $fragment->opacity);
+        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW), $opacity);
         $this->paintBorderSide(
             $borders->right,
             $canvas,
             new Rect($rect->right() - $borders->right->widthPx, $rect->y + $topW, $borders->right->widthPx, $middleHeight),
-            $fragment->opacity,
+            $opacity,
         );
         $this->paintBorderSide(
             $borders->bottom,
             $canvas,
             new Rect($rect->x, $rect->bottom() - $bottomW, $rect->width, $bottomW),
-            $fragment->opacity,
+            $opacity,
         );
         $this->paintBorderSide(
             $borders->left,
             $canvas,
             new Rect($rect->x, $rect->y + $topW, $borders->left->widthPx, $middleHeight),
-            $fragment->opacity,
+            $opacity,
         );
     }
 

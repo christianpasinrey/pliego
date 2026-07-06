@@ -23,7 +23,12 @@ use Pliego\Style\ComputedStyle;
  */
 final readonly class TableCellBox
 {
-    /** @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children */
+    /**
+     * M7-T4: += InlineBoxStart/InlineBoxEnd -- misma unión que BlockBox::$children (una celda
+     * reutiliza collectChildren() ENTERO, ver el docblock de clase; una caja inline real dentro
+     * de una celda no es distinta de una dentro de cualquier otro bloque).
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd> $children
+     */
     public function __construct(
         public ComputedStyle $style,
         public array $children,

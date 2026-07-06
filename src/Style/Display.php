@@ -36,4 +36,20 @@ enum Display: string
     // vive en el árbol de caja (Box\BlockBox no gana ninguna subclase "ListItemBox"), solo en el
     // fragment tree de Layout.
     case ListItem = 'list-item';
+    // M7-T4 (css-inline-3 reducido, CSS 2.2 §9.2.2): display:inline EXPLÍCITO -- antes de esta
+    // tarea, "¿es este elemento inline?" se decidía en BoxTreeBuilder consultando una lista
+    // hardcoded de tags (INLINE_TAGS); ahora es una propiedad Style normal como cualquier otro
+    // display, y UserAgentStylesheet fija `span, strong, em, ... { display: inline }` como default
+    // de esos mismos tags (migración 1:1, ver su docblock) -- un autor SIEMPRE puede pisarlo con su
+    // propia regla (`span { display: block }`), algo que el hardcoding anterior no permitía. Sigue
+    // sin ser el default GENÉRICO de compute() (ese sigue siendo Display::Block salvo los casos ya
+    // tabulados: TABLE_DISPLAY_BY_TAG), así que un elemento desconocido sin ninguna regla que lo
+    // toque nunca se vuelve inline "por accidente".
+    case Inline = 'inline';
+    // M7-T4 (css-inline-3 reducido / CSS 2.2 §10.3.9 sizing): display:inline-block -- un elemento
+    // así se envuelve como un token ATÓMICO dentro de la secuencia de runs de su contenedor
+    // (BoxTreeBuilder), se mide/layoutea como un bloque normal (shrink-to-fit width) y se coloca en
+    // la línea como un "glifo" gigante (InlineFlowContext) -- ver el docblock de esa clase para el
+    // modelo de baseline/line-height adoptado.
+    case InlineBlock = 'inline-block';
 }
