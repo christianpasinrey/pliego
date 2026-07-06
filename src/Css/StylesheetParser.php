@@ -39,6 +39,8 @@ final class StylesheetParser
 
         $document = (new SabberwormParser($css))->parse();
         $declarationParser = new DeclarationParser();
+        $selectorWarnings = new WarningCollector();
+        $selectorParser = new SelectorParser($selectorWarnings);
         $rules = [];
         $warnings = $pageWarnings;
         $order = 0;
@@ -52,9 +54,9 @@ final class StylesheetParser
             $warnings = [...$warnings, ...$declarationParser->drainWarnings()];
             foreach ($block->getSelectors() as $sabberwormSelector) {
                 $selectorString = is_string($sabberwormSelector) ? $sabberwormSelector : $sabberwormSelector->getSelector();
-                $selector = Selector::fromString($selectorString);
+                $selector = $selectorParser->parse($selectorString);
+                $warnings = [...$warnings, ...$selectorWarnings->drain()];
                 if ($selector === null) {
-                    $warnings[] = 'Unsupported selector in M0: ' . $selectorString;
                     continue;
                 }
                 if ($declarations !== []) {

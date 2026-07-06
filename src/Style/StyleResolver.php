@@ -27,7 +27,10 @@ final readonly class StyleResolver
             $this->allRules(),
             static fn(StyleRule $rule): bool => $rule->selector->matches($element),
         ));
-        usort($matching, static fn(StyleRule $a, StyleRule $b): int => [$a->selector->specificity(), $a->order] <=> [$b->selector->specificity(), $b->order]);
+        usort($matching, static function (StyleRule $a, StyleRule $b): int {
+            $bySpecificity = $a->selector->specificity()->compareTo($b->selector->specificity());
+            return $bySpecificity !== 0 ? $bySpecificity : $a->order <=> $b->order;
+        });
         $declarations = [];
         foreach ($matching as $rule) {
             $declarations = [...$declarations, ...$rule->declarations];

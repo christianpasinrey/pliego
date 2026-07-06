@@ -27,10 +27,23 @@ it('keeps rule order for the cascade', function () {
     $rules = new StylesheetParser()->parse('p { color: red } p { color: blue }')->rules;
     expect($rules[0]->order)->toBeLessThan($rules[1]->order);
 });
-it('warns on unsupported properties and selectors without failing', function () {
-    $result = new StylesheetParser()->parse('p > span { float: left; color: red }');
+it('warns on unsupported properties without failing', function () {
+    // p > span now parses fine (M6-T1: combinators are real selector syntax, no longer rejected
+    // outright — see SelectorParserTest); float stays the unsupported bit here.
+    $result = new StylesheetParser()->parse('p { float: left; color: red }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->not->toBeEmpty();
+});
+it('warns on an unsupported selector without failing', function () {
+    $result = new StylesheetParser()->parse('.123abc { color: red }');
     expect($result->rules)->toHaveCount(0);
     expect($result->warnings)->not->toBeEmpty();
+});
+it('parses a combinator selector (specificity is correct) but stages it with a one-time M6-T2 warning', function () {
+    $result = new StylesheetParser()->parse('p > span { color: red }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->selector->specificity()->c)->toBe(2);
+    expect($result->warnings)->toContain('combinator/pseudo matching arrives in M6-T2');
 });
 it('lets the last declaration of a property within a rule win', function () {
     $d = new StylesheetParser()->parse('p { color: #f00; color: #00f }')->rules[0]->declarations;

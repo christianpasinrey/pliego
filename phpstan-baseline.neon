@@ -919,6 +919,18 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access offset 0 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access offset 1 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$alignItems on mixed\.$#'
 			identifier: property.nonObject
 			count: 2
@@ -963,7 +975,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$color on mixed\.$#'
 			identifier: property.nonObject
-			count: 6
+			count: 9
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1119,19 +1131,19 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 62
+			count: 65
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 56
+			count: 57
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelectorAll\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 1
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

@@ -8,7 +8,7 @@ final readonly class StyleRule
 {
     /** @param array<string, mixed> $declarations claves canónicas => Length|Color|string */
     public function __construct(
-        public Selector $selector,
+        public ComplexSelector $selector,
         public array $declarations,
         public int $order,
     ) {}
