@@ -4,10 +4,10 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M6); the
+> **Not published to Packagist yet.** This is an early milestone (M7); the
 > package is not installable via Composer from a registry at this point.
 
-## Status: M6 — CSS core
+## Status: M7 — Layout (inline boxes, lists, floats, position)
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -40,10 +40,153 @@ and `:nth-child`/`:not`, `em`/`rem`/physical units resolved against the
 right font-size at the right time, `:root` **custom properties** (`var()`)
 and `calc()`, and the **full color syntax** (`rgb()`/`rgba()`/`hsl()`/
 `hsla()`, 148 named colors, `transparent`/`currentColor`) with real alpha
-compositing via PDF `ExtGState`. It is still not a general-purpose renderer
-— floats, `:hover`-style dynamic pseudo-classes (meaningless in paged
-media), `@media`, and the rest of tables-to-spec are the milestones ahead
-(see [Roadmap](#roadmap)).
+compositing via PDF `ExtGState`. M7 rounds out the box model that CSS core
+now styles: a real **user-agent stylesheet** (`h1`-`h6`, `p`/`ul`/`ol`/`dl`/
+`blockquote` margins, `pre`/`code` monospace + `white-space: pre`), **list
+markers** (`disc`/`circle`/`square`/`decimal`), **real inline boxes** —
+`display: inline` finally paints its own background/border/padding
+in-line, sliced correctly across a wrapped line (`box-decoration-break:
+slice`), the exact limitation that kept M6's `.btn`/`.badge` flat — plus
+`display: inline-block`, `min-width`/`max-width`/`min-height`/`max-height`,
+`overflow: hidden` clipping, and a **reduced CSS 2.2 §9.5/§9.4.3 floats +
+position** subset (`float: left/right`, `clear`, line shortening around a
+float band, `position: relative/absolute`). It is still not a
+general-purpose renderer — `:hover`-style dynamic pseudo-classes
+(meaningless in paged media), `@media`, pseudo-elements
+(`::before`/`::after`), `position: sticky`, CSS columns, writing modes, and
+the rest of tables/flex-to-spec are the milestones ahead (see
+[Roadmap](#roadmap)).
+
+### Supported as of M7
+
+- **User-agent stylesheet** (replacing M0-M6's hardcoded tag-lists for
+  bold/italic/underline/display defaults with real CSS rules, parsed
+  through the same cascade as author CSS — an author rule can now win
+  against a UA default with a *lower* specificity than before, since UA
+  origin is compared before specificity, CSS 2.2 §6.4.1): `h1`-`h6` sizes
+  and margins (`2/1.5/1.17/1/.83/.75em`, CSS 2.2 Appendix D-exact), `p`/
+  `ul`/`ol`/`dl` (`margin: 1em 0`), `blockquote`/`figure` (`margin: 1em
+  40px`), `pre` (`font-family: monospace; white-space: pre; margin: 1em
+  0`), `code`/`kbd`/`samp` (monospace), `hr` (`border-top: 1px solid`;
+  `margin: .5em auto` simplified to `.5em 0` — no `margin: auto`
+  resolution exists yet, see below), `small` (`.83em`), and `th`
+  (bold + centered, carried from M5).
+  - **`white-space: pre`**: a `pre`-tagged text node is split on real
+    newlines into hard `LineBreakRun`s (CRLF normalized) instead of the
+    usual whitespace-collapsing; inside a single preformatted run there is
+    no soft-wrap opportunity at all (overflow allowed, matching real
+    browsers for an unbroken preformatted line).
+  - **`font-family` as a real fallback list**: `font-family: "X", sans-
+    serif` resolves each candidate against `FontCatalog` in order, falling
+    back to the next name (and finally the generic keyword —
+    `sans-serif`→`default`, `serif`→`serif`, `monospace`→`monospace`) —
+    replacing M0-M6's "first name or bust" behavior. `monospace`/`serif`
+    are now registered engine resources (bundled DejaVu Sans Mono/Serif,
+    same license as the existing DejaVu Sans), not just `default`.
+- **Lists** (css-lists-3 §3 subset): `display: list-item` (the UA default
+  for `<li>`), `list-style-type: disc|circle|square|decimal|none`
+  (inherited), with the classic two-level UA nesting rule (`ul` → disc,
+  `ul ul` → circle, `ul ul ul` and deeper → square, never cycling back) and
+  `ol` → decimal honoring a numeric `start` attribute. A marker is a
+  synthetic glyph/`"N."` string sharing the font/baseline of the `<li>`'s
+  **first** line of text (or a content-top+ascent fallback for an empty
+  `<li>`), right-aligned 0.5em from the list's own padding band. A nested
+  `<ol>`/`<ul>` restarts its own counter independently of any ancestor
+  list, since it is itself a fresh `layout()` call.
+  - `list-style-position` only recognizes `outside` (the only model
+    implemented — no dedicated field exists for it in `ComputedStyle`);
+    `inside` and any `list-style-image` are rejected with a warning.
+- **Real inline boxes + `display: inline-block`** (css-inline-3 subset —
+  THE M7 headline feature): an inline element (`span`, `strong`, custom
+  `display: inline`, etc.) that declares a background, a visible border,
+  or non-zero padding on any side now generates a real paintable box
+  (`InlineBoxFragment`) that opens and closes mid-line, even mid-word,
+  and correctly **slices across a wrap** (`box-decoration-break: slice`,
+  the only mode implemented): lateral (left/right) border and padding
+  paint only on the box's first/last visual slice, top/bottom paint on
+  *every* slice. An inline element with **no** visible decoration still
+  takes the pre-M7 "flattened to plain text runs" fast path — byte-
+  identical geometry, zero regression for the overwhelming majority of
+  existing documents/tests.
+  - **`display: inline-block`**: laid out through the full block pipeline
+    (recursing into `BlockFlowContext`) and placed as one atomic, unbreak-
+    able item in the line — width is shrink-to-fit (`min(max-content,
+    available)`) unless a `width` is declared, honoring `box-sizing`;
+    baseline is approximated as the **bottom of its own margin box**
+    (documented, standard-in-simplified-engines approximation, same
+    criterion this engine already used for a plain `<img>`). An inline-
+    block taller than the surrounding text grows the whole line's height
+    (the "strut + item" model) without disturbing a normal, all-text line.
+  - **Documented gaps**: `IntrinsicSizer` ignores an inline box's own
+    horizontal padding when computing an ancestor's min/max-content (its
+    *content* is still measured) — could under-estimate the needed width
+    of, say, a table cell whose only content is one wide padded `span`. An
+    inline-block's own box boundary is always treated as a valid wrap
+    point (not the full UAX#14 "object" semantics for surrounding white-
+    space). An `<img>` nested inside an inline element is still hoisted to
+    block level with a warning (M3 behavior, unchanged) — it is *not* yet
+    a real inline-level replaced box with its own line wrapping.
+- **`min-width`/`max-width`/`min-height`/`max-height` + `overflow: hidden`**
+  (CSS 2.2 §10.4/§10.7 subset): clamped in content-space before laying out
+  children (max first, then min); `min-height` grows a box's own auto
+  height (content anchored at the top), `max-height` caps it while content
+  keeps overflowing **visibly** unless `overflow: hidden` is also declared,
+  in which case the box clips its descendants with a real PDF clip path
+  (`re W n`, ISO 32000-1 §8.5.4) around just its own children (its own
+  background/border are never clipped). `overflow: scroll`/`auto` coerce
+  to `hidden` with a warning (no scrolling in a print engine). A clipping
+  box is treated as pagination-atomic (like a flex container), never split
+  leaf-by-leaf across a page boundary.
+  - **Gaps**: min/max-height are not applied to a replaced element
+    (`<img>`) — only min/max-width, with the height re-derived from the
+    (already clamped) width via the image's own ratio when the height
+    itself is `auto`. `overflow: hidden` on a `<table>`/table cell has no
+    clipping effect yet (the field is threaded through geometric
+    reconstructions but no construction site sets it there).
+- **Floats** (CSS 2.2 §9.5 subset): `float: left|right` removes a
+  `BlockBox`/`<img>` from normal flow and places it against the nearest
+  open band of its own block formatting context (BFC); `clear: left|
+  right|both` jumps the next in-flow box below the tallest relevant float.
+  A **line of text** queries the active float bands at the moment it
+  starts and shortens/repositions itself around them, re-querying lower
+  down if even its first word doesn't fit next to an intruding float. A
+  new BFC is established by the document root and by any `overflow:
+  hidden` box (CSS 2.2 §10.6.7's "clearfix": such a box's own auto-height
+  then *does* grow to contain a float taller than its other content); any
+  other box simply forwards its floats up to the BFC that actually owns
+  them, exactly like a browser.
+  - **Documented gap**: only **inline content (line boxes)** shortens
+    around a float — a normal **block-level** sibling (a bordered `<div>`,
+    say) is still laid out at its parent's full content width, potentially
+    overlapping the float visually, since only `InlineFlowContext`
+    consults the float bands; `BlockFlowContext`'s own per-child width
+    resolution does not. Real CSS narrows both.
+- **`position: relative` / `position: absolute`** (CSS 2.2 §9.4.3/§10.3.7
+  subset; `fixed`/`sticky` fall back to `static`, `sticky` reported as an
+  explicit warning): `relative`'s `top`/`right`/`bottom`/`left` offset is a
+  pure **paint-only visual shift**, applied once the whole subtree already
+  has its normal-flow geometry — a sibling's position and the container's
+  own auto-height are computed from the **pre-shift** geometry, never
+  leaking the offset into flow (verified end to end — see
+  `BootstrapComponentsTest`). `absolute` removes the box from flow
+  entirely, resolving against the nearest positioned ancestor's content
+  box (or the page's own content box if there is none), with
+  shrink-to-fit sizing when `width`/`height` is `auto` (not CSS 2.2's full
+  10-case §10.3.7 resolution table).
+  - **`top`/`bottom` are px-only** (a `%` value is rejected with a
+    warning, like `height`) — `left`/`right` do accept `%`, resolved
+    against the containing block's width.
+  - **Documented gaps**: a `position: absolute` descendant that declares
+    `bottom` (without `top`) against an ancestor whose own height isn't
+    yet known falls back to the static-position cursor Y, with a warning.
+    An absolute descendant nested inside a flex item or table cell always
+    resolves against the page's root containing block, not a positioned
+    ancestor in between (`FlexFormattingContext`/`TableFormattingContext`
+    don't thread a containing-block parameter). An absolutely/relatively
+    positioned box always paints as a child fragment of its *direct*
+    parent (never bubbled up to the actual containing-block ancestor) —
+    safe only because every `Rect` in this engine's fragment tree is
+    already in whole-page absolute coordinates, never a local space.
 
 ### Supported as of M6
 
@@ -389,15 +532,21 @@ media), `@media`, and the rest of tables-to-spec are the milestones ahead
   overflow is cut at the column edge instead. Either way, overflow only
   becomes visible/lossy when the neighboring column also paints into the
   shared boundary region.
-- No floats/position, no `@media`, no pseudo-elements (`::before`/`::after`)
-  — all M7+; tables are implemented as of M5 but only the
-  subset above — see "Supported as of M5" for what's excluded
-  (`border-collapse`, `rowspan`, a repeating `<thead>` per page,
-  `<caption>`/`<col>`/`<colgroup>`/`<tfoot>`, `vertical-align: baseline`).
-  Flexbox is implemented as of M4 but only the subset above — see "Supported
-  as of M4" for what's excluded (`order`, `align-self`, `align-content`,
-  `inline-flex`, `flex-basis: content`, `*-reverse`, writing modes) and the
-  stretch/column simplifications.
+- Floats and `position: relative`/`absolute` are implemented as of M7 — see
+  "Supported as of M7" above for the reduced subset and its documented
+  gaps. Still entirely unsupported, reported as a warning rather than
+  silently ignored or approximated: `position: sticky`, a float's
+  `shape-outside`, CSS columns (`column-*`), writing modes
+  (`writing-mode`/`direction` beyond LTR/TTB), `::first-line`/
+  `::first-letter`, and `list-style-image` — all M8+, alongside `@media`
+  and the rest of `::before`/`::after`-style generated content. Tables are
+  implemented as of M5 but only the subset above — see "Supported as of
+  M5" for what's excluded (`border-collapse`, `rowspan`, a repeating
+  `<thead>` per page, `<caption>`/`<col>`/`<colgroup>`/`<tfoot>`,
+  `vertical-align: baseline`). Flexbox is implemented as of M4 but only the
+  subset above — see "Supported as of M4" for what's excluded (`order`,
+  `align-self`, `align-content`, `inline-flex`, `flex-basis: content`,
+  `*-reverse`, writing modes) and the stretch/column simplifications.
 - **Images**: no indexed/palette PNG (color type 3), no interlaced (Adam7)
   PNG, no bit depths other than 8, no CMYK JPEG, no formats beyond JPEG/PNG
   (no GIF/WebP/SVG/BMP). No remote `src` (`http://`/`https://` is reported as
@@ -466,10 +615,14 @@ actually referenced by matched CSS get embedded. Instead of `->save($path)`,
 HTML/CSS editors on the left, a live PDF preview on the right) backed by the
 same `Engine` API described above, plus a warnings panel that surfaces every
 unsupported CSS declaration the engine reported instead of silently
-dropping it. The pre-loaded sample (M6) leads with a `:root { --brand: ...;
+dropping it. The pre-loaded sample leads with a `:root { --brand: ...;
 --stripe: rgba(...); ... }` custom-properties block, `calc(var(--gap) *
 .75)` for a padding, and a "Riepilogo tappe" table striped via
-`tbody tr:nth-child(odd) { background-color: var(--stripe) }` — modern CSS
+`tbody tr:nth-child(odd) { background-color: var(--stripe) }` (M6) — plus,
+as of M7, a real Bootstrap-style `<a class="btn">Prenota ora</a>`
+(`display: inline-block`, its background/border/padding finally painting
+in-line instead of flattening to plain text) and a small `<ul
+class="packing-list">` rendered with real disc markers — modern CSS
 rendering correctly on the very first click, no editing required.
 
 To run it locally:
@@ -501,8 +654,9 @@ of flexbox/grid:
 | **M3** | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject, alpha via `/SMask`), deduplicated XObjects, intrinsic + attribute sizing | The photos in the itinerary cards |
 | **M4** | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width`, atomic pagination | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
 | **M5** | **Tables subset**: `table`/`thead`/`tbody`/`tr`/`td`/`th`, auto + fixed column-width algorithms, `colspan`, separated borders (`border-spacing`), cell `vertical-align`, nested tables, row-atomic pagination | Third-party/email-style HTML is built from `<table>`s, not flexbox — a classic email layout (photo cell + text cell, bordered data table inside) renders without rewriting it first |
-| **M6** (this release) | **CSS core**: selector combinators + `:nth-child`/`:not` + specificity, `em`/`rem`/physical units, `:root` custom properties + `calc()`, full color syntax (`rgb()`/`hsl()`/148 named colors) + alpha via `ExtGState` | Real-world stylesheets (Bootstrap-flavored CSS especially) lean on `var()`/`calc()`, `rem`, and combinators/`:nth-child` for the exact "striped table" pattern used everywhere — none of that worked before M6 |
-| **M7+** | Floats/position → pseudo-elements (`::before`/`::after`) → `@media` → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Flex gets completed to spec in its own milestone; floats round out the box model |
+| **M6** | **CSS core**: selector combinators + `:nth-child`/`:not` + specificity, `em`/`rem`/physical units, `:root` custom properties + `calc()`, full color syntax (`rgb()`/`hsl()`/148 named colors) + alpha via `ExtGState` | Real-world stylesheets (Bootstrap-flavored CSS especially) lean on `var()`/`calc()`, `rem`, and combinators/`:nth-child` for the exact "striped table" pattern used everywhere — none of that worked before M6 |
+| **M7** (this release) | **Layout**: real user-agent stylesheet (`h1`-`h6`, list/blockquote/`pre` margins, monospace), list markers (`disc`/`circle`/`square`/`decimal`), real inline boxes + `display: inline-block` (THE `.btn`/`.badge` fix), `min`/`max-width`/`height` + `overflow: hidden` clipping, floats with line shortening, `position: relative`/`absolute` | A Bootstrap-derived `.btn`/`.badge`/`.card` finally paints in-line instead of flattening to plain text — the last big gap between this engine's box model and a real browser's |
+| **M8+** | Pseudo-elements (`::before`/`::after`) → `@media` → `position: sticky` → CSS columns → flex to spec (`order`, `align-self`, `stretch`) → grid | Generated content and responsive/print media queries round out the CSS core; flex/grid get completed to spec in their own milestones |
 
 ## License
 

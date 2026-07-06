@@ -1,0 +1,108 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        49.73,
+        54.4
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                16.0,
+                49.73,
+                38.4
+            ],
+            "background": null,
+            "borders": null,
+            "atomic": false,
+            "children": [
+                {
+                    "type": "inline-box",
+                    "rect": [
+                        0.0,
+                        16.0,
+                        33.41,
+                        19.2
+                    ],
+                    "background": "#ffe08a",
+                    "borders": {
+                        "top": {
+                            "widthPx": 2.0,
+                            "color": "#333333"
+                        },
+                        "right": null,
+                        "bottom": {
+                            "widthPx": 2.0,
+                            "color": "#333333"
+                        },
+                        "left": {
+                            "widthPx": 2.0,
+                            "color": "#333333"
+                        }
+                    },
+                    "isFirstSlice": true,
+                    "isLastSlice": false
+                },
+                {
+                    "type": "text",
+                    "rect": [
+                        4.0,
+                        16.0,
+                        29.41,
+                        19.2
+                    ],
+                    "text": "aaa ",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 32.45
+                },
+                {
+                    "type": "inline-box",
+                    "rect": [
+                        0.0,
+                        35.2,
+                        34.47,
+                        19.2
+                    ],
+                    "background": "#ffe08a",
+                    "borders": {
+                        "top": {
+                            "widthPx": 2.0,
+                            "color": "#333333"
+                        },
+                        "right": {
+                            "widthPx": 2.0,
+                            "color": "#333333"
+                        },
+                        "bottom": {
+                            "widthPx": 2.0,
+                            "color": "#333333"
+                        },
+                        "left": null
+                    },
+                    "isFirstSlice": false,
+                    "isLastSlice": true
+                },
+                {
+                    "type": "text",
+                    "rect": [
+                        0.0,
+                        35.2,
+                        30.47,
+                        19.2
+                    ],
+                    "text": "bbb",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 51.65
+                }
+            ]
+        }
+    ]
+}

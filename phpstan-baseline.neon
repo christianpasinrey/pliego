@@ -4,6 +4,12 @@ parameters:
 			message: '#^Call to an undefined method Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy\:\:markTestSkipped\(\)\.$#'
 			identifier: method.notFound
 			count: 1
+			path: tests/EndToEnd/BootstrapComponentsTest.php
+
+		-
+			message: '#^Call to an undefined method Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy\:\:markTestSkipped\(\)\.$#'
+			identifier: method.notFound
+			count: 1
 			path: tests/EndToEnd/BootstrapLikeTest.php
 
 		-
