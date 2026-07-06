@@ -54,7 +54,7 @@ function expectedGlyphHex(string $text): string
     return $hex;
 }
 
-it('renders nested backgrounds, overflows to 4 pages, warns on exactly 3 unsupported declarations, hides display:none text and keeps accents', function () {
+it('renders nested backgrounds, overflows to 4 pages, warns on exactly 2 unsupported declarations, hides display:none text and keeps accents', function () {
     $path = sys_get_temp_dir() . '/pliego-kitchen-sink.pdf';
     $report = Engine::make()->stylesheet(KITCHEN_SINK_CSS)->render(kitchenSinkHtml(140))->save($path);
     $pdf = (string) file_get_contents($path);
@@ -64,15 +64,14 @@ it('renders nested backgrounds, overflows to 4 pages, warns on exactly 3 unsuppo
     // Overflow a 4 páginas (subió de 3 a 4 en M1-T6, ver nota abajo).
     expect($report->pageCount)->toBe(4);
 
-    // Exactamente 3 declaraciones CSS no soportadas: selector combinador (M6-T1: "p > span" ahora
-    // parsea bien — ya no se rechaza como en M0 — pero su matching queda en staging para M6-T2),
-    // float y width:em. line-height ya no genera warning: M1-T2 le da soporte (ver
-    // p { line-height: 1.5 } arriba). M2-T2: width SÍ admite % ahora (LengthPercentage) — la unidad
-    // "em" se usa aquí para seguir demostrando el warning discipline sobre unidades no soportadas
-    // sin afectar la aritmética de paginación de este test (declaración descartada igual que antes,
-    // sin efecto en el layout).
-    expect($report->warnings)->toHaveCount(3);
-    expect($report->warnings)->toContain('combinator/pseudo matching arrives in M6-T2');
+    // Exactamente 2 declaraciones CSS no soportadas: float y width:em. "p > span" parsea Y matchea
+    // de verdad desde M6-T2 (ya no genera warning), pero no hay ningún <span> en este documento —
+    // no tiene ningún efecto observable aquí. line-height ya no genera warning: M1-T2 le da soporte
+    // (ver p { line-height: 1.5 } arriba). M2-T2: width SÍ admite % ahora (LengthPercentage) — la
+    // unidad "em" se usa aquí para seguir demostrando el warning discipline sobre unidades no
+    // soportadas sin afectar la aritmética de paginación de este test (declaración descartada igual
+    // que antes, sin efecto en el layout).
+    expect($report->warnings)->toHaveCount(2);
     expect($report->warnings)->toContain('Unsupported property: float');
     expect($report->warnings)->toContain('Unsupported length for width: 50em');
 

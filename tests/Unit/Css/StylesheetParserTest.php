@@ -39,11 +39,11 @@ it('warns on an unsupported selector without failing', function () {
     expect($result->rules)->toHaveCount(0);
     expect($result->warnings)->not->toBeEmpty();
 });
-it('parses a combinator selector (specificity is correct) but stages it with a one-time M6-T2 warning', function () {
+it('parses a combinator selector with correct specificity and no staging warning (M6-T2: matching is real)', function () {
     $result = new StylesheetParser()->parse('p > span { color: red }');
     expect($result->rules)->toHaveCount(1);
     expect($result->rules[0]->selector->specificity()->c)->toBe(2);
-    expect($result->warnings)->toContain('combinator/pseudo matching arrives in M6-T2');
+    expect($result->warnings)->toBe([]);
 });
 it('lets the last declaration of a property within a rule win', function () {
     $d = new StylesheetParser()->parse('p { color: #f00; color: #00f }')->rules[0]->declarations;

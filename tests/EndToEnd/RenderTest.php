@@ -208,6 +208,31 @@ it('paints solid borders as filled rects beyond the background, in css-backgroun
     expect(preg_match_all($pattern, $pdf))->toBe(4);
 });
 
+// --- M6-T2: real selector matching end to end (:nth-child(odd), striped table) -----------------
+
+it('renders a striped table with tr:nth-child(odd) painting alternating row backgrounds', function () {
+    // 4 <tr> rows, no <thead>: rows 1 and 3 (1-based, :nth-child(odd)) get the light fill; rows
+    // 2 and 4 stay unpainted. Each striped <tr> paints its OWN background rect (TableFormattingContext,
+    // see docblock: "sí pinta su propio background, detrás de las celdas") — a real combinator/
+    // pseudo-class rule (M6-T1 staged it; M6-T2 makes it actually apply).
+    $path = sys_get_temp_dir() . '/pliego-e2e-striped-table.pdf';
+    $css = 'tr:nth-child(odd) { background-color: #eeeeee }';
+    $html = '<body><table>'
+        . '<tr><td>Fila 1</td></tr>'
+        . '<tr><td>Fila 2</td></tr>'
+        . '<tr><td>Fila 3</td></tr>'
+        . '<tr><td>Fila 4</td></tr>'
+        . '</table></body>';
+    $report = Engine::make()->stylesheet($css)->render($html)->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($report->warnings)->toBe([]);
+    $stripeFill = sprintf('%.3F %.3F %.3F rg', 0xee / 255, 0xee / 255, 0xee / 255);
+    $pattern = '/^' . preg_quote($stripeFill, '/') . ' [\d.]+ [\d.]+ [\d.]+ [\d.]+ re f$/m';
+    // Exactamente 2 rects rellenos con el color de la franja: filas 1 y 3, no 2 ni 4.
+    expect(preg_match_all($pattern, $pdf))->toBe(2);
+});
+
 // --- M5-T1: warning channel end to end (Engine -> BlockFlowContext/FlexFormattingContext/Paginator) --
 
 it('warns when an atomic flex fragment is taller than the page and stays unsplit (M5-T1)', function () {

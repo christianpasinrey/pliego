@@ -9,9 +9,9 @@ namespace Pliego\Css;
  * (type/universal + #id* + .class* + [attr]* + :pseudo*, en cualquier orden salvo que
  * type/universal, si aparece, va primero).
  *
- * M6-T1: el matching real (matchesElement()) solo se invoca desde ComplexSelector cuando el
- * compuesto es "simple" (sin atributos ni pseudo-clases, ver hasAttributesOrPseudos()) — el resto
- * queda en staging hasta M6-T2, aunque la specificity ya es exacta para todos los casos.
+ * M6-T2: matchesElement() ya resuelve el compuesto completo (type/universal/clases/id/atributos/
+ * pseudo-clases) — ComplexSelector::matches() lo invoca para cada compuesto de la cadena durante
+ * el walk right-to-left.
  */
 final readonly class CompoundSelector
 {
@@ -28,11 +28,6 @@ final readonly class CompoundSelector
         public array $attributes = [],
         public array $pseudoClasses = [],
     ) {}
-
-    public function hasAttributesOrPseudos(): bool
-    {
-        return $this->attributes !== [] || $this->pseudoClasses !== [];
-    }
 
     /** selectors-3 §17: a=ids, b=clases+atributos+pseudo-clases (:not() delega en su argumento), c=tipos (* no cuenta). */
     public function specificity(): Specificity
@@ -52,7 +47,7 @@ final readonly class CompoundSelector
         return $specificity;
     }
 
-    /** Port 1:1 de la lógica de M0 Selector::matches(), extendida a múltiples clases (.a.b). */
+    /** M6-T2: extiende la lógica de M0 (type/clases/id) con atributos y pseudo-clases. */
     public function matchesElement(\Dom\Element $element): bool
     {
         if ($this->type !== null && strtolower($element->tagName) !== $this->type) {
@@ -63,6 +58,19 @@ final readonly class CompoundSelector
                 return false;
             }
         }
-        return $this->id === null || $element->getAttribute('id') === $this->id;
+        if ($this->id !== null && $element->getAttribute('id') !== $this->id) {
+            return false;
+        }
+        foreach ($this->attributes as $attribute) {
+            if (!$attribute->matches($element)) {
+                return false;
+            }
+        }
+        foreach ($this->pseudoClasses as $pseudoClass) {
+            if (!$pseudoClass->matches($element)) {
+                return false;
+            }
+        }
+        return true;
     }
 }

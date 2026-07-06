@@ -422,14 +422,13 @@ it('defaults vertical-align to Top and does not inherit a declared value', funct
     expect($map->get($span)->verticalAlign)->toBe(VerticalAlign::Top);
 });
 
-// --- M6-T1: real SelectorParser + Specificity(a,b,c), matching staged for M6-T2 ---------------
+// --- M6-T2: real combinator matching (M6-T1 staging lifted) ------------------------------------
 
-it('keeps a descendant-combinator rule staged: it parses with correct specificity but never applies (M6-T2)', function () {
+it('applies a descendant-combinator rule now that matching is real', function () {
     [$doc, $map] = resolveDoc('ul li { color: #00f }', '<body><ul><li>x</li></ul></body>');
     $li = $doc->querySelector('li');
     assert($li !== null);
-    // color not overridden by the staged rule: falls back to the UA-default inherited black.
-    expect($map->get($li)->color)->toEqual(new Color(0, 0, 0));
+    expect($map->get($li)->color)->toEqual(new Color(0, 0, 255));
 });
 
 it('matches multiple classes on the same compound (.a.b), a real behavior improvement over M0', function () {

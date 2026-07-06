@@ -157,6 +157,12 @@ parameters:
 			path: tests/Unit/Css/LengthTest.php
 
 		-
+			message: '#^Parameter \#1 \$element of method Pliego\\Css\\ComplexSelector\:\:matches\(\) expects Dom\\Element, mixed given\.$#'
+			identifier: argument.type
+			count: 13
+			path: tests/Unit/Css/SelectorParserTest.php
+
+		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$loader\.$#'
 			identifier: property.notFound
 			count: 15
