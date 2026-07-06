@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Pliego\Css\DeclarationParser;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Length;
@@ -557,4 +558,53 @@ it('parses vertical-align top/middle/bottom and warns on baseline/sub/super/perc
         expect($result)->toBe([]);
         expect($parser->drainWarnings())->not->toBeEmpty();
     }
+});
+
+// --- M6-T4: calc() parsed into a symbolic CalcExpr (css-values-3 §8) ---------------------
+
+it('parses calc() on width into a symbolic CalcExpr, not yet resolved', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(100% - 20px)');
+    expect($result)->toEqual(['width' => CalcExpr::of(100.0, 0.0, 0.0, -20.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses calc() with em on font-size into a symbolic CalcExpr', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(1em + 4px)');
+    expect($result)->toEqual(['font-size' => CalcExpr::of(0.0, 1.0, 0.0, 4.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses calc() on a pure-length property (height)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('height', 'calc(2px + 3px)');
+    expect($result)->toEqual(['height' => CalcExpr::of(0.0, 0.0, 0.0, 5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('splits a shorthand token containing an internal-space calc() correctly (no naive whitespace split)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', 'calc(1em + 4px) 10px');
+    expect($result)->toEqual([
+        'margin-top' => CalcExpr::of(0.0, 1.0, 0.0, 4.0),
+        'margin-right' => LengthPercentage::px(10.0),
+        'margin-bottom' => CalcExpr::of(0.0, 1.0, 0.0, 4.0),
+        'margin-left' => LengthPercentage::px(10.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and drops the declaration when calc() itself is invalid (division by zero)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(10px / 0)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('does not fall back to plain length parsing when a value looks like calc() but is malformed', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(100% - )');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
 });

@@ -163,6 +163,15 @@ it('resolves width % against the containing block width', function () {
     expect($div->rect->width)->toBe(200.0);
 });
 
+// --- M6-T4: calc(100% - 20px) resolved end to end through real layout, not just LengthPercentage::resolve() in isolation ---
+
+it('resolves calc(100% - 20px) against the containing block width (400 -> 380) through the real layout pipeline', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: calc(100% - 20px) }', 400.0);
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(380.0);
+});
+
 it('resolves nested percentages against each ancestor\'s own content width', function () {
     $frag = layoutHtml(
         '<body><div class="outer"><div class="inner">x</div></div></body>',

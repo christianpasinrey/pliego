@@ -163,6 +163,12 @@ parameters:
 			path: tests/Unit/Css/SelectorParserTest.php
 
 		-
+			message: '#^Cannot access property \$rawValue on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Css/StylesheetParserTest.php
+
+		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$loader\.$#'
 			identifier: property.notFound
 			count: 15
@@ -981,7 +987,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$color on mixed\.$#'
 			identifier: property.nonObject
-			count: 9
+			count: 13
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1077,31 +1083,31 @@ parameters:
 		-
 			message: '#^Cannot access property \$marginBottom on mixed\.$#'
 			identifier: property.nonObject
-			count: 1
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$marginLeft on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$marginRight on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$marginTop on mixed\.$#'
 			identifier: property.nonObject
-			count: 1
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$paddingLeft on mixed\.$#'
 			identifier: property.nonObject
-			count: 5
+			count: 9
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1143,7 +1149,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$value on mixed\.$#'
 			identifier: property.nonObject
-			count: 13
+			count: 25
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1155,7 +1161,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$width on mixed\.$#'
 			identifier: property.nonObject
-			count: 4
+			count: 6
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1167,19 +1173,25 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 78
+			count: 90
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 69
+			count: 81
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelectorAll\(\) on mixed\.$#'
 			identifier: method.nonObject
 			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot call method resolve\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

@@ -15,11 +15,14 @@ namespace Pliego\Css\Value;
  */
 final readonly class CssLength
 {
-    private const float PX_PER_IN = 96.0;
-    private const float PX_PER_PT = self::PX_PER_IN / 72.0;
-    private const float PX_PER_CM = self::PX_PER_IN / 2.54;
+    /** M6-T4: visibilidad public — CalcParser reutiliza estos mismos factores exactos para plegar
+     * físicos dentro de un calc() (evita duplicar los números y arriesgar un drift entre los dos
+     * sitios que hacen el mismo plegado px<-físico). */
+    public const float PX_PER_IN = 96.0;
+    public const float PX_PER_PT = self::PX_PER_IN / 72.0;
+    public const float PX_PER_CM = self::PX_PER_IN / 2.54;
     /** css-values-3 §5.2: 1mm = 96/25.4px, expresado como 9.6/2.54 (== 96/25.4) por fidelidad al brief. */
-    private const float PX_PER_MM = 9.6 / 2.54;
+    public const float PX_PER_MM = 9.6 / 2.54;
 
     private function __construct(public float $value, public LengthUnit $unit) {}
 

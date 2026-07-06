@@ -24,6 +24,23 @@ function resolveDoc(string $css, string $html): array
     return [$doc, $map];
 }
 
+/**
+ * Igual que Engine::render(): un calc()/var() SIN var() se tipa en tiempo de parseo (fast path,
+ * warnings en ParseResult::warnings) — solo las declaraciones CON var() se difieren a
+ * StyleResolver (warnings en el WarningCollector compartido). Esta función fusiona ambas fuentes,
+ * como hace Engine, para que un test no tenga que saber por qué ruta pasó cada warning.
+ *
+ * @return array{0: \Dom\HTMLDocument, 1: Pliego\Style\StyleMap, 2: list<string>}
+ */
+function resolveDocWithWarnings(string $css, string $html): array
+{
+    $doc = \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+    $warnings = new \Pliego\Css\WarningCollector();
+    $parseResult = new StylesheetParser()->parse($css);
+    $map = new StyleResolver([new CssStyleSource($parseResult)], $warnings)->resolve($doc);
+    return [$doc, $map, [...$parseResult->warnings, ...$warnings->drain()]];
+}
+
 it('inherits color and font-size down the tree', function () {
     [$doc, $map] = resolveDoc('body { color: #f00; font-size: 20px }', '<body><p>x</p></body>');
     $p = $doc->querySelector('p');
@@ -544,4 +561,154 @@ it('mixes em/rem/px/% in the margin shorthand ("1em 2rem 10px 5%")', function ()
     // left: %, still deferred to layout (LengthPercentage::percent, never resolved here)
     expect($style->marginLeft->isPercent)->toBeTrue();
     expect($style->marginLeft->value)->toBe(5.0);
+});
+
+// --- M6-T4: custom properties (var()) + calc() end-to-end (css-variables-1 §2-3, css-values-3 §8) --
+
+it('resolves a var() with no fallback needed against a :root custom property (the --bs pattern)', function () {
+    [$doc, $map] = resolveDoc(':root { --bs-primary: #0d6efd; } p { color: var(--bs-primary); }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(13, 110, 253));
+});
+
+it('falls back to the fallback value when the custom property is undeclared', function () {
+    [$doc, $map] = resolveDoc('p { color: var(--missing, #ff0000); }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+});
+
+it('resolves a fallback chain with a nested var() inside the fallback', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --b: #00ff00; } p { color: var(--a, var(--b, #0000ff)); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(0, 255, 0));
+});
+
+it('inherits a custom property three levels down and resolves var() at the leaf', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --sp: 20px; }',
+        '<body><div><section><p>x</p></section></div></body>',
+    );
+    // Nothing actually USES --sp yet at any level; declare the usage only at the leaf to prove
+    // the value survived two levels of pure inheritance (body -> div -> section -> p) untouched.
+    [$doc2, $map2] = resolveDoc(
+        ':root { --sp: 20px; } p { padding-left: var(--sp); }',
+        '<body><div><section><p>x</p></section></div></body>',
+    );
+    $p2 = $doc2->querySelector('p');
+    assert($p2 !== null);
+    expect($map2->get($p2)->paddingLeft->value)->toBe(20.0);
+});
+
+it('lets a higher-specificity override win over a custom property default', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --c: #ff0000; } p { color: var(--c); } p.override { color: #00ff00; }',
+        '<body><p class="override">x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(0, 255, 0));
+});
+
+it('drops a declaration referencing an unknown custom property with no fallback, with a warning', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('p { color: var(--missing); }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // color falls back to its initial value (black) — the declaration never took effect.
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 0));
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('detects a direct custom property cycle and drops both usages, with warnings', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        ':root { --a: var(--b); --b: var(--a); } p { color: var(--a); } span { background-color: var(--b); }',
+        '<body><p>x</p><span>y</span></body>',
+    );
+    $p = $doc->querySelector('p');
+    $span = $doc->querySelector('span');
+    assert($p !== null && $span !== null);
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 0));
+    expect($map->get($span)->backgroundColor)->toBeNull();
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('resolves var() inside a shorthand, expanding correctly ("margin: var(--sp) 10px")', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --sp: 6px; } p { margin: var(--sp) 10px; }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->marginTop->value)->toBe(6.0);
+    expect($style->marginRight->value)->toBe(10.0);
+    expect($style->marginBottom->value)->toBe(6.0);
+    expect($style->marginLeft->value)->toBe(10.0);
+});
+
+it('keeps the cascade order correct: a later, more specific longhand still wins over an earlier var() shorthand', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --sp: 6px; } p { margin: var(--sp) 10px; } p.win { margin-top: 99px; }',
+        '<body><p class="win">x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->marginTop->value)->toBe(99.0);
+    // The other 3 sides still come from the var() shorthand expansion.
+    expect($style->marginRight->value)->toBe(10.0);
+    expect($style->marginBottom->value)->toBe(6.0);
+    expect($style->marginLeft->value)->toBe(10.0);
+});
+
+it('resolves calc() precedence end to end: "(2 + 3) * 4px" -> 20px', function () {
+    [$doc, $map] = resolveDoc('p { padding-left: calc((2 + 3) * 4px) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(20.0);
+});
+
+it('resolves calc() with mixed units and no parens: "2px + 3px * 2" -> 8px', function () {
+    [$doc, $map] = resolveDoc('p { padding-left: calc(2px + 3px * 2) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(8.0);
+});
+
+it('resolves calc() with em against the font-size in effect: "1em + 4px" at font-size 20 -> 24', function () {
+    [$doc, $map] = resolveDoc('p { font-size: 20px; padding-left: calc(1em + 4px) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(24.0);
+});
+
+it('defers calc() with % to Layout (LengthPercentage::calc), resolving "calc(100% - 20px)" against 400 -> 380', function () {
+    [$doc, $map] = resolveDoc('p { width: calc(100% - 20px) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $width = $map->get($p)->width;
+    expect($width)->not->toBeNull();
+    expect($width->resolve(400.0))->toBe(380.0);
+});
+
+it('warns and drops a division-by-zero calc()', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('p { padding-left: calc(10px / 0) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(0.0);
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('combines var() and calc() end to end: "--w: 50%; width: calc(var(--w) - 10px)"', function () {
+    [$doc, $map] = resolveDoc(':root { --w: 50%; } p { width: calc(var(--w) - 10px) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $width = $map->get($p)->width;
+    expect($width)->not->toBeNull();
+    expect($width->resolve(400.0))->toBe(190.0);
 });

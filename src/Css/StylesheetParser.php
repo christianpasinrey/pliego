@@ -47,8 +47,29 @@ final class StylesheetParser
         foreach ($document->getAllDeclarationBlocks() as $block) {
             $declarations = [];
             foreach ($block->getRules() as $rule) {
-                foreach ($declarationParser->parse($rule->getRule(), (string) $rule->getValue()) as $property => $value) {
-                    $declarations[$property] = $value;
+                $property = trim($rule->getRule());
+                $rawValue = trim((string) $rule->getValue());
+                // css-variables-1 §2: una custom property (--x) se captura CRUDA, sin tipar
+                // nunca (ni siquiera cuando no contiene var()) — su valor final depende del
+                // elemento (herencia + cascade), y css-variables-1 exige case-sensitivity real
+                // (--Sp !== --sp), así que NO se pasa por strtolower() como el resto de
+                // propiedades (ver DeclarationParser::parse(), que sí lo hace).
+                if (str_starts_with($property, '--')) {
+                    $declarations[$property] = $rawValue;
+                    continue;
+                }
+                // M6-T4: cualquier declaración cuyo valor contenga var(...) se difiere COMPLETA
+                // (valor crudo, propiedad tal cual — shorthand sin expandir) porque su tipado
+                // definitivo depende de las custom properties heredadas del elemento, que solo
+                // StyleResolver conoce (compute-time, por elemento) — ver DeferredDeclaration.
+                // Las reglas SIN var() siguen tipándose aquí mismo, en tiempo de parseo (fast
+                // path intacto, cero regresión para el 99% de las hojas de estilo sin variables).
+                if (str_contains($rawValue, 'var(')) {
+                    $declarations[strtolower($property)] = new DeferredDeclaration($rawValue);
+                    continue;
+                }
+                foreach ($declarationParser->parse($property, $rawValue) as $parsedProperty => $value) {
+                    $declarations[$parsedProperty] = $value;
                 }
             }
             $warnings = [...$warnings, ...$declarationParser->drainWarnings()];

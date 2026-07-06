@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Pliego\Css;
 
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\CalcExpr;
+use Pliego\Css\Value\CalcParser;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Length;
@@ -183,8 +185,11 @@ final class DeclarationParser
      * comportamiento pre-M6-T3), salvo en las propiedades con manejo dedicado (font-size,
      * line-height) que llaman a CssLength::fromCss directamente en vez de a este método.
      */
-    private function parseLength(string $value): Length|CssLength|null
+    private function parseLength(string $value): Length|CssLength|CalcExpr|null
     {
+        if ($this->looksLikeCalc($value)) {
+            return $this->tryParseCalc($value);
+        }
         $css = CssLength::fromCss($value);
         if ($css === null) {
             return null;
@@ -203,8 +208,11 @@ final class DeclarationParser
      * simbólico para ComputedStyle::compute (resueltos contra el font-size propio/raíz, nunca
      * contra el containing block).
      */
-    private function parseLengthPercentage(string $value): LengthPercentage|CssLength|null
+    private function parseLengthPercentage(string $value): LengthPercentage|CssLength|CalcExpr|null
     {
+        if ($this->looksLikeCalc($value)) {
+            return $this->tryParseCalc($value);
+        }
         $css = CssLength::fromCss($value);
         if ($css === null) {
             return null;
@@ -215,6 +223,97 @@ final class DeclarationParser
             LengthUnit::Em, LengthUnit::Rem => $css,
             default => null,
         };
+    }
+
+    /** css-values-3 §8: true si, una vez recortado el valor, empieza literalmente por "calc(" —
+     * a partir de ahí el parseo se COMPROMETE con la rama calc() (éxito -> CalcExpr, fallo ->
+     * null con warning ya emitido dentro de tryParseCalc()), sin intentar CssLength::fromCss()
+     * como fallback (evitaría un segundo warning confuso sobre el mismo valor). */
+    private function looksLikeCalc(string $value): bool
+    {
+        return stripos(trim($value), 'calc(') === 0;
+    }
+
+    /** Extrae el cuerpo entre el "calc(" inicial y su paréntesis de cierre (que debe coincidir
+     * exactamente con el final de la cadena — cualquier resto tras el cierre es sintaxis
+     * inválida) y delega en CalcParser. Warnings de CalcParser se funden en $this->warnings, igual
+     * que cualquier otro warning de este parser. */
+    private function tryParseCalc(string $value): ?CalcExpr
+    {
+        $trimmed = trim($value);
+        // looksLikeCalc() (el único llamador) ya garantizó que $trimmed empieza EXACTAMENTE por
+        // "calc(" (5 caracteres) — el paréntesis de apertura está siempre en el índice 4, sin
+        // necesidad de buscarlo (evita un stripos() que PHPStan tipa como int<0,max>|false).
+        $openParen = 4;
+        $closeParen = $this->matchingParen($trimmed, $openParen);
+        if ($closeParen === null || $closeParen !== strlen($trimmed) - 1) {
+            $this->warnings[] = "Invalid calc() expression: $value";
+            return null;
+        }
+        $inner = substr($trimmed, $openParen + 1, $closeParen - $openParen - 1);
+        $calcParser = new CalcParser();
+        $expr = $calcParser->parse($inner);
+        $this->warnings = [...$this->warnings, ...$calcParser->drainWarnings()];
+        return $expr;
+    }
+
+    private function matchingParen(string $text, int $openIndex): ?int
+    {
+        $depth = 0;
+        $length = strlen($text);
+        for ($i = $openIndex; $i < $length; $i++) {
+            if ($text[$i] === '(') {
+                $depth++;
+            } elseif ($text[$i] === ')') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * M6-T4: divide por espacios en el NIVEL SUPERIOR de paréntesis — un token de shorthand
+     * (margin/padding/gap/border/flex) puede ser "calc(1em + 4px)", que contiene espacios
+     * INTERNOS; un preg_split('/\s+/') ingenuo (el comportamiento pre-M6-T4) lo fragmentaría en
+     * 3 tokens espurios. Los espacios dentro de cualquier paréntesis (incluido un var() anidado
+     * dentro de un calc(), o viceversa) se preservan como parte del mismo token.
+     *
+     * @return list<string>
+     */
+    private static function splitTopLevel(string $value): array
+    {
+        $tokens = [];
+        $current = '';
+        $depth = 0;
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $value[$i];
+            if ($char === '(') {
+                $depth++;
+                $current .= $char;
+                continue;
+            }
+            if ($char === ')') {
+                $depth--;
+                $current .= $char;
+                continue;
+            }
+            if ($depth === 0 && ctype_space($char)) {
+                if ($current !== '') {
+                    $tokens[] = $current;
+                    $current = '';
+                }
+                continue;
+            }
+            $current .= $char;
+        }
+        if ($current !== '') {
+            $tokens[] = $current;
+        }
+        return $tokens;
     }
 
     /**
@@ -228,6 +327,13 @@ final class DeclarationParser
      */
     private function parseFontSize(string $value): array
     {
+        if ($this->looksLikeCalc($value)) {
+            $calc = $this->tryParseCalc($value);
+            // El signo de un calc() no se conoce hasta ComputedStyle::compute (depende del
+            // font-size del padre) — el rechazo de negativos para font-size en calc() queda
+            // fuera de alcance de esta tarea (ningún test del brief lo ejercita).
+            return $calc === null ? [] : ['font-size' => $calc];
+        }
         $css = CssLength::fromCss($value);
         if ($css === null) {
             return $this->warn("Unsupported length for font-size: $value");
@@ -239,9 +345,15 @@ final class DeclarationParser
     }
 
     /** Valor crudo (sin resolver unidad simbólica) usado solo para el chequeo de negativos —
-     * Length usa ->px, LengthPercentage/CssLength usan ->value. */
-    private static function rawValueOf(Length|LengthPercentage|CssLength $value): float
+     * Length usa ->px, LengthPercentage/CssLength usan ->value. Un CalcExpr todavía no tiene un
+     * signo conocido (depende del font-size en ComputedStyle::compute) — se trata como no
+     * negativo aquí (el chequeo de negativos para valores calc() queda fuera de alcance de esta
+     * tarea, ningún test del brief lo ejercita). */
+    private static function rawValueOf(Length|LengthPercentage|CssLength|CalcExpr $value): float
     {
+        if ($value instanceof CalcExpr) {
+            return 0.0;
+        }
         return $value instanceof Length ? $value->px : $value->value;
     }
 
@@ -268,7 +380,7 @@ final class DeclarationParser
         return [$property => $style];
     }
 
-    private function borderWidthFromToken(string $token): Length|CssLength|null
+    private function borderWidthFromToken(string $token): Length|CssLength|CalcExpr|null
     {
         $keyword = strtolower($token);
         if (array_key_exists($keyword, self::BORDER_WIDTH_KEYWORDS)) {
@@ -295,8 +407,8 @@ final class DeclarationParser
     private function expandBorderShorthand(string $property, string $value): array
     {
         $sides = $property === 'border' ? self::BORDER_SIDES : [substr($property, strlen('border-'))];
-        $tokens = preg_split('/\s+/', $value) ?: [];
-        if ($tokens === [] || $tokens === ['']) {
+        $tokens = self::splitTopLevel($value);
+        if ($tokens === []) {
             return $this->warn("Unsupported shorthand for $property: $value");
         }
         $width = null;
@@ -401,6 +513,11 @@ final class DeclarationParser
             }
             return ['line-height' => $multiplier];
         }
+        if ($this->looksLikeCalc($value)) {
+            $calc = $this->tryParseCalc($value);
+            // Igual que font-size: el signo de un calc() no se conoce hasta compute-time.
+            return $calc === null ? [] : ['line-height' => $calc];
+        }
         $css = CssLength::fromCss($value);
         if ($css !== null) {
             if ($css->value < 0.0) {
@@ -448,7 +565,7 @@ final class DeclarationParser
      */
     private function parseBorderSpacing(string $value): array
     {
-        $tokens = preg_split('/\s+/', trim($value)) ?: [];
+        $tokens = self::splitTopLevel(trim($value));
         if (count($tokens) !== 1) {
             return $this->warn("Unsupported border-spacing (single value only in M5): $value");
         }
@@ -505,12 +622,12 @@ final class DeclarationParser
      */
     private function expandBoxShorthand(string $property, string $value): array
     {
-        $parts = preg_split('/\s+/', $value) ?: [];
+        $parts = self::splitTopLevel($value);
         $lengths = array_map($this->parseLengthPercentage(...), $parts);
         if (in_array(null, $lengths, true) || $lengths === []) {
             return $this->warn("Unsupported shorthand for $property: $value");
         }
-        /** @var list<LengthPercentage|CssLength> $lengths */
+        /** @var list<LengthPercentage|CssLength|CalcExpr> $lengths */
         [$top, $right, $bottom, $left] = match (count($lengths)) {
             1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
             2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],
@@ -532,12 +649,12 @@ final class DeclarationParser
      */
     private function expandGapShorthand(string $value): array
     {
-        $parts = preg_split('/\s+/', trim($value)) ?: [];
+        $parts = self::splitTopLevel(trim($value));
         $lengths = array_map($this->parseLength(...), $parts);
-        if ($parts === [] || $parts === [''] || in_array(null, $lengths, true) || count($lengths) > 2) {
+        if ($parts === [] || in_array(null, $lengths, true) || count($lengths) > 2) {
             return $this->warn("Unsupported shorthand for gap: $value");
         }
-        /** @var list<Length|CssLength> $lengths */
+        /** @var list<Length|CssLength|CalcExpr> $lengths */
         foreach ($lengths as $length) {
             if (self::rawValueOf($length) < 0.0) {
                 return $this->warn("Negative value not allowed for gap: $value");
@@ -577,7 +694,7 @@ final class DeclarationParser
      * este parser) o un LengthPercentage/CssLength no negativo (px/%/em/rem, M6-T3). 'content' y
      * cualquier otro token inválido devuelven null, que el llamador convierte en warning.
      */
-    private function flexBasisToken(string $token): LengthPercentage|CssLength|string|null
+    private function flexBasisToken(string $token): LengthPercentage|CssLength|CalcExpr|string|null
     {
         if (strtolower(trim($token)) === 'auto') {
             return 'auto';
@@ -621,8 +738,8 @@ final class DeclarationParser
         if ($keyword === 'auto') {
             return ['flex-grow' => 1.0, 'flex-shrink' => 1.0, 'flex-basis' => 'auto'];
         }
-        $tokens = preg_split('/\s+/', trim($value)) ?: [];
-        if ($tokens === [] || $tokens === ['']) {
+        $tokens = self::splitTopLevel(trim($value));
+        if ($tokens === []) {
             return $this->warn("Unsupported flex shorthand: $value");
         }
         return match (count($tokens)) {
