@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M4 — pliego: flexbox subset</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M4 «flexbox subset»</h1>
+<p class="meta">2026-07-06 · Previos: M0-M3 ✅ (main, CI verde, 314 tests) · Ejecución: subagent-driven · Con M4 el documento objetivo del usuario (itinerario: tarjeta = foto izquierda + texto flexible derecha) se genera COMPLETO.</p>
+
+<div class="task">
+  <strong>Goal:</strong> subset útil y spec-fiel de css-flexbox-1: <code>display:flex</code>, <code>flex-direction</code> row/column, <code>flex-wrap</code>, <code>gap</code>, <code>justify-content</code>, <code>align-items</code>, <code>flex-grow/shrink/basis</code> y el shorthand <code>flex</code>. Implementado como <code>FlexFormattingContext</code> — el segundo plugin de layout del kernel, la apuesta arquitectónica del spec cobrando su dividendo.<br>
+  <strong>Claves técnicas:</strong> (1) <em>intrinsic sizing</em> es el prerequisito real: <code>flex-basis:auto</code> sin width necesita max-content/min-content de los items (texto sin partir / palabra más larga; imágenes: intrínsecas; anidados: recursivo) — se construye como servicio propio ANTES del algoritmo flex; (2) resolución de longitudes flexibles per spec §9.7 (una pasada de grow, shrink proporcional a basis×factor, con clamp a min-content); (3) el contenedor flex NO fragmenta entre páginas en M4 (átomo con push-down; más alto que la página se queda — documentado); (4) los hijos texto directos de un contenedor flex se envuelven en item anónimo per spec §4.</p>
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M3 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, trailer, TDD 4-gates, baselines tests-only).</li>
+  <li>Lecciones del ledger: deptrac sin hooks/new-chaining sin paréntesis + silent-skip (verificar conteo); comas finales en match; Fragment::rect() método; FontCatalog bool $italic; % → ->resolve(cbWidth); DOM 8.4 sin ->children.</li>
+  <li>Los algoritmos siguen css-flexbox-1 citando sección por método (código = spec anotada). Lo NO soportado (order, align-self, align-content, inline-flex, flex-basis content keyword, min/max-width en items, dirección row-reverse/column-reverse, writing modes) → warning y fallback documentado, jamás silencio.</li>
+  <li>Los 314 tests + goldens M1-M3 quedan intactos.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Style (T1)
+enum FlexDirection { case Row; case Column; }
+enum FlexWrap { case NoWrap; case Wrap; }
+enum JustifyContent { case FlexStart; case Center; case FlexEnd; case SpaceBetween; }
+enum AlignItems { case Stretch; case FlexStart; case Center; case FlexEnd; }
+ComputedStyle += display admite 'flex' (Display::Flex nuevo case); FlexDirection $flexDirection;
+  FlexWrap $flexWrap; float $rowGapPx; float $columnGapPx; JustifyContent $justifyContent;
+  AlignItems $alignItems; float $flexGrow (0); float $flexShrink (1); ?LengthPercentage $flexBasis (null=auto)
+// Ninguna hereda.
+
+// Layout (T3)
+final class IntrinsicSizer {
+    public function __construct(TextMeasurer $measurer, FontCatalog $catalog);
+    public function maxContentWidth(BlockBox|ImageBox $box): float;  // texto sin partir; img intrínseca; recursivo
+    public function minContentWidth(BlockBox|ImageBox $box): float;  // palabra más larga; img intrínseca
+}
+
+// Layout (T4)
+final readonly class FlexFormattingContext implements FormattingContext {
+    public function __construct(TextMeasurer, FontCatalog, IntrinsicSizer);
+    public function layout(BlockBox $container, Rect $containingBlock): BoxFragment;
+}
+// BlockFlowContext delega: hijo con display Flex → FlexFormattingContext (y un contenedor flex
+// dentro de flujo normal se posiciona como bloque: márgenes, width, box-sizing ya resueltos).</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 CSS flex longhands<br/>+ shorthand + enums"] --> T2["T2 Box: items anónimos<br/>+ Display::Flex"]
+  T2 --> T3["T3 IntrinsicSizer<br/>max/min-content"]
+  T3 --> T4["T4 FlexFormattingContext<br/>§9 simplificado"]
+  T4 --> T5["T5 wrap multilínea +<br/>column + paginación átomo"]
+  T5 --> T6["T6 E2E tarjeta objetivo<br/>+ goldens + README + playground"]
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M4-T1 — CSS: longhands flex, shorthand y enums</h3>
+<p>DeclarationParser: <code>display:flex</code> (keyword nuevo), <code>flex-direction</code> (row|column; *-reverse → warning), <code>flex-wrap</code> (nowrap|wrap; wrap-reverse → warning), <code>gap</code>/<code>row-gap</code>/<code>column-gap</code> (px; % → warning M4), <code>justify-content</code> (flex-start|center|flex-end|space-between; space-around/evenly → warning), <code>align-items</code> (stretch|flex-start|center|flex-end; baseline → warning), <code>flex-grow</code>/<code>flex-shrink</code> (números ≥0), <code>flex-basis</code> (px|%|auto; content → warning), shorthand <code>flex</code> per spec §7.1.1: none→0 0 auto; initial→0 1 auto; N→N 1 0; N M→N M 0; N Mpx→N 1 M; combinaciones de 1-3 valores. ComputedStyle += todo (defaults spec, sin herencia); Display::Flex nuevo case (UA: sigue siendo block-level box). Tests: shorthand en todas las formas del §7.1.1; warnings de lo excluido. Commit: <code>feat(css): flexbox longhands, flex shorthand and computed flex properties</code></p>
+</div>
+
+<div class="task">
+<h3>M4-T2 — Box: items anónimos y contenedor flex</h3>
+<p>BoxTreeBuilder: cuando el elemento tiene display:flex, sus hijos texto/inline contiguos se envuelven en un item de bloque ANÓNIMO (BlockBox sintético con estilo heredado default, tag "anonymous") per css-flexbox-1 §4; los hijos block/ImageBox son items directos; LineBreakRun dentro de flex container → se trata como texto (dentro del anónimo). display:none poda items. Tests: mixto texto+div+img → 3 items (anónimo, div, img); anidamiento flex-en-flex. Commit: <code>feat(box): anonymous flex items and flex container recognition</code></p>
+</div>
+
+<div class="task">
+<h3>M4-T3 — IntrinsicSizer: max/min-content</h3>
+<p>css-sizing-3 §4 reducido: <strong>max-content</strong> de un BlockBox = max(por cada secuencia de runs: suma de anchos sin partir; por cada hijo bloque: su max-content + márgenes h) + paddings/borders propios; de ImageBox = ancho usado (CSS>attr>intrínseca). <strong>min-content</strong> = palabra más larga (usar BreakFinder para las oportunidades y medir el tramo mayor entre ellas) / imagen igual que max. width declarado px corta la recursión (es el tamaño). Tests con métricas DejaVu reales: frase de 3 palabras → max=suma, min=palabra más larga; anidados; con imagen. Commit: <code>feat(layout): intrinsic max/min-content sizing service</code></p>
+</div>
+
+<div class="task">
+<h3>M4-T4 — FlexFormattingContext: el algoritmo (fila única)</h3>
+<p>css-flexbox-1 §9 (citando subsecciones): (§9.2) base size por item: flex-basis (px/% contra main size del contenedor) o auto→width o auto→max-content (clamp a min-content); (§9.7) resolver longitudes flexibles: libre = main size − Σbases − gaps; libre>0 → repartir por grow; libre<0 → encoger proporcional a basis×shrink con clamp a min-content (una re-pasada si algún item clampa — spec loop simplificado a 2 iteraciones documentadas); (§9.4) cross size: item con height → esa; sin height → layout interno con su main size y medir; align-items stretch → cross del line box (el mayor) para items sin height explícita (re-layout con la altura impuesta... M4: estirar el BoxFragment del item SIN re-layout interno — fondo/bordes estirados, contenido arriba: aproximación documentada); flex-start/center/flex-end posicionan. (§9.5) main axis: justify-content sobre el espacio sobrante + column-gap entre items. Los items se laid-out con BlockFlowContext/ImageBox sizing existentes (main size como containing width en row). Tests: la TARJETA (img 120px + div grow 1 + gap 12 → div ocupa resto exacto); grow 2:1; shrink con clamp; justify center/space-between; align center/stretch. Commit: <code>feat(layout): flex formatting context with flexible lengths resolution</code></p>
+</div>
+
+<div class="task">
+<h3>M4-T5 — Wrap multilínea, column y paginación</h3>
+<p>(§9.3) wrap: partir items en líneas flex cuando Σbases+gaps > main size (item que no cabe abre línea; item solo más ancho que el contenedor se queda en su línea, sin partir); row-gap entre líneas; cada línea resuelve grow/shrink independiente. <strong>column</strong>: main=vertical (bases desde heights/contenido — height auto → layout y medir), cross=horizontal, stretch estira anchos. Paginación: el BoxFragment del contenedor flex es ÁTOMO (push-down entero si cruza página y cabe en una; más alto que la página → se queda, warning "flex container taller than page"); Paginator ya empuja hojas — el contenedor debe emitirse como hoja compuesta o marcarse unsplittable: diseño — BoxFragment gana <code>bool $atomic</code> (default false), Paginator no separa los hijos de un átomo (los reubica en bloque con el mismo offset). Goldens M1-M3 intactos (atomic default false no cambia nada). Tests: wrap 2 líneas con alturas distintas; column con 3 items; átomo cruzando página. Commit: <code>feat(layout): flex wrapping, column direction and atomic pagination</code></p>
+</div>
+
+<div class="task">
+<h3>M4-T6 — E2E documento objetivo COMPLETO, goldens, README, playground</h3>
+<p>E2E "itinerary complete": el documento del usuario entero — cabecera, datos con borde, precio, banda, 6 tarjetas <code>display:flex; gap:12px</code> (foto 120px + columna de texto flex:1 con título bold, fila de datos con borde, párrafo), multipágina, @page con ambos pies → asserts estructurales completos (XObjects, flex geometry sin solapes vía FragmentDumper, counters por página, 0 warnings). 2 goldens flex (tarjeta; wrap). README M4 (subset soportado + exclusiones con warning + átomo de paginación + stretch aproximado). Playground: sample con la tarjeta flex real (foto + texto). Commit: <code>test: complete itinerary e2e with flex cards; README and playground for M4</code></p>
+</div>
+
+</body>
+</html>
