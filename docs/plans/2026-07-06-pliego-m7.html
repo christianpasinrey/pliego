@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M7 — pliego: layout restante</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M7 «layout restante»</h1>
+<p class="meta">2026-07-06 · Previos: M0-M6 ✅ (main, CI verde, 716 tests) · Ejecución: subagent-driven · La brecha medida por el probe Bootstrap de la review M6: cajas inline reales, inline-block, listas, UA stylesheet, min/max, overflow, floats/position.</p>
+
+<div class="task">
+  <strong>Goal:</strong> cerrar los modos de layout que separan a pliego de un render convincente de HTML arbitrario: (1) <strong>cajas inline reales</strong> — fondos/bordes/padding en <code>&lt;span&gt;</code>/<code>.btn</code> fluyendo en línea (LA limitación que el probe señaló); (2) <strong>inline-block</strong> (atomic inline); (3) <strong>listas</strong> con marcadores; (4) <strong>hoja UA completa</strong> (h1-h6, blockquote, pre/code con monospace, hr); (5) <strong>min/max-width/height</strong>; (6) <strong>overflow:hidden</strong> con clipping PDF real; (7) <strong>floats/clear</strong> y <strong>position relative/absolute</strong> básicos. Más el housekeeping M6.<br>
+  <strong>Riesgo mayor:</strong> T4 (inline boxes) reestructura InlineFlowContext — los runs ganan una pila de cajas inline abiertas con fragmentación entre líneas (box-decoration-break: slice). T7 (floats) introduce exclusión lateral en el block flow. Ambas con staging interno documentado si hace falta.
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M6 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, trailer, TDD 4-gates, baselines tests-only, specs citadas: CSS 2.2 §9/§10/§12.5/§16, css-inline-3, css-lists-3, css-overflow-3, css-position-3).</li>
+  <li>Lecciones del ledger completas (deptrac silent-skip, comas match, new-chaining, DOM 8.4, warning discipline: TODO lo excluido avisa).</li>
+  <li>716 tests + goldens M1-M6 intactos salvo actualizaciones autorizadas por tarea (la UA stylesheet CAMBIARÁ geometrías de docs sin CSS — goldens tocados se re-verifican a mano, tarea T2 lo gestiona explícitamente).</li>
+  <li>Excluidos M7 con warning: position:sticky, float de imágenes con shape-outside, columns, writing-modes, ::first-line/::first-letter, list-style-image.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Style
+Display += case InlineBlock; case ListItem; case Inline (explícito — hoy inline se infiere por tag)
+enum ListStyleType { case Disc; case Circle; case Square; case Decimal; case None; }
+enum Position { case Static; case Relative; case Absolute; }  // fixed → M8+ (repetición por página ya existe vía margin boxes)
+ComputedStyle += ?LengthPercentage minWidth/maxWidth/minHeight/maxHeight; string $overflow ('visible'|'hidden');
+  Position $position; ?LengthPercentage $top/$right/$bottom/$left; ListStyleType $listStyleType (hereda);
+  ?FloatSide $float; enum FloatSide { Left; Right; } ; string $clear ('none'|'left'|'right'|'both')
+
+// Box
+// Los elementos inline DEJAN de aplanarse a runs sueltos: collectInline produce
+final readonly class InlineBoxStart { ComputedStyle $style; string $tag; }   // tokens de apertura/cierre
+final readonly class InlineBoxEnd {}
+// en la secuencia de tokens del bloque (TextRun|LineBreakRun|ImageBox|InlineBoxStart|InlineBoxEnd|BlockBox inline-block wrapper)
+
+// Layout
+final readonly class InlineBoxFragment implements Fragment {  // caja inline pintable por tramo de línea
+    Rect $rect; ?Color $background; BorderSet $borders; float $opacity; bool $isFirstSlice; bool $isLastSlice;
+}
+// InlineFlowContext: pila de cajas abiertas; al cerrar línea emite InlineBoxFragment por caja abierta
+// (slice: bordes laterales solo en first/last slice per box-decoration-break:slice).
+// inline-block: BlockBox con Display::InlineBlock → layout como bloque (shrink-to-fit: min(max-content, avail))
+// y colocado como item atómico en la línea (baseline = bottom del margin box M7, aprox documentada).
+// Floats: BlockFlowContext mantiene FloatContext {left[], right[]} de bandas ocupadas; las líneas
+// se estrechan (availableWidth por Y); clear salta bandas. Position: relative = offset visual post-layout
+// (GeometryShift); absolute = out-of-flow, containing block = ancestro positioned más cercano o content box
+// del bloque raíz, top/left/right/bottom resueltos, sin impacto en hermanos.
+
+// Paint: Painter pinta InlineBoxFragment (bg+bordes con slice awareness) ANTES del texto de su línea.</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M6"] --> T2["T2 UA stylesheet completa<br/>+ monospace face"]
+  T2 --> T3["T3 listas: list-item<br/>+ marcadores"]
+  T2 --> T4["T4 cajas inline reales<br/>+ inline-block"]
+  T4 --> T5["T5 min/max +<br/>overflow:hidden clip"]
+  T5 --> T6["T6 floats/clear +<br/>position rel/abs"]
+  T3 --> T7["T7 E2E .btn/.card Bootstrap<br/>+ goldens + README + playground"]
+  T6 --> T7
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M7-T1 — Housekeeping M6</h3>
+<p>(1) Memoizar StyleResolver::allRules() (una vez por resolve(); hotspot medido 841ms@500×4000 — bench antes/después en el report). (2) IACVT: var(--missing) sin fallback → la declaración cae a inherit (propiedades heredadas) o initial (resto) per css-variables-1 §3, no al previous-winner (test del probe de la review). (3) padding/margin shorthand sign-check coherente con longhands (padding negativo → warning+drop POR LADO; margin sigue aceptando). (4) :not(compound) una sola warning. (5) flag 'i' de atributos exige whitespace per gramática. (6) VarResolver: no sustituir var( dentro de strings entre comillas. Commit: <code>chore: apply M6 final-review housekeeping</code></p>
+</div>
+
+<div class="task">
+<h3>M7-T2 — Hoja UA completa + cara monospace</h3>
+<p>UA stylesheet real (CSS 2.2 Appendix D adaptada, como tabla de reglas UA en el resolver — capa UA bajo author en el cascade: (origin, importance, specificity, order); origin UA &lt; author): h1-h6 (2em/1.5em/1.17em/1em/.83em/.67em + margins .67em/.75em/.83em/1.12em/1.5em/1.67em + bold), p/blockquote/figure margins (1em 0 / 1em 40px), pre (monospace, margin 1em 0, white-space:pre → M7: pre respeta saltos de línea del texto — LineBreakRun por \n en collapse cuando white-space:pre; wrapping desactivado documented), code/kbd/samp (monospace), hr (border-top 1px + margin .5em auto... auto margins → M7 simple: margin .5em 0 documented), small (.83em), sub/sup → warning M8. <strong>Monospace</strong>: DejaVuSansMono local-first (vendor dompdf) → FontCatalog familia 'monospace'; generic families: font-family fallback list parsing ('Arial, sans-serif' → primera familia registrada o genérica; sans-serif→default, serif→default+warning M8 (sin serif face aún... buscar DejaVuSerif local — si está, registrarla), monospace→mono). GOLDENS: los docs sin CSS cambian de geometría — regenerar los afectados verificando a mano los nuevos números (T2 los gestiona; listar en el report cada golden tocado con su delta justificado). Commit: <code>feat(style): complete user-agent stylesheet with generic font families</code></p>
+</div>
+
+<div class="task">
+<h3>M7-T3 — Listas: list-item y marcadores</h3>
+<p>css-lists-3 reducido: ul/ol/li UA (display:list-item para li; ul/ol padding-left 40px, margin 1em 0); list-style-type disc/circle/square (glifos • ◦ ▪ de DejaVu — verificar gids) /decimal (contador por lista, ol start attr → warning M7 si presente... soportar start es barato: value inicial del contador — INCLUIR) /none; list-style-position outside (marcador en el padding, línea base compartida con primera línea del li; inside → warning M7). Marcador = TextFragment sintético posicionado a la izquierda del content box del li (ancho de marcador medido, right-aligned en la banda de padding). Anidamiento: ul>ul UA (circle/square por nivel per navegadores). Tests: viñetas por nivel, decimal 1./2./10. alineados, none, li con múltiples líneas (marcador solo en la primera), ol start. Commit: <code>feat(layout): list items with markers</code></p>
+</div>
+
+<div class="task">
+<h3>M7-T4 — Cajas inline reales + inline-block</h3>
+<p>LA tarea del milestone (css-inline-3 reducido). BoxTreeBuilder: los INLINE_TAGS dejan de fundirse — collectInline emite InlineBoxStart(style,tag)/InlineBoxEnd alrededor de sus contenidos (runs siguen llevando su ComputedStyle para texto; la caja aporta bg/borde/padding H — padding VERTICAL de inlines no afecta line height per spec, se pinta desbordando: documented). InlineFlowContext: pila de cajas abiertas; los tramos de cada caja en cada línea generan InlineBoxFragment (rect = unión de los fragments de texto interiores + paddings H en first/last slice; bordes laterales solo en slices extremos — box-decoration-break:slice; bg en todos). Painter: InlineBoxFragments de una línea ANTES que su texto. <strong>inline-block</strong>: Display::InlineBlock → BoxTreeBuilder lo envuelve como token atómico; InlineFlowContext lo mide (layout de bloque con shrink-to-fit = min(max-content, available); width declarado gana) y lo coloca en línea como un "glifo" gigante (baseline = bottom margin edge, aprox estándar M7 documented; line height de la línea crece). Los .btn de Bootstrap (inline-block + padding + bg + border) SE VEN tras esto. Tests: span con bg/borde multi-línea (slices correctos), padding H, anidados, inline-block con contenido, .btn-like hand-computed, wrapping alrededor. Commit: <code>feat(layout): real inline boxes with slicing and inline-block</code></p>
+</div>
+
+<div class="task">
+<h3>M7-T5 — min/max-width/height + overflow:hidden</h3>
+<p>CSS 2.2 §10.4/§10.7: clamp del used width/height tras resolver (min gana a max; aplica a bloques, replaced, flex basis clamp ya existe por min-content — integrar min/max-width en resolveReplacedSize y block width; height max → overflow del contenido permitido o clip si overflow:hidden). overflow:hidden: BoxFragment gana bool $clipsChildren; PdfCanvas: clip path `x y w h re W n` dentro de q...Q envolviendo los hijos (Painter coordina el scope). Tests: min-width gana a width menor; max-width con % ; contenido más alto que height+hidden → clip real en bytes (W n presente, contenido fuera no visible estructuralmente); interacción con border-radius futura anotada. Commit: <code>feat(layout): min/max constraints and overflow hidden clipping</code></p>
+</div>
+
+<div class="task">
+<h3>M7-T6 — Floats/clear + position relative/absolute</h3>
+<p>CSS 2.2 §9.5/§9.4.3/§10.6.4 reducido: float left/right — FloatContext por block formatting context (bandas Y ocupadas por lado); el float se saca del flujo, se coloca en el borde según bandas libres, las LÍNEAS de los hermanos se estrechan (InlineFlowContext recibe available-width-por-Y — integración con T4), los bloques hermanos NO se estrechan (per spec, solo líneas) — margin del contenedor clásico con overflow:hidden crea nuevo BFC → M7: nuevo BFC si overflow:hidden (barato y correcto). clear salta al fondo de las bandas del lado. Altura del contenedor NO incluye floats (per spec; clearfix vía overflow:hidden BFC sí). position:relative → offsets top/left/right/bottom como shift visual post-layout (GeometryShift, hermanos intactos). position:absolute → out-of-flow; containing block = ancestro con position≠static (tracking en el layout: pasar el CB positioned por la recursión) o el content box inicial; top/left/right/bottom + width/height resueltos (auto → shrink-to-fit); pintado en su posición (z-index → orden documento M7, warning si declarado). Tests: texto fluyendo alrededor de float left/right; clear; dos floats mismo lado apilados; relative shift exacto; absolute contra ancestro relative y contra raíz; absolute no empuja hermanos. Commit: <code>feat(layout): floats with line shortening and relative/absolute positioning</code></p>
+</div>
+
+<div class="task">
+<h3>M7-T7 — E2E Bootstrap components, goldens, README, playground</h3>
+<p>E2E "bootstrap components": markup .btn/.card/.badge/lista/blockquote/pre con un stylesheet Bootstrap-flavored completo (variables+calc+rem+important+inline-block+borders) → asserts: el .btn pinta fondo+borde+padding EN LÍNEA (la limitación M6 muerta — verificar con FragmentDumper), lista con viñetas, pre monospace, floats de imagen con texto alrededor, 0 warnings. Goldens: inline-box slices multi-línea; lista anidada; float. README M7 completo. Playground: sample con un .btn real y una lista. Housekeeping de goldens de T2 verificado globalmente. Commit: <code>test: bootstrap components e2e; README and playground for M7</code></p>
+</div>
+
+</body>
+</html>
