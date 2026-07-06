@@ -124,10 +124,16 @@ final class BoxTreeBuilder
         return $isAbsolute ? $src : rtrim($this->basePath, '/\\') . '/' . $src;
     }
 
+    /** Valores <= 0 se tratan como ausentes (null), igual que los navegadores ignoran un
+     * width/height no positivo y recurren al tamaño intrínseco. */
     private static function numericAttribute(\Dom\Element $element, string $name): ?float
     {
         $value = $element->getAttribute($name);
-        return $value !== null && is_numeric($value) ? (float) $value : null;
+        if ($value === null || !is_numeric($value)) {
+            return null;
+        }
+        $number = (float) $value;
+        return $number > 0 ? $number : null;
     }
 
     /**

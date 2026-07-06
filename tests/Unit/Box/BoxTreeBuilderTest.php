@@ -167,6 +167,14 @@ it('ignores non-numeric width/height attributes', function () {
     expect($img->attrHeight)->toBeNull();
 });
 
+it('treats non-positive width/height attributes as absent, per browser behavior', function () {
+    $root = buildTree('<body><img src="tiny.jpg" width="-5" height="0"></body>', '', null, IMAGE_FIXTURES_DIR);
+    $img = $root->children[0];
+    assert($img instanceof ImageBox);
+    expect($img->attrWidth)->toBeNull();
+    expect($img->attrHeight)->toBeNull();
+});
+
 it('prunes an img with display:none', function () {
     $root = buildTree('<body><img src="tiny.jpg" class="x"></body>', '.x { display: none }', null, IMAGE_FIXTURES_DIR);
     expect($root->children)->toHaveCount(0);

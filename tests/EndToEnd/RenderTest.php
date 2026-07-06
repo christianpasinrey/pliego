@@ -104,6 +104,40 @@ it('reports a missing/remote <img> src as a soft warning, PDF still valid (M3-T2
     expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
 });
 
+it('reports a truncated-IDAT PNG (short after inflate) as a soft warning, PDF still valid (M3 final-review)', function () {
+    // A PNG with a valid IHDR + a valid zlib stream that inflates to fewer bytes than
+    // height*(stride+1) requires -- PngImage::fromBytes() must throw ImageException instead of
+    // letting the raw offset run past the string end (see PngImageTest's dedicated unit test),
+    // and the ImageException must surface here as a normal warning + still-valid PDF, same soft
+    // failure contract as the missing/remote cases above.
+    $width = 2;
+    $height = 2;
+    $ihdr = pack('N', $width) . pack('N', $height) . chr(8) . chr(2) . chr(0) . chr(0) . chr(0);
+    $shortRaw = str_repeat("\x00", 7); // needs 2 * (1 + 2*3) = 14 bytes, only 7 supplied
+    $idatData = (string) zlib_encode($shortRaw, ZLIB_ENCODING_DEFLATE);
+    $chunk = static fn(string $type, string $data): string => pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
+    $bytes = "\x89PNG\r\n\x1a\n" . $chunk('IHDR', $ihdr) . $chunk('IDAT', $idatData) . $chunk('IEND', '');
+
+    $pngPath = sys_get_temp_dir() . '/pliego-e2e-truncated-idat.png';
+    file_put_contents($pngPath, $bytes);
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-truncated.pdf';
+    try {
+        $report = Engine::make()
+            ->basePath(sys_get_temp_dir())
+            ->render('<body><img src="pliego-e2e-truncated-idat.png"></body>')
+            ->save($path);
+    } finally {
+        unlink($pngPath);
+    }
+
+    expect($report->warnings)->toHaveCount(1);
+    expect($report->warnings[0])->toContain('PNG data truncated');
+    $pdf = (string) file_get_contents($path);
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/startxref\n(\d+)\n%%EOF\s*$/', $pdf, $m))->toBe(1);
+    expect(substr($pdf, (int) $m[1], 4))->toBe('xref');
+});
+
 it('paints a <img src="..."> JPEG as an image XObject, in a structurally valid PDF (M3-T4)', function () {
     $path = sys_get_temp_dir() . '/pliego-e2e-image-paint.pdf';
     $report = Engine::make()

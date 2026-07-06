@@ -59,6 +59,12 @@ final readonly class PngImage implements DecodedImage
         }
 
         $stride = $width * $channels;
+        $expected = $height * ($stride + 1);
+        if (strlen($raw) < $expected) {
+            throw new ImageException(
+                "PNG data truncated: expected $expected bytes after inflating IDAT, got " . strlen($raw) . '.',
+            );
+        }
         $pixels = self::unfilter($raw, $height, $channels, $stride);
 
         $pdfData = $channels === 4

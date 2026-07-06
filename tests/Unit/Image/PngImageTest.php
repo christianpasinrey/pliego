@@ -126,3 +126,10 @@ it('throws ImageException when there is no IDAT chunk at all', function () {
     $ihdr = pack('N', 1) . pack('N', 1) . chr(8) . chr(2) . chr(0) . chr(0) . chr(0);
     PngImage::fromBytes("\x89PNG\r\n\x1a\n" . pngChunk('IHDR', $ihdr) . pngChunk('IEND', ''));
 })->throws(ImageException::class);
+
+it('throws ImageException (not a raw offset warning) when the inflated IDAT is shorter than height*(stride+1)', function () {
+    // A valid zlib stream that inflates to only ONE scanline's worth of bytes, for a PNG that
+    // declares 2 rows (color type 2 / RGB, 8-bit, width 2 => stride 6, so a full payload needs
+    // 2 * (1 + 6) = 14 bytes; we only supply the first row's filter byte + 6 pixel bytes = 7).
+    PngImage::fromBytes(buildMinimalPng(2, 2, bitDepth: 8, colorType: 2, rawFiltered: str_repeat("\x00", 7)));
+})->throws(ImageException::class);

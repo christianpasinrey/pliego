@@ -145,12 +145,12 @@ milestone ahead (see [Roadmap](#roadmap)).
   (no GIF/WebP/SVG/BMP). No remote `src` (`http://`/`https://` is reported as
   a warning, never fetched) — only local files resolved against
   `->basePath()`. No `object-fit`/`object-position`, no inline replaced
-  boxes (an inline `<img>` is hoisted to block level, see above). Every
-  referenced image is decoded **twice** per document — once in
-  `BoxTreeBuilder` (to read intrinsic dimensions for layout) and again in
-  `ImageRegistry` (to build the XObject at paint time) — there is no shared
-  decode cache between the two passes, so a large photo pays its JPEG/PNG
-  decode cost twice even when it's only used once.
+  boxes (an inline `<img>` is hoisted to block level, see above). `ImageLoader`
+  memoizes decoded images by path (in-memory, per render), and the same
+  `ImageLoader` instance is shared between `BoxTreeBuilder` (which reads
+  intrinsic dimensions at layout time) and `ImageRegistry` (which builds the
+  XObject at paint time), so each distinct image is decoded **once** per
+  render no matter how many `<img>` occurrences reference it.
 - `text-decoration`/underline is treated as inheriting through the tree for
   simplicity, which isn't how real CSS decoration propagation works (see
   above) — precise decoration-island tracking is deferred past M1.
