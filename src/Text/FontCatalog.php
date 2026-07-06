@@ -32,6 +32,20 @@ final class FontCatalog
     /** @var array<string, FontFace> faceKey => face */
     private array $usedFaces = [];
 
+    /**
+     * M7-T2: además de 'default' (DejaVu Sans, ya existente desde M1), registra las familias
+     * genéricas 'monospace' (DejaVu Sans Mono) y 'serif' (DejaVu Serif) — mismo font family (misma
+     * licencia, LICENSE-DejaVu.txt, ya cubre toda la familia DejaVu, no solo Sans) que dompdf
+     * empaqueta en su propio vendor/ y que se localizó y copió a resources/fonts/ para esta tarea
+     * (ver el report de M7-T2: "provenance" — checksum idéntico al TTF que dompdf distribuye,
+     * confirmando que es la misma fuente, no una reconstrucción). No hay "búsqueda en runtime": a
+     * diferencia de font() (que el caller de Engine puede usar para registrar SU PROPIA fuente en
+     * una ruta arbitraria), las caras genéricas del motor se embeben como recurso propio, igual
+     * que 'default' ya hacía — así que hasFamily('monospace')/hasFamily('serif') son SIEMPRE true
+     * en este repo; el "fallback: falta mono -> default + warning" de
+     * Layout\Text\FontFamilyResolver es una defensa para el caso hipotético de que un futuro
+     * refactor retire estos ficheros de resources/fonts/, no una rama viva hoy.
+     */
     public static function withDefaults(): self
     {
         $catalog = new self();
@@ -40,12 +54,39 @@ final class FontCatalog
         $catalog->register('default', 700, false, $dir . '/DejaVuSans-Bold.ttf');
         $catalog->register('default', 400, true, $dir . '/DejaVuSans-Oblique.ttf');
         $catalog->register('default', 700, true, $dir . '/DejaVuSans-BoldOblique.ttf');
+        $catalog->register('monospace', 400, false, $dir . '/DejaVuSansMono.ttf');
+        $catalog->register('monospace', 700, false, $dir . '/DejaVuSansMono-Bold.ttf');
+        $catalog->register('monospace', 400, true, $dir . '/DejaVuSansMono-Oblique.ttf');
+        $catalog->register('monospace', 700, true, $dir . '/DejaVuSansMono-BoldOblique.ttf');
+        $catalog->register('serif', 400, false, $dir . '/DejaVuSerif.ttf');
+        $catalog->register('serif', 700, false, $dir . '/DejaVuSerif-Bold.ttf');
+        $catalog->register('serif', 400, true, $dir . '/DejaVuSerif-Italic.ttf');
+        $catalog->register('serif', 700, true, $dir . '/DejaVuSerif-BoldItalic.ttf');
         return $catalog;
     }
 
     public function register(string $family, int $weight, bool $italic, string $ttfPath): void
     {
         $this->registrations[$family][$weight][$this->styleKey($italic)] = $ttfPath;
+    }
+
+    /**
+     * M7-T2: existencia CASE-INSENSITIVE de una familia registrada — consumido por
+     * Layout\Text\FontFamilyResolver para decidir, ANTES de llamar a select(), si un nombre de la
+     * lista de fallback de font-family (o el destino de un genérico sans-serif/serif/monospace)
+     * está realmente registrado, en vez de dejar que select() lo resuelva en silencio a 'default'
+     * (select() no distingue "pediste una familia real que no existe" de "pediste 'default'
+     * expresamente" — ambos caen al mismo fallback interno, útil para pintar, pero inútil para
+     * decidir CUÁL de varios candidatos de la lista usar).
+     */
+    public function hasFamily(string $family): bool
+    {
+        foreach (array_keys($this->registrations) as $registered) {
+            if (strcasecmp($registered, $family) === 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Fallback: exact -> (weight,normal) -> (400,style) -> (400,normal) -> same chain in family 'default'. */

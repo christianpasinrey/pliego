@@ -20,12 +20,33 @@ final class DeclarationParser
      * parseLength() ya rechaza % de forma natural, generando el warning). font-size vive aparte
      * (ver parseFontSize, M6-T3): SÍ admite % (contra el font-size del padre), así que no puede
      * compartir esta lista de "solo longitud pura, nunca %". */
-    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap'];
-    /** CSS 2.2 §10: width, margin-{side} y padding-{side} sí admiten %, resuelto en used-value (T4). */
+    /** M7-T5: min-height/max-height se unen aquí (igual criterio que height, ver su docblock: sin
+     * containing height rastreada, % no tiene interpretación válida — parseLength() ya lo rechaza
+     * de forma natural, produciendo el warning genérico "Unsupported length for min-height/
+     * max-height: 50%" documentado en el brief). M7-T6: top/bottom TAMBIÉN se unen aquí (CSS 2.2
+     * §9.4.3) — mismo motivo de fondo (la altura del containing block es, en general,
+     * indeterminada en este motor, ver ComputedStyle::$height), así que un % en top/bottom cae al
+     * mismo warning genérico + valor descartado que height. A diferencia de los otros 4 miembros,
+     * top/bottom SÍ admiten negativo (ver el chequeo de signo condicionado a
+     * NON_NEGATIVE_PROPERTIES más abajo, en vez de incondicional). */
+    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap', 'min-height', 'max-height', 'top', 'bottom'];
+    /** CSS 2.2 §10: width, margin-{side} y padding-{side} sí admiten %, resuelto en used-value (T4).
+     * M7-T5 (CSS 2.2 §10.4): min-width/max-width comparten el MISMO tratamiento que width — %
+     * resuelto contra el ancho del containing block en Layout (ComputedStyle::compute() los deja
+     * en LengthPercentage sin resolver, igual que width/margin/padding). min-height/max-height NO
+     * están aquí (ver LENGTH_PROPERTIES, px-only — el motor no rastrea la altura del containing
+     * block, ver el docblock de ComputedStyle::$height/$minHeight/$maxHeight). */
+    /** M7-T6 (CSS 2.2 §9.4.3): left/right se UNEN aquí — a diferencia de top/bottom (arriba, en
+     * LENGTH_PROPERTIES, px-only), un % en left/right SÍ tiene interpretación clara (siempre se
+     * resuelve contra el ANCHO del containing block, que este motor SIEMPRE conoce, ver el brief
+     * de esta tarea) — igual tratamiento que width/margin-*. Tampoco están en
+     * NON_NEGATIVE_PROPERTIES (un offset de posicionamiento admite negativo, CSS 2.2 §9.4.3), así
+     * que el chequeo de signo de la rama de abajo los deja pasar sin más. */
     private const array LENGTH_PERCENTAGE_PROPERTIES = [
         'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
-        'width',
+        'width', 'min-width', 'max-width',
+        'left', 'right',
     ];
     /**
      * CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos en LENGTH_PERCENTAGE_PROPERTIES;
@@ -49,6 +70,9 @@ final class DeclarationParser
         'height', 'row-gap', 'column-gap',
         'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
         'border-spacing', 'flex-basis',
+        // M7-T5 (CSS 2.2 §10.4/§10.7): negativo no tiene interpretación válida para ninguna de las
+        // 4 -- mismo criterio de signo que width/height, reutilizando la guarda existente.
+        'min-width', 'max-width', 'min-height', 'max-height',
     ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
@@ -57,8 +81,16 @@ final class DeclarationParser
         'display' => [
             'block', 'none', 'flex',
             'table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group',
+            // M7-T3 (css-lists-3 §3): Display::ListItem (ver su docblock) -- UserAgentStylesheet
+            // lo usa vía `li { display: list-item }`, un autor puede declararlo/pisarlo igual que
+            // cualquier otro valor de esta lista.
+            'list-item',
+            // M7-T4 (css-inline-3 reducido): Display::Inline/InlineBlock -- 'inline' es ahora el
+            // default UA de span/strong/em/... (ver UserAgentStylesheet, migrado desde el
+            // INLINE_TAGS hardcoded de BoxTreeBuilder); 'inline-block' es puramente autor (ningún
+            // tag lo declara por defecto en esta hoja UA), el caso ".btn"/".badge" del brief.
+            'inline', 'inline-block',
         ],
-        'font-family' => null,
         'box-sizing' => ['content-box', 'border-box'],
         // css-flexbox-1 §5.1/§5.2/§8.2/§8.3: *-reverse, wrap-reverse, space-around/evenly y
         // baseline son válidos en CSS pero fuera de alcance en M4 — al no estar en la lista
@@ -70,6 +102,41 @@ final class DeclarationParser
         // CSS 2.2 §17.5.2: 'auto' (initial) y 'fixed' — M5-T4 consume $tableLayout, aquí solo
         // se valida y parsea el keyword.
         'table-layout' => ['auto', 'fixed'],
+        // M7-T2 (CSS 2.2 §16.6, reducido): 'normal' (initial, colapsa whitespace/envuelve línea,
+        // comportamiento de siempre) y 'pre' (no colapsa, \n fuerza salto de línea, sin wrap —
+        // ver BoxTreeBuilder::textRunTokensFor()/collapse() e InlineFlowContext::layout()).
+        // 'nowrap'/'pre-wrap'/'pre-line' son válidos en CSS pero fuera de alcance M7 -- caen al
+        // warning genérico de KEYWORD_PROPERTIES, igual que cualquier otro keyword no soportado.
+        'white-space' => ['normal', 'pre'],
+        // M7-T3 (css-lists-3 §3): los 5 valores soportados — ver Style\ListStyleType. Reutilizado
+        // (mismos 5 literales) en parseListStyleShorthand() más abajo; no se referencia esta
+        // constante desde ahí para no acoplar el shorthand a la forma exacta de este mapa.
+        'list-style-type' => ['disc', 'circle', 'square', 'decimal', 'none'],
+        // M7-T3 (css-lists-3 §3, reducido): 'outside' es el ÚNICO valor soportado -- y, a
+        // diferencia de cualquier otro miembro de este mapa, NO produce ninguna propiedad
+        // consumible en ComputedStyle (no existe un campo $listStylePosition: M7 solo implementa
+        // el comportamiento "outside", hardcoded en BlockFlowContext, así que no hay nada que
+        // diferenciar en tiempo de layout). Se valida/acepta aquí de todas formas (en vez de
+        // ignorar la propiedad entera) para que 'inside' -- fuera de alcance M7, ver RESTRICCIONES
+        // GLOBALES -- caiga al warning genérico de este mismo bloque ("Unsupported keyword for
+        // list-style-position: inside"), cumpliendo la disciplina de warnings del milestone
+        // (TODO lo excluido avisa) sin necesitar una rama dedicada.
+        'list-style-position' => ['outside'],
+        // M7-T6 (CSS 2.2 §9.5.1): 'none' (initial, el caso común) colapsa a
+        // ComputedStyle::$float === null -- ver Style\FloatSide, "shape-outside"/float con
+        // recorte no rectangular quedan fuera de alcance (RESTRICCIONES GLOBALES).
+        'float' => ['left', 'right', 'none'],
+        // M7-T6 (CSS 2.2 §9.5.2): los 4 valores completos del spec -- ninguno queda fuera de
+        // alcance, a diferencia de 'position' justo abajo.
+        'clear' => ['left', 'right', 'both', 'none'],
+        // M7-T6 (CSS 2.2 §9.4.3 / css-position-3): 'sticky' y 'fixed' NO están en esta lista
+        // deliberadamente -- caen al warning genérico de "Unsupported keyword for position" de
+        // más abajo (mismo mecanismo que cualquier otro keyword no soportado de este mapa) y la
+        // propiedad simplemente no se establece, colapsando a Position::Static en
+        // ComputedStyle::compute() (el initial value real, ver Style\Position) -- exactamente el
+        // fallback documentado en el brief del milestone para 'sticky' ("warning, treated as
+        // static") y para 'fixed' (fuera de alcance M7, M8+).
+        'position' => ['static', 'relative', 'absolute'],
     ];
 
     /** css-flexbox-1 §7.1.1: N sin unidad en la forma "flex: N ..." nunca admite signo (grow y
@@ -87,6 +154,19 @@ final class DeclarationParser
     {
         $property = strtolower(trim($property));
         $value = trim($value);
+        // M7-T5 (CSS 2.2 §10.4): 'auto' es el initial value real de min-width/min-height ("sin
+        // mínimo"), 'none' el de max-width/max-height ("sin máximo") -- ambos colapsan al MISMO
+        // null que "propiedad no declarada en absoluto" en ComputedStyle::compute() (ver
+        // $lengthPercentage()/$length() ahí: ausencia de clave => null), así que aceptarlos aquí
+        // como "sin declaración" (array vacío, sin warning) es observacionalmente idéntico a
+        // rechazarlos con éxito -- pero SIN el warning espurio que produciría intentar parsearlos
+        // como longitud (spec keywords válidos, no un error de autor).
+        if (($property === 'min-width' || $property === 'min-height') && strtolower(trim($value)) === 'auto') {
+            return [];
+        }
+        if (($property === 'max-width' || $property === 'max-height') && strtolower(trim($value)) === 'none') {
+            return [];
+        }
         if ($property === 'margin' || $property === 'padding') {
             return $this->expandBoxShorthand($property, $value);
         }
@@ -98,6 +178,9 @@ final class DeclarationParser
         }
         if ($property === 'border' || in_array($property, ['border-top', 'border-right', 'border-bottom', 'border-left'], true)) {
             return $this->expandBorderShorthand($property, $value);
+        }
+        if ($property === 'list-style') {
+            return $this->parseListStyleShorthand($value);
         }
         if ($this->isBorderLonghand($property, 'width')) {
             return $this->parseBorderWidth($property, $value);
@@ -127,14 +210,23 @@ final class DeclarationParser
             if ($length === null) {
                 return $this->warn("Unsupported length for $property: $value");
             }
-            // height/row-gap/column-gap (únicos miembros de LENGTH_PROPERTIES) son siempre no-negativos.
-            if (self::rawValueOf($length) < 0.0) {
+            // height/row-gap/column-gap/min-height/max-height son siempre no-negativos (los 5
+            // están en NON_NEGATIVE_PROPERTIES). M7-T6: top/bottom se UNIERON a LENGTH_PROPERTIES
+            // (arriba) pero NO a NON_NEGATIVE_PROPERTIES -- un offset de posicionamiento SÍ admite
+            // negativo (CSS 2.2 §9.4.3, p.ej. `top: -10px` para desplazar hacia arriba) -- de ahí
+            // que este chequeo, antes incondicional, ahora consulte la misma lista que ya usa la
+            // rama LENGTH_PERCENTAGE_PROPERTIES de más arriba, sin cambiar el resultado para
+            // ninguno de los 5 miembros preexistentes.
+            if (self::rawValueOf($length) < 0.0 && in_array($property, self::NON_NEGATIVE_PROPERTIES, true)) {
                 return $this->warn("Negative value not allowed for $property: $value");
             }
             return [$property => $length];
         }
         if ($property === 'font-size') {
             return $this->parseFontSize($value);
+        }
+        if ($property === 'font-family') {
+            return $this->parseFontFamily($value);
         }
         if (in_array($property, self::COLOR_PROPERTIES, true)) {
             $color = Color::fromCss($value);
@@ -144,12 +236,16 @@ final class DeclarationParser
             return [$property => $color];
         }
         if (array_key_exists($property, self::KEYWORD_PROPERTIES)) {
+            // M7-T2: 'font-family' -- el único miembro con allowed=null ("cualquier string") --
+            // se sacó de este mapa a su propia rama (parseFontFamily(), ver arriba), así que
+            // TODOS los miembros restantes tienen ahora una lista real: el chequeo "$allowed !==
+            // null" quedaría siempre-verdadero (PHPStan lo marca), se retira.
             $allowed = self::KEYWORD_PROPERTIES[$property];
             $keyword = strtolower($value);
-            if ($allowed !== null && !in_array($keyword, $allowed, true)) {
+            if (!in_array($keyword, $allowed, true)) {
                 return $this->warn("Unsupported keyword for $property: $value");
             }
-            return [$property => $property === 'font-family' ? trim($value, '"\' ') : $keyword];
+            return [$property => $keyword];
         }
         if ($property === 'font-weight') {
             return $this->parseFontWeight($value);
@@ -180,6 +276,9 @@ final class DeclarationParser
         }
         if ($property === 'opacity') {
             return $this->parseOpacity($value);
+        }
+        if ($property === 'overflow') {
+            return $this->parseOverflow($value);
         }
         return $this->warn("Unsupported property: $property");
     }
@@ -495,6 +594,120 @@ final class DeclarationParser
         return $result;
     }
 
+    /**
+     * M7-T3 (css-lists-3 §3, reducido): `list-style: <type> || <position> || <image>` — los tres
+     * componentes son opcionales y pueden aparecer en cualquier orden (igual convención que
+     * expandBorderShorthand()). M7 solo expande a 'list-style-type': un token 'outside' se acepta
+     * y se descarta en silencio (comportamiento único soportado, ver KEYWORD_PROPERTIES['list-
+     * style-position']); un token 'inside' o cualquier valor de list-style-image (url(...), o
+     * cualquier token no reconocido) tira TODO el shorthand con un único warning — mismo criterio
+     * "todo o nada" que expandBorderShorthand() ante un componente duplicado/inválido, en vez de
+     * aplicar parcialmente el type encontrado antes del componente problemático.
+     *
+     * Simplificación documentada: 'none' es AMBIGUO en CSS real (puede anular list-style-type O
+     * list-style-image) — este parser SIEMPRE lo interpreta como list-style-type:none (el uso
+     * observable de "list-style: none" en la práctica, y list-style-image no está soportado en M7
+     * de todas formas — ver RESTRICCIONES GLOBALES, "Excluidos M7 con warning").
+     *
+     * @return array<string, mixed>
+     */
+    private function parseListStyleShorthand(string $value): array
+    {
+        $tokens = self::splitTopLevel(trim($value));
+        if ($tokens === []) {
+            return $this->warn("Unsupported shorthand for list-style: $value");
+        }
+        $type = null;
+        foreach ($tokens as $token) {
+            $keyword = strtolower($token);
+            if (in_array($keyword, ['disc', 'circle', 'square', 'decimal', 'none'], true)) {
+                if ($type !== null) {
+                    return $this->warn("Duplicate list-style-type component for list-style: $value");
+                }
+                $type = $keyword;
+                continue;
+            }
+            if ($keyword === 'outside') {
+                continue;
+            }
+            if ($keyword === 'inside') {
+                return $this->warn("Unsupported list-style-position (inside not supported in M7): $value");
+            }
+            return $this->warn("Unsupported list-style component (list-style-image not supported in M7): $token");
+        }
+        if ($type === null) {
+            return $this->warn("Unsupported shorthand for list-style: $value");
+        }
+        return ['list-style-type' => $type];
+    }
+
+    /**
+     * M7-T2 (css-fonts-3 §5.3.1, fallback list): 'font-family' deja de ser un keyword suelto —
+     * el valor puede traer una lista de familias separadas por comas ('Arial, "Helvetica Neue",
+     * sans-serif'), cada una la propia CSS trata como candidata en orden de preferencia. ESTE
+     * parser solo trocea y limpia (comillas/espacios) cada nombre; NO resuelve genéricos
+     * (sans-serif/serif/monospace) ni comprueba qué familia está registrada -- eso vive en
+     * Layout, contra FontCatalog (ver Layout\Text\FontFamilyResolver), porque Style: [Css, Vendor]
+     * en deptrac.yaml prohíbe que esta capa dependa de Text (donde vive FontCatalog). Nunca
+     * avisa: una lista vacía o con nombres vacíos ("font-family: , ,") simplemente produce una
+     * lista más corta (incluso []), igual que CSS descarta en silencio un nombre de familia mal
+     * formado -- ComputedStyle::compute() cae a la lista heredada del padre cuando el resultado
+     * es [].
+     *
+     * @return array<string, mixed>
+     */
+    private function parseFontFamily(string $value): array
+    {
+        $names = [];
+        foreach (self::splitFontFamilyList($value) as $token) {
+            $name = trim($token, " \t\n\r\0\x0B\"'");
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        return ['font-family' => $names];
+    }
+
+    /**
+     * Trocea por comas de NIVEL SUPERIOR -- a diferencia de splitTopLevel() (que rastrea
+     * profundidad de paréntesis para calc()/var()), aquí lo que hay que respetar son las
+     * COMILLAS: un nombre de familia citado ('"Helvetica Neue"') nunca debería partirse aunque
+     * contuviera una coma literal dentro (no ocurre en ningún fixture de este motor, pero el
+     * escaneo es igual de barato que asumirlo sin más).
+     *
+     * @return list<string>
+     */
+    private static function splitFontFamilyList(string $value): array
+    {
+        $tokens = [];
+        $current = '';
+        $quote = null;
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $value[$i];
+            if ($quote !== null) {
+                $current .= $char;
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                $current .= $char;
+                continue;
+            }
+            if ($char === ',') {
+                $tokens[] = $current;
+                $current = '';
+                continue;
+            }
+            $current .= $char;
+        }
+        $tokens[] = $current;
+        return $tokens;
+    }
+
     /** @return array<string, mixed> */
     private function parseFontWeight(string $value): array
     {
@@ -660,6 +873,30 @@ final class DeclarationParser
         return ['opacity' => max(0.0, min(1.0, (float) $trimmed))];
     }
 
+    /**
+     * M7-T5 (css-overflow-3, reducido a visible|hidden): 'visible' (initial) y 'hidden' se aceptan
+     * tal cual. 'scroll'/'auto' no tienen un análogo real en un motor de impresión sin scrollbars
+     * interactivas -- se COERCIONAN a 'hidden' (el comportamiento observable más cercano: el
+     * contenido que desborda deja de pintarse, aunque un navegador SÍ ofrecería una barra de
+     * desplazamiento) con un warning explícito, siguiendo la disciplina "todo lo excluido avisa"
+     * del milestone. Cualquier otro valor (p.ej. 'clip', fuera de alcance) cae al warning genérico
+     * + valor descartado (initial 'visible' en ComputedStyle::compute()).
+     *
+     * @return array<string, mixed>
+     */
+    private function parseOverflow(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        if ($keyword === 'visible' || $keyword === 'hidden') {
+            return ['overflow' => $keyword];
+        }
+        if ($keyword === 'scroll' || $keyword === 'auto') {
+            $this->warnings[] = "Unsupported overflow (approximated as hidden, no real scrolling in a print engine): $value";
+            return ['overflow' => 'hidden'];
+        }
+        return $this->warn("Unsupported overflow: $value");
+    }
+
     /** @return array<string, mixed> */
     private function warn(string $message): array
     {
@@ -689,6 +926,23 @@ final class DeclarationParser
             return $this->warn("Unsupported shorthand for $property: $value");
         }
         /** @var list<LengthPercentage|CssLength|CalcExpr> $lengths */
+        // M7-T1 housekeeping (CSS 2.2 §8.4, sign-check parity with the padding-* longhands):
+        // padding-top/right/bottom/left already reject a negative value at the LENGTH_PERCENTAGE_
+        // PROPERTIES branch above (line ~120) — but that branch never runs for the shorthand form,
+        // because expandBoxShorthand() builds "padding-top" etc. directly as already-typed values,
+        // bypassing DeclarationParser::parse('padding-top', ...) entirely. Before this fix,
+        // "padding: -5px" (or a mixed "padding: 10px -5px") slipped through unwarned. Adjudication
+        // (M7-T1 brief): drop the WHOLE shorthand with a SINGLE warning when ANY component is
+        // negative — simpler and more defensible than silently zeroing only the negative sides
+        // (which would produce a half-applied padding no author asked for). margin stays fully
+        // permissive (CSS 2.2 §8.3: negative margins are valid), so this check is padding-only.
+        if ($property === 'padding') {
+            foreach ($lengths as $length) {
+                if (self::rawValueOf($length) < 0.0) {
+                    return $this->warn("Negative value not allowed in padding shorthand: $value");
+                }
+            }
+        }
         [$top, $right, $bottom, $left] = match (count($lengths)) {
             1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
             2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],

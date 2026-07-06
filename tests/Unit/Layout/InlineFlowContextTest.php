@@ -5,15 +5,36 @@ declare(strict_types=1);
 
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
+use Pliego\Layout\FloatContext;
+use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\InlineFlowContext;
 use Pliego\Layout\TextMeasurer;
 use Pliego\Style\ComputedStyle;
+use Pliego\Style\FloatSide;
 use Pliego\Text\FontCatalog;
 
 /** @param array<string, mixed> $declarations */
 function inlineStyle(array $declarations = [], ?ComputedStyle $parent = null): ComputedStyle
 {
     return ComputedStyle::compute($declarations, $parent ?? ComputedStyle::root(), 'span', 16.0);
+}
+
+/**
+ * M7-T4: InlineFlowContext::layout() ahora devuelve list<Fragment> (puede incluir
+ * InlineBoxFragment/BoxFragment cuando la secuencia trae InlineBoxStart/InlineBoxEnd/BlockBox) —
+ * ninguno de los tests de este fichero (pre-M7-T4, o M7-T4 con runs planos sin cajas) usa esos
+ * tokens, así que el resultado real SIEMPRE es list<TextFragment> en la práctica; este helper
+ * hace esa garantía explícita para PHPStan en un único sitio, en vez de un assert() por test.
+ * @param list<Fragment> $fragments
+ * @return list<TextFragment>
+ */
+function textFragmentsOf(array $fragments): array
+{
+    return array_map(static function (Fragment $f): TextFragment {
+        assert($f instanceof TextFragment);
+        return $f;
+    }, $fragments);
 }
 
 beforeEach(function (): void {
@@ -29,8 +50,8 @@ it('mixes faces in one line sharing the baseline', function () {
         new TextRun('mundo', $bold),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 500.0, $normal);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $normal));
 
     expect($fragments)->toHaveCount(2);
     [$first, $second] = $fragments;
@@ -58,8 +79,8 @@ it('wraps using break opportunities across runs', function () {
         new TextRun('cinco seis', $normal),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 80.0, $normal);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 80.0, $normal));
 
     expect(count($fragments))->toBeGreaterThan(1);
 
@@ -86,12 +107,12 @@ it('centers and right-aligns lines', function () {
     $face = $this->catalog->select('default', 400, false);
     $wordWidth = $this->measurer->widthOf('Hola', $face, 16.0);
 
-    $centered = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $center);
-    $righted = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $right);
-    $lefted = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $left);
+    $centered = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $center));
+    $righted = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $right));
+    $lefted = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $left)], 10.0, 0.0, 200.0, $left));
 
     expect($lefted[0]->rect->x)->toBe(10.0);
     expect($centered[0]->rect->x)->toEqualWithDelta(10.0 + (200.0 - $wordWidth) / 2, 0.001);
@@ -102,8 +123,8 @@ it('honours declared line-height', function () {
     $base = inlineStyle();
     $doubled = inlineStyle(['line-height' => 2.0], $base);
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun('Hola', $base)], 0.0, 0.0, 500.0, $doubled);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $base)], 0.0, 0.0, 500.0, $doubled));
 
     expect($fragments)->toHaveCount(1);
     // 2 x font-size (32.0) beats the 1.2 x font-size normal default (19.2).
@@ -118,8 +139,8 @@ it('breaks on LineBreakRun', function () {
         new TextRun('mundo', $normal),
     ];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 500.0, $normal);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $normal));
 
     expect($fragments)->toHaveCount(2);
     expect($fragments[0]->text)->toBe('Hola');
@@ -137,8 +158,8 @@ it('keeps M0 single-style geometry stable', function () {
     $text = 'uno dos tres cuatro cinco seis siete ocho';
     $availableWidth = 120.0;
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout([new TextRun($text, $style)], 0.0, 0.0, $availableWidth, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun($text, $style)], 0.0, 0.0, $availableWidth, $style));
 
     $words = explode(' ', $text);
     $spaceWidth = $this->measurer->widthOf(' ', $face, 16.0);
@@ -177,10 +198,164 @@ it('never infinite-loops on a single word wider than the line', function () {
     $style = inlineStyle();
     $runs = [new TextRun('supercalifragilisticexpialidocious', $style)];
 
-    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
-        ->layout($runs, 0.0, 0.0, 10.0, $style);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 10.0, $style));
 
     expect($fragments)->toHaveCount(1);
     expect($fragments[0]->text)->toBe('supercalifragilisticexpialidocious');
     expect($fragments[0]->rect->width)->toBeGreaterThan(10.0);
+});
+
+// --- M7-T2: white-space:pre disables wrapping (CSS 2.2 §16.6.1) --------------------------------
+
+it('does not wrap a white-space:pre run even when it exceeds the available width (overflow allowed, documented)', function () {
+    $pre = inlineStyle(['white-space' => 'pre']);
+    $text = 'a very long line that would normally wrap across multiple lines';
+    $runs = [new TextRun($text, $pre)];
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 50.0, $pre));
+
+    // Un único fragmento -- BreakFinder nunca se consulta para un run 'pre' (ver
+    // InlineFlowContext::layout()), así que el texto entero es una "palabra" atómica.
+    expect($fragments)->toHaveCount(1);
+    expect($fragments[0]->text)->toBe($text);
+    expect($fragments[0]->rect->width)->toBeGreaterThan(50.0);
+});
+
+it('still breaks a white-space:pre run at explicit LineBreakRun boundaries (hard breaks survive)', function () {
+    $pre = inlineStyle(['white-space' => 'pre']);
+    $runs = [
+        new TextRun('line one', $pre),
+        new LineBreakRun(),
+        new TextRun('line two', $pre),
+    ];
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $pre));
+
+    expect($fragments)->toHaveCount(2);
+    expect($fragments[0]->text)->toBe('line one');
+    expect($fragments[1]->text)->toBe('line two');
+    expect($fragments[1]->rect->y)->toBeGreaterThan($fragments[0]->rect->y);
+});
+
+// --- M7-T2: font-family fallback list resolution (generic keywords + registered names) --------
+
+it('resolves the monospace generic keyword to the DejaVu Sans Mono face', function () {
+    $style = inlineStyle(['font-family' => ['monospace']]);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style));
+
+    expect($fragments[0]->faceKey)->toBe('monospace:400:normal');
+});
+
+it('resolves the serif generic keyword to the DejaVu Serif face', function () {
+    $style = inlineStyle(['font-family' => ['serif']]);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('text', $style)], 0.0, 0.0, 500.0, $style));
+
+    expect($fragments[0]->faceKey)->toBe('serif:400:normal');
+});
+
+it('resolves a fallback list by picking the first name registered in the catalog', function () {
+    $style = inlineStyle(['font-family' => ['Unregistered Family', 'monospace']]);
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style));
+
+    expect($fragments[0]->faceKey)->toBe('monospace:400:normal');
+});
+
+it('falls back to the default family, with a warning, when every name in the list is unresolvable', function () {
+    $warnings = new Pliego\Css\WarningCollector();
+    $style = inlineStyle(['font-family' => ['Unregistered Family', 'monospace']]);
+    // catalog SIN registrar 'monospace' (uno nuevo, vacío de familias genéricas) para forzar el
+    // camino "ningún candidato resuelve" -- FontCatalog::withDefaults() SIEMPRE registra
+    // 'monospace' en este repo (ver su docblock), así que aquí se construye un catálogo mínimo a
+    // propósito.
+    $catalog = new Pliego\Text\FontCatalog();
+    $catalog->register('default', 400, false, __DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $catalog, $warnings)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style));
+
+    expect($fragments[0]->faceKey)->toBe('default:400:normal');
+    expect($warnings->drain())->toContain(
+        "Generic font family 'monospace' has no registered face; falling back to 'default'",
+    );
+});
+
+// M7-T6 (CSS 2.2 §9.5, line shortening around floats): InlineFlowContext::layout() recibe un
+// FloatContext opcional (último parámetro) -- ver BlockFlowContext, que lo plumbea desde su propio
+// FloatContext de BFC. Sin él (como en todos los tests de arriba), el comportamiento es
+// BIT-A-BIT idéntico al de antes de esta tarea.
+
+it('M7-T6: shortens the first line to start past a LEFT float band', function () {
+    $style = inlineStyle();
+    $floats = new FloatContext(0.0, 200.0);
+    // Float ocupa x[0,50) y[0,30) -- la línea, empezando en y=0, debe arrancar en x=50 (no 0).
+    $floats->place(FloatSide::Left, 50.0, 30.0, 0.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $style)], 0.0, 0.0, 200.0, $style, $floats));
+
+    expect($fragments[0]->rect->x)->toBe(50.0);
+});
+
+it('M7-T6: shortens the first line to end before a RIGHT float band', function () {
+    $style = inlineStyle();
+    $face = $this->catalog->select('default', 400, false);
+    $floats = new FloatContext(0.0, 200.0);
+    // Float ocupa x[150,200) y[0,30) -- deja un hueco de 150px a la izquierda.
+    $floats->place(FloatSide::Right, 50.0, 30.0, 0.0);
+
+    // 'uno dos tres cuatro' mide más que 150px (el hueco junto al float) pero menos que 200 (el
+    // ancho completo del bloque) -- SIN el float cabría en una sola línea; CON el float, la
+    // última palabra debe desbordar el hueco de 150px y envolver a una segunda línea.
+    $text = 'uno dos tres cuatro';
+    $fullWidth = $this->measurer->widthOf($text, $face, 16.0);
+    expect($fullWidth)->toBeGreaterThan(150.0)->toBeLessThan(200.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun($text, $style)], 0.0, 0.0, 200.0, $style, $floats));
+
+    expect(count($fragments))->toBeGreaterThan(1);
+    // Primera línea: arranca en x=0 (float a la DERECHA no mueve el borde izquierdo) y cabe
+    // dentro del hueco de 150px.
+    expect($fragments[0]->rect->x)->toBe(0.0);
+    expect($fragments[0]->rect->width)->toBeLessThanOrEqual(150.0);
+});
+
+it('M7-T6: a line returns to the FULL width once past the float\'s bottom edge', function () {
+    $style = inlineStyle();
+    $floats = new FloatContext(0.0, 200.0);
+    // Float bajo (altura 15) -- la PRIMERA línea (y=0) queda dentro de su banda; la SEGUNDA línea
+    // (y=19.2, la lineHeight normal de 16px) ya queda POR DEBAJO (15 < 19.2) -- ancho completo.
+    $floats->place(FloatSide::Left, 50.0, 15.0, 0.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $style), new LineBreakRun(), new TextRun('Mundo', $style)], 0.0, 0.0, 200.0, $style, $floats));
+
+    expect($fragments)->toHaveCount(2);
+    expect($fragments[0]->rect->x)->toBe(50.0);
+    expect($fragments[1]->rect->x)->toBe(0.0);
+});
+
+it('M7-T6: an empty line that cannot fit even its first word next to a float drops below the float\'s band', function () {
+    $style = inlineStyle();
+    $face = $this->catalog->select('default', 400, false);
+    $wordWidth = $this->measurer->widthOf('Hola', $face, 16.0);
+
+    $floats = new FloatContext(0.0, 100.0);
+    // Deja solo 5px libres (100 - 95), menos que 'Hola' -- ningún hueco posible junto al float.
+    $floats->place(FloatSide::Left, 95.0, 20.0, 0.0);
+    expect($wordWidth)->toBeGreaterThan(5.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $style)], 0.0, 0.0, 100.0, $style, $floats));
+
+    expect($fragments)->toHaveCount(1);
+    // Empujada por debajo del borde inferior del float (y=20) -- ahí ya no hay ningún float
+    // activo, así que también recupera el ancho completo (x=0).
+    expect($fragments[0]->rect->y)->toBe(20.0);
+    expect($fragments[0]->rect->x)->toBe(0.0);
 });

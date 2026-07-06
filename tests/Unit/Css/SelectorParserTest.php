@@ -256,6 +256,23 @@ it('accepts and warns on the case-insensitive "i" flag, falling back to case-sen
     );
 });
 
+// --- M7-T1 housekeeping, finding 5: the 'i'/'I' flag REQUIRES whitespace before it
+// (Selectors-4 §6.3.1 grammar: the flag is a separate token from the string) ------------------
+
+it('rejects the case-insensitive flag glued directly to the string with no whitespace, as a parse error', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse('[data-x="ABC"i]');
+    expect($result)->toBeNull();
+    expect($warnings->drain())->toHaveCount(1);
+});
+
+it('still accepts the case-insensitive flag when whitespace precedes it (unchanged behavior)', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse('[data-x="ABC" i]');
+    expect($result)->not->toBeNull();
+    expect($warnings->drain())->toHaveCount(1);
+});
+
 // --- M6-T2: structural pseudo-classes ------------------------------------------------------
 
 it('matches :root only against the document element', function () {
@@ -367,6 +384,40 @@ it('rejects a nested :not(:not(...))', function () {
 it('rejects a bare :not without an argument', function () {
     $result = new SelectorParser()->parse('p:not');
     expect($result)->toBeNull();
+});
+
+// --- M7-T1 housekeeping, finding 4: :not(compound) must emit exactly ONE warning (the review
+// found parseNegationArgument's specific warning AND parse()'s generic "Invalid selector syntax"
+// both firing for the same failed selector). ------------------------------------------------
+
+it('emits exactly one warning for a :not() argument with more than one simple selector', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse(':not(p.foo)');
+    expect($result)->toBeNull();
+    expect($warnings->drain())->toBe([
+        ':not() argument must be a single simple selector (no compounds, no nesting): "p.foo"',
+    ]);
+});
+
+it('emits exactly one warning for a :not() argument with two classes', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse(':not(.a.b)');
+    expect($result)->toBeNull();
+    expect($warnings->drain())->toHaveCount(1);
+});
+
+it('emits exactly one warning for a nested :not(:not(...))', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse(':not(:not(p))');
+    expect($result)->toBeNull();
+    expect($warnings->drain())->toHaveCount(1);
+});
+
+it('still emits exactly one warning for an unrelated invalid selector (no regression from the dedupe flag)', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse('ul >');
+    expect($result)->toBeNull();
+    expect($warnings->drain())->toHaveCount(1);
 });
 
 // --- M6-T2: permanently-excluded and unsupported pseudo-classes --------------------------------

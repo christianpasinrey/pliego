@@ -9,9 +9,16 @@ use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Paginator;
+
+function inlineBoxAt(float $y, float $height = 20.0): InlineBoxFragment
+{
+    $side = new BorderSide(1.0, BorderStyle::Solid, new Color(0, 0, 0));
+    return new InlineBoxFragment(new Rect(0.0, $y, 100.0, $height), new Color(200, 200, 200), new BorderSet($side, $side, $side, $side), 1.0, true, true);
+}
 
 function textAt(float $y, float $height = 20.0): TextFragment
 {
@@ -188,6 +195,73 @@ it('does not decompose an atomic fragment into its individual children even when
     assert($box instanceof BoxFragment);
     expect($box->atomic)->toBeTrue();
     expect($box->children)->toHaveCount(2);
+});
+
+// --- M7-T5 (css-overflow-3): a clipsChildren box (overflow:hidden) is composite-preserved, -----
+// --- same push-down semantics as an atomic flex container ------------------------------------
+
+it('pushes a clipsChildren fragment crossing the page boundary down as a whole subtree, same as an atomic one', function () {
+    $child = textAt(1000.0, 10.0);
+    $clippingBox = new BoxFragment(new Rect(0, 990, 100, 60), new Color(0, 200, 0), [$child], BorderSet::none(), clipsChildren: true);
+    $root = new BoxFragment(new Rect(0, 0, 100, 1100), null, [$clippingBox], BorderSet::none());
+
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(2);
+    expect($pages[0]->fragments)->toHaveCount(0);
+
+    $relocated = $pages[1]->fragments[0];
+    assert($relocated instanceof BoxFragment);
+    expect($relocated->clipsChildren)->toBeTrue();
+    expect($relocated->rect->y)->toBe(0.0);
+    expect($relocated->children)->toHaveCount(1);
+});
+
+it('does not decompose a clipsChildren fragment into its individual children even when it fits entirely within one page', function () {
+    $child1 = textAt(10.0, 10.0);
+    $child2 = textAt(30.0, 10.0);
+    $clippingBox = new BoxFragment(new Rect(0, 0, 100, 50), null, [$child1, $child2], BorderSet::none(), clipsChildren: true);
+    $root = new BoxFragment(new Rect(0, 0, 100, 50), null, [$clippingBox], BorderSet::none());
+
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    expect($pages[0]->fragments)->toHaveCount(1); // NOT flattened into 2 separate text leaves
+    $box = $pages[0]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->clipsChildren)->toBeTrue();
+    expect($box->children)->toHaveCount(2);
+});
+
+// --- M7-T4: InlineBoxFragment is a leaf, just like TextFragment/ImageFragment -----------------
+
+it('treats an InlineBoxFragment as a leaf that flows through paint order like text', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 50), null, [inlineBoxAt(10.0), textAt(10.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    expect($pages[0]->fragments)->toHaveCount(2);
+    expect($pages[0]->fragments[0])->toBeInstanceOf(InlineBoxFragment::class);
+    expect($pages[0]->fragments[1])->toBeInstanceOf(TextFragment::class);
+});
+
+it('pushes an InlineBoxFragment crossing the page boundary to the next page top, same as a TextFragment', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 1100), null, [inlineBoxAt(990.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(2);
+    expect($pages[1]->fragments[0])->toBeInstanceOf(InlineBoxFragment::class);
+    expect($pages[1]->fragments[0]->rect()->y)->toBe(0.0);
+});
+
+it('relocates an InlineBoxFragment preserving background/borders/slice flags, shrinking coordinates to the page-local origin', function () {
+    $root = new BoxFragment(new Rect(0, 0, 100, 2500), null, [inlineBoxAt(2100.0)], BorderSet::none());
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    $last = end($pages);
+    assert($last !== false);
+    expect($last->number)->toBe(3);
+    $box = $last->fragments[0];
+    assert($box instanceof InlineBoxFragment);
+    expect($box->rect->y)->toBe(100.0);
+    expect($box->background)->not->toBeNull();
+    expect($box->isFirstSlice)->toBeTrue();
+    expect($box->isLastSlice)->toBeTrue();
 });
 
 it('leaves an image taller than the page crossing the boundary unsplit (documented push-down limitation)', function () {

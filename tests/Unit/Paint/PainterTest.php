@@ -8,6 +8,7 @@ use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
@@ -53,6 +54,16 @@ final class RecordingCanvas implements Canvas
     public function drawImage(Rect $rect, string $imageKey, float $opacity = 1.0): void
     {
         $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey, $opacity);
+    }
+
+    public function clipRect(Rect $rect): void
+    {
+        $this->calls[] = sprintf('clip(%.2F,%.2F,%.2F,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height);
+    }
+
+    public function restoreClip(): void
+    {
+        $this->calls[] = 'restoreClip()';
     }
 }
 
@@ -352,4 +363,106 @@ it('passes the ImageFragment opacity through to Canvas::drawImage()', function (
     $page = new Page(1, [new ImageFragment(new Rect(0, 0, 40, 30), '/tmp/tiny.jpg', 0.3)]);
     new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe(['image(0.00,0.00,40.00,30.00,/tmp/tiny.jpg,0.30)']);
+});
+
+// --- M7-T4: InlineBoxFragment (caja inline real) --------------------------------------------
+
+it('paints an InlineBoxFragment background then its 4 border sides, exactly like a BoxFragment (no children)', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $page = new Page(1, [
+        new InlineBoxFragment(new Rect(0, 0, 100, 50), new Color(200, 200, 200), $borders, 1.0, true, true),
+        new TextFragment(new Rect(10, 10, 50, 19.2), 'mid', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#c8c8c8)', // background
+        'rect(0.00,0.00,100.00,2.00,#000000)',  // top
+        'rect(98.00,2.00,2.00,46.00,#000000)',  // right
+        'rect(0.00,48.00,100.00,2.00,#000000)', // bottom
+        'rect(0.00,2.00,2.00,46.00,#000000)',   // left
+        'text(mid)',                            // painted AFTER the box (contract: boxes before text)
+    ]);
+});
+
+it('paints only top/bottom borders for a non-extreme slice (lateral sides already suppressed by InlineFlowContext)', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $noSide = new BorderSide(0.0, BorderStyle::None, null);
+    // Slice intermedio (isFirstSlice=false, isLastSlice=false): InlineFlowContext ya habría
+    // sustituido left/right por $noSide antes de construir este BorderSet -- el Painter no
+    // necesita saber nada de slices, solo pinta lo que trae.
+    $borders = new BorderSet($side, $noSide, $side, $noSide);
+    $page = new Page(1, [
+        new InlineBoxFragment(new Rect(0, 0, 100, 50), null, $borders, 1.0, false, false),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,2.00,#000000)',  // top
+        'rect(0.00,48.00,100.00,2.00,#000000)', // bottom
+    ]);
+});
+
+// --- M7-T5 (css-overflow-3): overflow:hidden clipping -------------------------------------------
+
+it('wraps a clipsChildren BoxFragment\'s descendants in clipRect()/restoreClip(), around the OWN background/border unclipped', function () {
+    $canvas = new RecordingCanvas();
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$innerText], BorderSet::none(), clipsChildren: true);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)', // own background: NOT inside the clip scope
+        'clip(0.00,0.00,100.00,50.00)',         // clip scope opens at the box's OWN border-box rect
+        'text(Hi)',                             // child painted INSIDE the clip scope
+        'restoreClip()',                        // clip scope closes right after the last child
+    ]);
+});
+
+it('does not clip a BoxFragment whose clipsChildren is false (default), same as before this task', function () {
+    $canvas = new RecordingCanvas();
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$innerText], BorderSet::none());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)',
+        'text(Hi)',
+    ]);
+});
+
+it('clips a nested composite subtree (borders included) inside a single clip scope, closing it after ALL descendants', function () {
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $side = new BorderSide(1.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $inner = new BoxFragment(new Rect(0, 0, 40, 30), new Color(0, 0, 255), [$innerText], $borders);
+    $canvas = new RecordingCanvas();
+    $outer = new BoxFragment(new Rect(0, 0, 100, 50), null, [$inner], BorderSet::none(), clipsChildren: true);
+    $page = new Page(1, [$outer]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls[0])->toBe('clip(0.00,0.00,100.00,50.00)');
+    expect(end($canvas->calls))->toBe('restoreClip()');
+    // clip() + inner background + 4 inner border sides + inner text + restoreClip() = 8
+    expect($canvas->calls)->toHaveCount(8);
+});
+
+it('multiplies an InlineBoxFragment background/border alpha by its own opacity', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $page = new Page(1, [
+        new InlineBoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), $borders, 0.5, true, true),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls[0])->toBe('rect(0.00,0.00,100.00,50.00,#ff0000,a=0.50)');
+    foreach (array_slice($canvas->calls, 1) as $call) {
+        expect($call)->toContain('a=0.50');
+    }
 });

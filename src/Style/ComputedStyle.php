@@ -18,20 +18,23 @@ use Pliego\Css\WarningCollector;
 
 final readonly class ComputedStyle
 {
-    private const array HIDDEN_BY_DEFAULT = ['head', 'script', 'style', 'title', 'meta', 'link'];
-    /** UA stylesheet: b,strong → bold; M5-T2 añade th (CSS 2.1 §17.2, misma mecánica que HIDDEN_BY_DEFAULT). */
-    private const array BOLD_BY_DEFAULT = ['b', 'strong', 'th'];
-    /** UA stylesheet: i,em → italic. */
-    private const array ITALIC_BY_DEFAULT = ['i', 'em'];
-    /** UA stylesheet: a,u → underline. */
-    private const array UNDERLINE_BY_DEFAULT = ['a', 'u'];
-    /** UA stylesheet M5-T2: th → text-align center (CSS 2.1 §17.2, html.css de referencia). */
-    private const array CENTER_ALIGN_BY_DEFAULT = ['th'];
     /**
-     * UA stylesheet M5-T2: display por defecto de los elementos de tabla (CSS 2.1 §17.2 /
-     * html5 rendering hints). td y th comparten table-cell; tr/thead/tbody se mapean 1:1.
-     * tfoot/col/colgroup/caption quedan fuera del contrato M5 (no listados en el brief) y caen
-     * al default genérico (Display::Block), igual que cualquier otro tag desconocido.
+     * M7-T2 housekeeping: HIDDEN_BY_DEFAULT/BOLD_BY_DEFAULT/ITALIC_BY_DEFAULT/
+     * UNDERLINE_BY_DEFAULT/CENTER_ALIGN_BY_DEFAULT (constantes de tag-por-tag que vivían aquí
+     * desde M1/M5) MIGRARON a Style\UserAgentStylesheet como reglas CSS reales (display:none;
+     * font-weight:bold; font-style:italic; text-decoration:underline; text-align:center) —
+     * StyleResolver las antepone SIEMPRE al cascade con origen UA (ver esa clase), así que
+     * $declarations, para cuando llega aquí, YA contiene el valor ganador (UA o autor, quien
+     * gane) para estos cinco casos: display/font-weight/font-style/text-decoration/text-align se
+     * resuelven abajo con la MISMA lógica de herencia/initial-value que cualquier otra propiedad
+     * CSS normal, sin ninguna rama especial por $tag. Ganancia real (no solo limpieza): un autor
+     * ahora SÍ puede pisar estos defaults con su propia regla (p.ej. `head { display: block }`),
+     * algo que el hardcoding anterior no permitía — divergencia de CSS real que esta migración
+     * corrige de paso.
+     *
+     * TABLE_DISPLAY_BY_TAG es la EXCEPCIÓN deliberada: se queda hardcoded aquí (ver docblock de
+     * Style\UserAgentStylesheet para el porqué — observacionalmente sería un no-op migrarla, y
+     * la extensa batería de goldens de tabla M5/M6 depende de esta ruta exacta).
      */
     private const array TABLE_DISPLAY_BY_TAG = [
         'table' => Display::Table,
@@ -63,12 +66,28 @@ final readonly class ComputedStyle
         public ?Color $backgroundColor,
         public Color $color,
         public float $fontSizePx,
-        public string $fontFamily,
+        // M7-T2 (css-fonts-3 §5.3.1): deja de ser un único nombre de familia (string) para ser la
+        // LISTA CRUDA de fallback, ya troceada/limpiada por DeclarationParser::parseFontFamily()
+        // pero SIN resolver contra ningún catálogo de fuentes — Style no puede depender de Text
+        // (deptrac: Style: [Css, Vendor]), así que la resolución final (¿qué nombre de la lista
+        // está REGISTRADO, o es un genérico como sans-serif/serif/monospace?) vive en Layout,
+        // contra FontCatalog (ver Layout\Text\FontFamilyResolver, consumido por
+        // InlineFlowContext::faceFor()/IntrinsicSizer::faceFor()). ['default'] es el initial
+        // value sintético de este motor (nunca vacío: ver compute(), que cae a la lista heredada
+        // del padre cuando la propia declaración produce una lista vacía).
+        /** @var list<string> */
+        public array $fontFamily,
         public int $fontWeight,
         public FontStyle $fontStyle,
         public ?float $lineHeightPx,
         public TextAlign $textAlign,
         public bool $underline,
+        // M7-T2 (CSS 2.2 §16.6, reducido a normal|pre): SÍ hereda (a diferencia de la mayoría de
+        // propiedades de este constructor) — un <code> anidado dentro de un <pre> (patrón HTML
+        // habitual) debe conservar white-space:pre sin que el autor tenga que redeclararlo. Ver
+        // BoxTreeBuilder::textRunTokensFor()/collapse() (colapso de whitespace + \n -> LineBreakRun)
+        // e InlineFlowContext::layout() (wrapping desactivado para runs 'pre').
+        public string $whiteSpace,
         public BorderSide $borderTop,
         public BorderSide $borderRight,
         public BorderSide $borderBottom,
@@ -98,6 +117,49 @@ final readonly class ComputedStyle
         public float $borderSpacingPx,
         public string $tableLayout,
         public VerticalAlign $verticalAlign,
+        // M7-T3 (css-lists-3 §3): list-style-type SÍ hereda (a diferencia de vertical-align justo
+        // arriba, y de la mayoría de propiedades de este constructor) — ver ListStyleType para el
+        // razonamiento completo y el initial value real ('disc').
+        public ListStyleType $listStyleType,
+        // M7-T5 (CSS 2.2 §10.4): min-width/max-width comparten el mismo tipo y la misma
+        // resolución diferida a Layout que width (% contra el ancho del containing block, ver
+        // BlockFlowContext::layout()) -- ninguna de las 2 hereda (igual que width). null = "sin
+        // mínimo/máximo" (initial value real: 'auto'/'none' respectivamente, ver
+        // DeclarationParser -- ambos colapsan al mismo null que "propiedad no declarada").
+        public ?LengthPercentage $minWidth,
+        public ?LengthPercentage $maxWidth,
+        // M7-T5 (CSS 2.2 §10.7): a diferencia de min/max-width, min-height/max-height son PX-ONLY
+        // -- este motor no rastrea la altura del containing block (mismo gap documentado que
+        // $height arriba), así que un % en estas 2 propiedades se rechaza YA en
+        // DeclarationParser (warning + valor descartado) y nunca llega aquí. NO heredan.
+        public ?Length $minHeight,
+        public ?Length $maxHeight,
+        // M7-T5 (css-overflow-3, reducido a visible|hidden): NO hereda -- cada elemento parte
+        // SIEMPRE del initial value 'visible' cuando no hay declaración propia, nunca de
+        // $parent->overflow (mismo patrón que box-sizing/opacity). 'scroll'/'auto' ya llegan
+        // coercionados a 'hidden' desde DeclarationParser (con warning) -- esta propiedad solo ve
+        // 'visible'|'hidden'.
+        public string $overflow,
+        // M7-T6 (CSS 2.2 §9.5.1): NO hereda -- cada elemento parte SIEMPRE de "sin float" (null)
+        // cuando no hay declaración propia, nunca de $parent->float (mismo patrón que
+        // box-sizing/overflow/opacity: cada caja decide su PROPIO float de forma independiente).
+        public ?FloatSide $float,
+        // M7-T6 (CSS 2.2 §9.5.2): NO hereda -- initial 'none' siempre que no haya declaración
+        // propia. DeclarationParser ya solo produce 'left'|'right'|'both'|'none' aquí.
+        public string $clear,
+        // M7-T6 (CSS 2.2 §9.4.3/§10, css-position-3 reducido): NO hereda -- initial Static
+        // siempre que no haya declaración propia (ver Style\Position, incluye el fallback de
+        // 'sticky'/'fixed' -> warning + Static, ya resuelto en DeclarationParser).
+        public Position $position,
+        // M7-T6: top/right/bottom/left -- NINGUNO de los 4 hereda (CSS 2.2 §9.3.1 no los lista
+        // entre las propiedades heredadas). top/bottom nunca traen componente de % (rechazado ya
+        // en DeclarationParser, mismo criterio que height -- ver LengthPercentage::px() más abajo
+        // en compute(), que los envuelve SIN posibilidad de percent real); left/right SÍ pueden
+        // traer % (resuelto contra el ancho del containing block en Layout, igual que width).
+        public ?LengthPercentage $top,
+        public ?LengthPercentage $right,
+        public ?LengthPercentage $bottom,
+        public ?LengthPercentage $left,
         // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
         // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
         // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
@@ -187,12 +249,13 @@ final readonly class ComputedStyle
             null,
             $rootColor,
             16.0,
-            'default',
+            ['default'],
             400,
             FontStyle::Normal,
             null,
             TextAlign::Left,
             false,
+            'normal',
             $noBorder,
             $noBorder,
             $noBorder,
@@ -210,6 +273,25 @@ final readonly class ComputedStyle
             0.0,
             'auto',
             VerticalAlign::Top,
+            // css-lists-3 §3: initial value real de list-style-type es 'disc' — ver docblock del
+            // nuevo parámetro del constructor.
+            ListStyleType::Disc,
+            // M7-T5: sin min/max-width/height (null = sin mínimo/máximo) ni overflow declarado
+            // (initial value real 'visible') en la raíz.
+            null,
+            null,
+            null,
+            null,
+            'visible',
+            // M7-T6: sin float/clear/position/offsets declarados en la raíz (initial values:
+            // sin float, 'none', Static, sin ningún offset).
+            null,
+            'none',
+            Position::Static,
+            null,
+            null,
+            null,
+            null,
         );
     }
 
@@ -248,10 +330,12 @@ final readonly class ComputedStyle
         $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
         $displayValue = $declarations['display'] ?? null;
-        // M5-T2: el default por tag ahora consulta también TABLE_DISPLAY_BY_TAG antes de caer a
-        // Block — HIDDEN_BY_DEFAULT sigue teniendo prioridad (p.ej. un <title> nunca es tabla).
+        // M7-T2: el default "oculto" (head/script/style/title/meta/link) YA NO vive aquí como
+        // lista de tags — es una regla UA real (Style\UserAgentStylesheet, display:none) que
+        // llega mezclada en $declarations['display'] como cualquier otro 'none' de autor, cubierta
+        // por el match de $displayValue de abajo. TABLE_DISPLAY_BY_TAG es la única tabla de
+        // defaults-por-tag que sigue viviendo aquí (ver su docblock para el porqué).
         $display = match (true) {
-            in_array($tag, self::HIDDEN_BY_DEFAULT, true) => Display::None,
             array_key_exists($tag, self::TABLE_DISPLAY_BY_TAG) => self::TABLE_DISPLAY_BY_TAG[$tag],
             default => Display::Block,
         };
@@ -269,6 +353,16 @@ final readonly class ComputedStyle
             'table-cell' => Display::TableCell,
             'table-header-group' => Display::TableHeaderGroup,
             'table-row-group' => Display::TableRowGroup,
+            // M7-T3 (css-lists-3 §3): <li> UA default (Style\UserAgentStylesheet) — ver
+            // Display::ListItem para por qué no necesita ninguna tabla de defaults-por-tag aquí
+            // (a diferencia de TABLE_DISPLAY_BY_TAG, que sí sigue siendo hardcoded).
+            'list-item' => Display::ListItem,
+            // M7-T4 (css-inline-3 reducido): 'inline' es ahora el default UA real de span/strong/
+            // em/... (ver Display::Inline) -- un autor puede declararlo/pisarlo igual que cualquier
+            // otro valor de este match. 'inline-block' no tiene ningún default de tag en esta hoja
+            // UA (puramente autor, p.ej. Bootstrap `.btn { display: inline-block }`).
+            'inline' => Display::Inline,
+            'inline-block' => Display::InlineBlock,
             default => $display,
         };
         // M6-T3: font-size se resuelve ANTES que cualquier otra propiedad porque su resultado
@@ -358,29 +452,28 @@ final readonly class ComputedStyle
             return $v instanceof LengthPercentage || $v instanceof CssLength || $v instanceof CalcExpr;
         };
 
+        // M7-T2: el default por tag (b/strong/th → bold) MIGRÓ a Style\UserAgentStylesheet —
+        // $declarations['font-weight'] ya trae el valor ganador del cascade (UA o autor), así que
+        // esta rama vuelve a ser herencia CSS pura (int declarado > heredado del padre), sin
+        // ningún chequeo de $tag.
         $fontWeightValue = $declarations['font-weight'] ?? null;
-        $fontWeight = match (true) {
-            is_int($fontWeightValue) => $fontWeightValue,
-            in_array($tag, self::BOLD_BY_DEFAULT, true) => 700,
-            default => $parent->fontWeight,
-        };
+        $fontWeight = is_int($fontWeightValue) ? $fontWeightValue : $parent->fontWeight;
 
+        // M7-T2: idem para i/em → italic (antes ITALIC_BY_DEFAULT) — ya viene resuelto en
+        // $declarations vía la regla UA real.
         $fontStyleValue = $declarations['font-style'] ?? null;
-        $fontStyle = match (true) {
-            $fontStyleValue === 'italic' => FontStyle::Italic,
-            $fontStyleValue === 'normal' => FontStyle::Normal,
-            in_array($tag, self::ITALIC_BY_DEFAULT, true) => FontStyle::Italic,
+        $fontStyle = match ($fontStyleValue) {
+            'italic' => FontStyle::Italic,
+            'normal' => FontStyle::Normal,
             default => $parent->fontStyle,
         };
 
+        // M7-T2: idem para th → center (antes CENTER_ALIGN_BY_DEFAULT).
         $textAlignValue = $declarations['text-align'] ?? null;
-        $textAlign = match (true) {
-            $textAlignValue === 'left' => TextAlign::Left,
-            $textAlignValue === 'center' => TextAlign::Center,
-            $textAlignValue === 'right' => TextAlign::Right,
-            // UA stylesheet M5-T2: th → text-align center (CENTER_ALIGN_BY_DEFAULT), aplicada
-            // antes de caer a la herencia normal — misma prioridad que BOLD_BY_DEFAULT arriba.
-            in_array($tag, self::CENTER_ALIGN_BY_DEFAULT, true) => TextAlign::Center,
+        $textAlign = match ($textAlignValue) {
+            'left' => TextAlign::Left,
+            'center' => TextAlign::Center,
+            'right' => TextAlign::Right,
             default => $parent->textAlign,
         };
 
@@ -389,11 +482,21 @@ final readonly class ComputedStyle
          * aplica al elemento, no vía herencia formal). M1 la simplifica tratándola como heredada
          * porque el pipeline de texto todavía no soporta islas de decoración independientes de la
          * herencia tipográfica; T3+ revisará esto si la precisión total resulta necesaria.
+         *
+         * M7-T2: el default por tag (a/u → underline, antes UNDERLINE_BY_DEFAULT) MIGRÓ a
+         * Style\UserAgentStylesheet — ya llega resuelto en $declarations['text-decoration'].
          */
-        $underline = match (true) {
-            array_key_exists('text-decoration', $declarations) => (bool) $declarations['text-decoration'],
-            in_array($tag, self::UNDERLINE_BY_DEFAULT, true) => true,
-            default => $parent->underline,
+        $underline = array_key_exists('text-decoration', $declarations)
+            ? (bool) $declarations['text-decoration']
+            : $parent->underline;
+
+        // M7-T2 (CSS 2.2 §16.6, reducido a normal|pre): hereda del padre cuando no hay
+        // declaración propia — mismo patrón que $textAlign/$underline arriba.
+        $whiteSpaceValue = $declarations['white-space'] ?? null;
+        $whiteSpace = match ($whiteSpaceValue) {
+            'normal' => 'normal',
+            'pre' => 'pre',
+            default => $parent->whiteSpace,
         };
 
         $lineHeightPx = $parent->lineHeightPx;
@@ -546,6 +649,72 @@ final readonly class ComputedStyle
             default => VerticalAlign::Top,
         };
 
+        // M7-T3 (css-lists-3 §3): list-style-type SÍ hereda — cae a $parent->listStyleType
+        // (nunca al initial value directamente) cuando no hay declaración propia, mismo patrón
+        // que $textAlign/$underline/$whiteSpace más arriba (todas heredadas). El keyword ya llega
+        // validado por DeclarationParser::parseListStyleType()/parseListStyleShorthand() — un
+        // valor ausente (más común: ningún selector UA/autor coincidió, p.ej. un <li> huérfano
+        // sin <ul>/<ol> ancestro) simplemente hereda, resolviendo en última instancia al initial
+        // value 'disc' fijado en ComputedStyle::root().
+        $listStyleType = match ($declarations['list-style-type'] ?? null) {
+            'disc' => ListStyleType::Disc,
+            'circle' => ListStyleType::Circle,
+            'square' => ListStyleType::Square,
+            'decimal' => ListStyleType::Decimal,
+            'none' => ListStyleType::None,
+            default => $parent->listStyleType,
+        };
+
+        // M7-T5 (CSS 2.2 §10.4): min-width/max-width, igual criterio que width (arriba) --
+        // LengthPercentage sin resolver (% diferido a Layout), null cuando no hay declaración
+        // (initial 'auto'/'none', ver DeclarationParser). NO heredan (nunca $parent->minWidth).
+        $minWidth = $hasLengthPercentage('min-width') ? $lengthPercentage('min-width') : null;
+        $maxWidth = $hasLengthPercentage('max-width') ? $lengthPercentage('max-width') : null;
+        // M7-T5 (CSS 2.2 §10.7): min-height/max-height, px-only (igual criterio que $height
+        // arriba) -- $length() ya devuelve null cuando no hay declaración.
+        $minHeight = $length('min-height');
+        $maxHeight = $length('max-height');
+
+        // M7-T5 (css-overflow-3): NO hereda -- initial 'visible' siempre que no haya declaración
+        // propia, nunca $parent->overflow. DeclarationParser ya solo produce 'visible'|'hidden'
+        // aquí (scroll/auto coercionados con warning antes de llegar).
+        $overflowValue = $declarations['overflow'] ?? null;
+        $overflow = $overflowValue === 'hidden' ? 'hidden' : 'visible';
+
+        // M7-T6 (CSS 2.2 §9.5.1): NO hereda -- 'none' (ausencia de declaración, o el keyword
+        // literal 'none') colapsa SIEMPRE a null, nunca a $parent->float.
+        $floatValue = $declarations['float'] ?? null;
+        $float = match ($floatValue) {
+            'left' => FloatSide::Left,
+            'right' => FloatSide::Right,
+            default => null,
+        };
+        // M7-T6 (CSS 2.2 §9.5.2): NO hereda -- initial 'none' siempre que no haya declaración
+        // propia. DeclarationParser ya solo produce estos 4 literales.
+        $clearValue = $declarations['clear'] ?? null;
+        $clear = in_array($clearValue, ['left', 'right', 'both'], true) ? $clearValue : 'none';
+        // M7-T6 (CSS 2.2 §9.4.3): NO hereda -- 'sticky'/'fixed' ya nunca llegan aquí como valor
+        // reconocido (DeclarationParser los rechaza con warning, ver KEYWORD_PROPERTIES['position']),
+        // así que el default 'sin declaración reconocida' == Static cubre ese caso sin rama extra.
+        $positionValue = $declarations['position'] ?? null;
+        $position = match ($positionValue) {
+            'relative' => Position::Relative,
+            'absolute' => Position::Absolute,
+            default => Position::Static,
+        };
+        // M7-T6 (CSS 2.2 §9.4.3): top/bottom -- px-only (mismo camino que height/min-height/
+        // max-height, ver $length() arriba), envueltos en LengthPercentage::px() para compartir
+        // TIPO con left/right (ver docblock del constructor) aunque nunca lleven componente de %
+        // real. left/right -- LengthPercentage con % posible (mismo camino que width, ver
+        // $lengthPercentage()/$hasLengthPercentage()). Ninguno de los 4 hereda: ausencia de
+        // declaración = null siempre, nunca $parent->top/etc.
+        $topLength = $length('top');
+        $top = $topLength !== null ? LengthPercentage::px($topLength->px) : null;
+        $bottomLength = $length('bottom');
+        $bottom = $bottomLength !== null ? LengthPercentage::px($bottomLength->px) : null;
+        $right = $hasLengthPercentage('right') ? $lengthPercentage('right') : null;
+        $left = $hasLengthPercentage('left') ? $lengthPercentage('left') : null;
+
         // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
         // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
         // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
@@ -553,6 +722,18 @@ final readonly class ComputedStyle
         // shorthand) y no debería activarse nunca desde el pipeline real.
         $opacityValue = $declarations['opacity'] ?? null;
         $opacity = is_float($opacityValue) ? max(0.0, min(1.0, $opacityValue)) : 1.0;
+
+        // M7-T2: font-family ya no es un string único — DeclarationParser::parseFontFamily()
+        // produce list<string> (posiblemente vacía, p.ej. "font-family: ,,"). Una lista vacía (o
+        // con elementos no-string, defensivo, nunca ocurre desde el parser real) hereda del
+        // padre, igual que el resto de propiedades tipográficas sin declaración propia.
+        // array_filter(..., 'is_string') + array_values() es el idiom que PHPStan estrecha a
+        // list<string> sin necesidad de @var/assert (ver instrucciones del gate: prohibidos).
+        $fontFamilyValue = $declarations['font-family'] ?? null;
+        $fontFamily = is_array($fontFamilyValue) ? array_values(array_filter($fontFamilyValue, 'is_string')) : [];
+        if ($fontFamily === []) {
+            $fontFamily = $parent->fontFamily;
+        }
 
         return new self(
             $display,
@@ -571,12 +752,13 @@ final readonly class ComputedStyle
             $resolveCurrentColor($declarations['background-color'] ?? null),
             $color,
             $fontSizePx,
-            is_string($declarations['font-family'] ?? null) ? $declarations['font-family'] : $parent->fontFamily,
+            $fontFamily,
             $fontWeight,
             $fontStyle,
             $lineHeightPx,
             $textAlign,
             $underline,
+            $whiteSpace,
             $borderSide('top'),
             $borderSide('right'),
             $borderSide('bottom'),
@@ -594,6 +776,19 @@ final readonly class ComputedStyle
             $borderSpacingPx,
             $tableLayout,
             $verticalAlign,
+            $listStyleType,
+            $minWidth,
+            $maxWidth,
+            $minHeight,
+            $maxHeight,
+            $overflow,
+            $float,
+            $clear,
+            $position,
+            $top,
+            $right,
+            $bottom,
+            $left,
             $opacity,
             $customProperties,
         );

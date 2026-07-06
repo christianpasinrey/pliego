@@ -13,6 +13,7 @@ use Pliego\Style\FlexDirection;
 use Pliego\Style\FlexWrap;
 use Pliego\Style\FontStyle;
 use Pliego\Style\JustifyContent;
+use Pliego\Style\ListStyleType;
 use Pliego\Style\StyleResolver;
 use Pliego\Style\TextAlign;
 use Pliego\Style\VerticalAlign;
@@ -842,4 +843,314 @@ it('lets an !important var() declaration beat a later, more specific normal decl
     $p = $doc->querySelector('p');
     assert($p !== null);
     expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+});
+
+// --- M7-T1 housekeeping, finding 2: IACVT (css-variables-1 §3) — a var() with no fallback and
+// no matching custom property must compute to INHERIT (inherited properties) / INITIAL
+// (everything else), never to whatever a PREVIOUS, lower-priority rule already set for the same
+// property. Review probe: "p{color:red} p{color:var(--missing)}" used to stay red.
+
+it('THE probe: an unresolved var() with no fallback falls back to the inherited value, not the earlier cascade winner (inherited property)', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'body { color: blue } p { color: red } p { color: var(--missing) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // color inherits: falls to the parent's computed color (blue), NOT the earlier "red" winner.
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 255));
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('an unresolved var() with no fallback falls back to the initial value for a non-inherited property, not the earlier cascade winner', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'p { background-color: red } p { background-color: var(--missing) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // background-color does not inherit; its initial value is "no background" (null), not red.
+    expect($map->get($p)->backgroundColor)->toBeNull();
+    expect($warnings)->not->toBeEmpty();
+});
+
+// --- M7-T1 housekeeping, finding 6: VarResolver never substitutes a var( that is written
+// literally INSIDE a quoted string value of a custom property (css-syntax-3: a string token is
+// opaque). There is no `content` property in this engine, so the probe uses font-family (any
+// string is accepted there, see DeclarationParser::KEYWORD_PROPERTIES['font-family']).
+
+it('keeps a var() literally inside a quoted custom property value un-substituted end to end (font-family)', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --a: "var(--b)"; --b: Arial; } p { font-family: var(--a); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // font-family trims the surrounding quotes but must NOT have substituted --b: the literal
+    // text "var(--b)" survives, proving --b (Arial) was never touched. (M7-T2: font-family is now
+    // a fallback list — a single un-substituted name still yields a one-element list.)
+    expect($map->get($p)->fontFamily)->toBe(['var(--b)']);
+});
+
+it('unsets every longhand of a shorthand when its var() substitution fails, not just the ones the fallback text would have produced', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        'p { margin: 5px } p { margin: var(--missing) }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    // margin does not inherit: every side falls back to the initial value 0, not the earlier 5px.
+    expect($style->marginTop->value)->toBe(0.0);
+    expect($style->marginRight->value)->toBe(0.0);
+    expect($style->marginBottom->value)->toBe(0.0);
+    expect($style->marginLeft->value)->toBe(0.0);
+    expect($warnings)->not->toBeEmpty();
+});
+
+// --- M7-T2: complete UA stylesheet (CSS 2.2 Appendix D, adapted) + cascade origin ---------------
+
+it('sizes and bolds h1..h6 per the UA stylesheet (2/1.5/1.17/1/.83/.75 em)', function () {
+    [$doc, $map] = resolveDoc(
+        '',
+        '<body><h1>1</h1><h2>2</h2><h3>3</h3><h4>4</h4><h5>5</h5><h6>6</h6></body>',
+    );
+    $expectedEm = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.75];
+    foreach ($expectedEm as $tag => $em) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        $style = $map->get($el);
+        expect($style->fontSizePx)->toBe($em * 16.0);
+        expect($style->fontWeight)->toBe(700);
+    }
+});
+
+it('sizes h1..h6 top/bottom margins per the UA stylesheet, relative to each heading\'s OWN font-size', function () {
+    [$doc, $map] = resolveDoc('', '<body><h1>1</h1><h6>6</h6></body>');
+    $h1 = $doc->querySelector('h1');
+    $h6 = $doc->querySelector('h6');
+    assert($h1 !== null && $h6 !== null);
+    // h1: font-size 2em de 16px = 32px; margin .67em 0 -> .67 * 32 = 21.44px arriba/abajo.
+    expect($map->get($h1)->marginTop->value)->toBe(0.67 * 32.0);
+    expect($map->get($h1)->marginBottom->value)->toBe(0.67 * 32.0);
+    expect($map->get($h1)->marginLeft->value)->toBe(0.0);
+    // h6: font-size .75em de 16px = 12.0px; margin 1.67em 0 -> 1.67 * 12.0 = 20.04px.
+    expect($map->get($h6)->marginTop->value)->toEqualWithDelta(1.67 * (0.75 * 16.0), 0.0001);
+});
+
+it('gives p/ul/ol/dl a 1em 0 margin and blockquote/figure a 1em 40px margin', function () {
+    [$doc, $map] = resolveDoc(
+        '',
+        '<body><p>p</p><ul><li>u</li></ul><ol><li>o</li></ol><dl><dt>d</dt></dl>'
+        . '<blockquote>b</blockquote><figure>f</figure></body>',
+    );
+    foreach (['p', 'ul', 'ol', 'dl'] as $tag) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        $style = $map->get($el);
+        expect($style->marginTop->value)->toBe(16.0);
+        expect($style->marginBottom->value)->toBe(16.0);
+        expect($style->marginLeft->value)->toBe(0.0);
+        expect($style->marginRight->value)->toBe(0.0);
+    }
+    foreach (['blockquote', 'figure'] as $tag) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        $style = $map->get($el);
+        expect($style->marginTop->value)->toBe(16.0);
+        expect($style->marginBottom->value)->toBe(16.0);
+        expect($style->marginLeft->value)->toBe(40.0);
+        expect($style->marginRight->value)->toBe(40.0);
+    }
+});
+
+it('gives ul/ol a 40px left padding (M7-T2; the padding is what fits the M7-T3 marker into later)', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul><li>x</li></ul></body>');
+    $ul = $doc->querySelector('ul');
+    assert($ul !== null);
+    expect($map->get($ul)->paddingLeft->value)->toBe(40.0);
+});
+
+it('gives pre a monospace font, 1em 0 margin and white-space:pre', function () {
+    [$doc, $map] = resolveDoc('', '<body><pre>x</pre></body>');
+    $pre = $doc->querySelector('pre');
+    assert($pre !== null);
+    $style = $map->get($pre);
+    expect($style->fontFamily)->toBe(['monospace']);
+    expect($style->marginTop->value)->toBe(16.0);
+    expect($style->marginBottom->value)->toBe(16.0);
+    expect($style->whiteSpace)->toBe('pre');
+});
+
+it('gives code/kbd/samp a monospace font-family (inline, per BoxTreeBuilder::INLINE_TAGS)', function () {
+    [$doc, $map] = resolveDoc('', '<body><p><code>c</code><kbd>k</kbd><samp>s</samp></p></body>');
+    foreach (['code', 'kbd', 'samp'] as $tag) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        expect($map->get($el)->fontFamily)->toBe(['monospace']);
+    }
+});
+
+it('gives hr a 1px solid top border and .5em 0 margin (auto side margins simplified to 0, documented)', function () {
+    [$doc, $map] = resolveDoc('', '<body><hr></body>');
+    $hr = $doc->querySelector('hr');
+    assert($hr !== null);
+    $style = $map->get($hr);
+    expect($style->borderTop->widthPx)->toBe(1.0);
+    expect($style->borderTop->style)->toBe(BorderStyle::Solid);
+    expect($style->marginTop->value)->toBe(8.0);
+    expect($style->marginBottom->value)->toBe(8.0);
+    expect($style->marginLeft->value)->toBe(0.0);
+});
+
+it('gives small a .83em font-size relative to the PARENT font-size (em, not the UA rule\'s own)', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x <small>y</small></p></body>');
+    $small = $doc->querySelector('small');
+    assert($small !== null);
+    expect($map->get($small)->fontSizePx)->toBe(0.83 * 16.0);
+});
+
+// --- M7-T2: cascade origin (CSS 2.2 §6.4.1) -- UA loses to author EVEN AT LOWER SPECIFICITY ----
+
+it('an author rule of LOWER specificity than the matching UA rule still wins (origin beats specificity)', function () {
+    // '*' universal selector: specificity (0,0,0), strictly lower than the UA `th { ... }` type
+    // selector (0,0,1) -- in real CSS cascade, origin is compared BEFORE specificity, so author
+    // always beats UA regardless of who has the "stronger" selector.
+    [$doc, $map] = resolveDoc('* { font-weight: normal }', '<body><table><tr><th>x</th></tr></table></body>');
+    $th = $doc->querySelector('th');
+    assert($th !== null);
+    expect($map->get($th)->fontWeight)->toBe(400);
+});
+
+it('an author !important rule always wins, regardless of origin or specificity', function () {
+    [$doc, $map] = resolveDoc('th { font-weight: normal !important }', '<body><table><tr><th>x</th></tr></table></body>');
+    $th = $doc->querySelector('th');
+    assert($th !== null);
+    expect($map->get($th)->fontWeight)->toBe(400);
+});
+
+it('an author rule can override display:none for a normally-hidden UA tag (head/script/...)', function () {
+    // Antes de M7-T2 (hardcoded HIDDEN_BY_DEFAULT), esto era IMPOSIBLE: el autor no tenía forma
+    // de ganarle a un tag-check en compute(). Ahora es solo otra regla en el cascade.
+    [$doc, $map] = resolveDoc('head { display: block }', '<html><head><title>t</title></head><body></body></html>');
+    $head = $doc->querySelector('head');
+    assert($head !== null);
+    expect($map->get($head)->display)->toBe(Display::Block);
+});
+
+// --- M7-T3: css-lists-3 §3 -- <li> display:list-item + list-style-type UA defaults/inheritance --
+
+it('gives li a Display::ListItem via the UA stylesheet default', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul><li>x</li></ul></body>');
+    $li = $doc->querySelector('li');
+    assert($li !== null);
+    expect($map->get($li)->display)->toBe(Display::ListItem);
+});
+
+it('defaults ul to list-style-type:disc and ol to :decimal via the UA stylesheet', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul>u</ul><ol>o</ol></body>');
+    $ul = $doc->querySelector('ul');
+    $ol = $doc->querySelector('ol');
+    assert($ul !== null && $ol !== null);
+    expect($map->get($ul)->listStyleType)->toBe(ListStyleType::Disc);
+    expect($map->get($ol)->listStyleType)->toBe(ListStyleType::Decimal);
+});
+
+it('inherits list-style-type from the ul/ol ancestor down onto its li children', function () {
+    [$doc, $map] = resolveDoc('', '<body><ol><li>x</li></ol></body>');
+    $li = $doc->querySelector('li');
+    assert($li !== null);
+    expect($map->get($li)->listStyleType)->toBe(ListStyleType::Decimal);
+});
+
+it('cycles disc -> circle -> square for ul nesting depth via UA descendant combinators', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul><li><ul><li><ul><li>x</li></ul></li></ul></li></ul></body>');
+    $lis = $doc->querySelectorAll('li');
+    $depth1 = $lis[0];
+    $depth2 = $lis[1];
+    $depth3 = $lis[2];
+    expect($map->get($depth1)->listStyleType)->toBe(ListStyleType::Disc);
+    expect($map->get($depth2)->listStyleType)->toBe(ListStyleType::Circle);
+    expect($map->get($depth3)->listStyleType)->toBe(ListStyleType::Square);
+});
+
+it('lets an author rule override the UA list-style-type default (cascade)', function () {
+    [$doc, $map] = resolveDoc('ul { list-style-type: square }', '<body><ul><li>x</li></ul></body>');
+    $ul = $doc->querySelector('ul');
+    assert($ul !== null);
+    expect($map->get($ul)->listStyleType)->toBe(ListStyleType::Square);
+});
+
+it('resolves the list-style shorthand end to end through DeclarationParser + ComputedStyle', function () {
+    [$doc, $map] = resolveDoc('ul { list-style: none }', '<body><ul><li>x</li></ul></body>');
+    $ul = $doc->querySelector('ul');
+    assert($ul !== null);
+    expect($map->get($ul)->listStyleType)->toBe(ListStyleType::None);
+});
+
+it('defaults the root (documentElement) list-style-type to the spec initial value disc', function () {
+    // Ningún <ul>/<ol> en el documento -- verifica que el INITIAL VALUE real de css-lists-3 §3
+    // (disc) es el que ComputedStyle::root() fija, no un valor arbitrario tipo None.
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->listStyleType)->toBe(ListStyleType::Disc);
+});
+
+// --- M7-T5 (CSS 2.2 §10.4/§10.7): min/max-width/height + overflow ------------------------------
+
+it('defaults minWidth/maxWidth/minHeight/maxHeight to null and overflow to visible when undeclared', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->minWidth)->toBeNull();
+    expect($style->maxWidth)->toBeNull();
+    expect($style->minHeight)->toBeNull();
+    expect($style->maxHeight)->toBeNull();
+    expect($style->overflow)->toBe('visible');
+});
+
+it('computes minWidth/maxWidth as LengthPercentage and minHeight/maxHeight as px-only Length', function () {
+    [$doc, $map] = resolveDoc(
+        'p { min-width: 50px; max-width: 80%; min-height: 30px; max-height: 200px }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->minWidth?->resolve(400.0))->toBe(50.0);
+    expect($style->maxWidth?->resolve(400.0))->toBe(320.0); // 80% of 400
+    expect($style->minHeight?->px)->toBe(30.0);
+    expect($style->maxHeight?->px)->toBe(200.0);
+});
+
+it('does not inherit minWidth/maxWidth/minHeight/maxHeight/overflow down the tree', function () {
+    [$doc, $map] = resolveDoc(
+        'div { min-width: 50px; max-width: 200px; min-height: 10px; max-height: 300px; overflow: hidden }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->minWidth)->toBeNull();
+    expect($style->maxWidth)->toBeNull();
+    expect($style->minHeight)->toBeNull();
+    expect($style->maxHeight)->toBeNull();
+    expect($style->overflow)->toBe('visible');
+});
+
+it('computes overflow: hidden', function () {
+    [$doc, $map] = resolveDoc('div { overflow: hidden }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->overflow)->toBe('hidden');
+});
+
+it('coerces overflow: scroll/auto to hidden end to end, with a warning surfaced through the WarningCollector', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('div { overflow: scroll }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->overflow)->toBe('hidden');
+    expect($warnings)->not->toBeEmpty();
 });

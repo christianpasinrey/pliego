@@ -480,6 +480,7 @@ final readonly class TableFormattingContext
             $stretched->borders,
             $stretched->atomic,
             $stretched->opacity,
+            $stretched->clipsChildren,
         );
     }
 
@@ -498,6 +499,7 @@ final readonly class TableFormattingContext
             $fragment->borders,
             $fragment->atomic,
             $fragment->opacity,
+            $fragment->clipsChildren,
         );
     }
 

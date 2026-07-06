@@ -4,7 +4,7 @@
         0.0,
         0.0,
         300.0,
-        96.0
+        144.0
     ],
     "background": null,
     "borders": null,
@@ -16,7 +16,7 @@
                 0.0,
                 0.0,
                 300.0,
-                96.0
+                144.0
             ],
             "background": null,
             "borders": null,
@@ -28,7 +28,7 @@
                         0.0,
                         0.0,
                         120.0,
-                        96.0
+                        144.0
                     ],
                     "background": null,
                     "borders": null,
@@ -52,7 +52,7 @@
                         132.0,
                         0.0,
                         168.0,
-                        96.0
+                        144.0
                     ],
                     "background": null,
                     "borders": null,
@@ -62,7 +62,7 @@
                             "type": "box",
                             "rect": [
                                 132.0,
-                                0.0,
+                                16.0,
                                 168.0,
                                 19.2
                             ],
@@ -74,14 +74,14 @@
                                     "type": "text",
                                     "rect": [
                                         132.0,
-                                        0.0,
+                                        16.0,
                                         54.38,
                                         19.2
                                     ],
                                     "text": "Sarria",
                                     "faceKey": "default:700:normal",
                                     "underline": false,
-                                    "baselineY": 16.45
+                                    "baselineY": 32.45
                                 }
                             ]
                         },
@@ -89,7 +89,7 @@
                             "type": "box",
                             "rect": [
                                 132.0,
-                                19.2,
+                                67.2,
                                 168.0,
                                 76.8
                             ],
@@ -101,53 +101,53 @@
                                     "type": "text",
                                     "rect": [
                                         132.0,
-                                        19.2,
+                                        67.2,
                                         156.22,
                                         19.2
                                     ],
                                     "text": "Un breve paragrafo ",
                                     "faceKey": "default:400:normal",
                                     "underline": false,
-                                    "baselineY": 35.65
+                                    "baselineY": 83.65
                                 },
                                 {
                                     "type": "text",
                                     "rect": [
                                         132.0,
-                                        38.4,
+                                        86.4,
                                         164.43,
                                         19.2
                                     ],
                                     "text": "di testo per riempire ",
                                     "faceKey": "default:400:normal",
                                     "underline": false,
-                                    "baselineY": 54.85
+                                    "baselineY": 102.85
                                 },
                                 {
                                     "type": "text",
                                     "rect": [
                                         132.0,
-                                        57.6,
+                                        105.6,
                                         145.27,
                                         19.2
                                     ],
                                     "text": "lo spazio flessibile ",
                                     "faceKey": "default:400:normal",
                                     "underline": false,
-                                    "baselineY": 74.05
+                                    "baselineY": 122.05
                                 },
                                 {
                                     "type": "text",
                                     "rect": [
                                         132.0,
-                                        76.8,
+                                        124.8,
                                         105.95,
                                         19.2
                                     ],
                                     "text": "della scheda.",
                                     "faceKey": "default:400:normal",
                                     "underline": false,
-                                    "baselineY": 93.25
+                                    "baselineY": 141.25
                                 }
                             ]
                         }

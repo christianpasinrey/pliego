@@ -1,0 +1,242 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        128.0
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                16.0,
+                300.0,
+                112.0
+            ],
+            "background": null,
+            "borders": null,
+            "atomic": false,
+            "children": [
+                {
+                    "type": "box",
+                    "rect": [
+                        40.0,
+                        16.0,
+                        260.0,
+                        19.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "text",
+                            "rect": [
+                                40.0,
+                                16.0,
+                                31.64,
+                                19.2
+                            ],
+                            "text": "Uno",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 32.45
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                22.56,
+                                16.0,
+                                9.44,
+                                19.2
+                            ],
+                            "text": "•",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 32.45
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        40.0,
+                        35.2,
+                        260.0,
+                        73.6
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "text",
+                            "rect": [
+                                40.0,
+                                35.2,
+                                30.45,
+                                19.2
+                            ],
+                            "text": "Dos",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 51.65
+                        },
+                        {
+                            "type": "box",
+                            "rect": [
+                                40.0,
+                                70.4,
+                                260.0,
+                                38.4
+                            ],
+                            "background": null,
+                            "borders": null,
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "box",
+                                    "rect": [
+                                        80.0,
+                                        70.4,
+                                        220.0,
+                                        19.2
+                                    ],
+                                    "background": null,
+                                    "borders": null,
+                                    "atomic": false,
+                                    "children": [
+                                        {
+                                            "type": "text",
+                                            "rect": [
+                                                80.0,
+                                                70.4,
+                                                65.6,
+                                                19.2
+                                            ],
+                                            "text": "Dos.uno",
+                                            "faceKey": "default:400:normal",
+                                            "underline": false,
+                                            "baselineY": 86.85
+                                        },
+                                        {
+                                            "type": "text",
+                                            "rect": [
+                                                62.56,
+                                                70.4,
+                                                9.44,
+                                                19.2
+                                            ],
+                                            "text": "◦",
+                                            "faceKey": "default:400:normal",
+                                            "underline": false,
+                                            "baselineY": 86.85
+                                        }
+                                    ]
+                                },
+                                {
+                                    "type": "box",
+                                    "rect": [
+                                        80.0,
+                                        89.6,
+                                        220.0,
+                                        19.2
+                                    ],
+                                    "background": null,
+                                    "borders": null,
+                                    "atomic": false,
+                                    "children": [
+                                        {
+                                            "type": "text",
+                                            "rect": [
+                                                80.0,
+                                                89.6,
+                                                63.81,
+                                                19.2
+                                            ],
+                                            "text": "Dos.dos",
+                                            "faceKey": "default:400:normal",
+                                            "underline": false,
+                                            "baselineY": 106.05
+                                        },
+                                        {
+                                            "type": "text",
+                                            "rect": [
+                                                62.56,
+                                                89.6,
+                                                9.44,
+                                                19.2
+                                            ],
+                                            "text": "◦",
+                                            "faceKey": "default:400:normal",
+                                            "underline": false,
+                                            "baselineY": 106.05
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                22.56,
+                                35.2,
+                                9.44,
+                                19.2
+                            ],
+                            "text": "•",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 51.65
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        40.0,
+                        108.8,
+                        260.0,
+                        19.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "text",
+                            "rect": [
+                                40.0,
+                                108.8,
+                                34.53,
+                                19.2
+                            ],
+                            "text": "Tres",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 125.25
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                22.56,
+                                108.8,
+                                9.44,
+                                19.2
+                            ],
+                            "text": "•",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 125.25
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

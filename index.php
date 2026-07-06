@@ -79,6 +79,14 @@ $sampleHtml = <<<'HTML'
   <p class="meta">Prenotazione n. 136961 — Cliente: Livia</p>
 
   <div class="price">Prezzo a persona: 296,33 €</div>
+  <a class="btn">Prenota ora</a>
+
+  <div class="band">Cosa portare</div>
+  <ul class="packing-list">
+    <li>Zaino da 30-40 litri</li>
+    <li>Scarpe da trekking già rodate</li>
+    <li>Borraccia e crema solare</li>
+  </ul>
 
   <div class="band">Itinerario</div>
 
@@ -141,6 +149,17 @@ body { font-size: 14px; color: #222222 }
 h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .meta { color: #666666; margin: 0 0 12px 0 }
 .price { background-color: var(--accent); padding: 14px; font-size: 20px; margin: 0 0 14px 0 }
+/* M7: display:inline-block finally paints its own bg+border+padding IN LINE (real inline boxes,
+ * M7-T4) -- the exact Bootstrap ".btn" pattern that used to flatten to plain text before M7. */
+.btn {
+  display: inline-block;
+  background-color: var(--brand);
+  color: white;
+  padding: calc(var(--gap) * .375) calc(var(--gap) * .75);
+  border: 1px solid var(--brand);
+  margin: 0 0 14px 0;
+}
+.packing-list { margin: 0 0 14px 0 }
 .band { background-color: var(--accent); padding: 10px; font-size: 18px; margin: 0 0 10px 0 }
 .card { background-color: #f4f4f4; padding: 12px; margin: 0 0 10px 0 }
 .photo-card { display: flex; gap: 12px }

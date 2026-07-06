@@ -29,4 +29,19 @@ interface Canvas
      * viaja como parámetro aparte hasta el ExtGState (ISO 32000-1 §8.4.5, ver PdfCanvas).
      */
     public function drawImage(Rect $rectPx, string $imageKey, float $opacity = 1.0): void;
+
+    /**
+     * M7-T5 (css-overflow-3): abre un scope de recorte PDF (`q` + `x y w h re W n`, ISO 32000-1
+     * §8.5.4) al rect BORDER-BOX $rect (px CSS) — TODO lo pintado después de esta llamada, hasta
+     * el restoreClip() que la cierra, queda recortado a ese rectángulo. Usado por Paint\Painter
+     * para envolver el pintado de los DESCENDIENTES de un BoxFragment con $clipsChildren === true
+     * (overflow:hidden) — el fondo/borde de la propia caja NO necesita este scope (ya coincide con
+     * $rect exactamente). Debe emparejarse SIEMPRE con una llamada a restoreClip() inmediatamente
+     * después de pintar ese subárbol (mismo contrato q/Q que el resto de scopes de este Canvas).
+     */
+    public function clipRect(Rect $rect): void;
+
+    /** Cierra el scope de recorte abierto por la llamada a clipRect() inmediatamente anterior
+     * (`Q`) — ver su docblock. */
+    public function restoreClip(): void;
 }

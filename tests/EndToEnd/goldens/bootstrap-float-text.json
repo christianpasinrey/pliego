@@ -1,0 +1,157 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        150.4
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                260.0,
+                150.4
+            ],
+            "background": null,
+            "borders": null,
+            "atomic": false,
+            "children": [
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        0.0,
+                        60.0,
+                        45.0
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "image",
+                            "rect": [
+                                0.0,
+                                0.0,
+                                60.0,
+                                45.0
+                            ],
+                            "imageKey": "tiny.jpg"
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        16.0,
+                        260.0,
+                        134.4
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "text",
+                            "rect": [
+                                72.0,
+                                16.0,
+                                169.98,
+                                19.2
+                            ],
+                            "text": "lorem ipsum dolor sit ",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 32.45
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                72.0,
+                                35.2,
+                                146.59,
+                                19.2
+                            ],
+                            "text": "amet lorem ipsum ",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 51.65
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                0.0,
+                                54.4,
+                                216.57,
+                                19.2
+                            ],
+                            "text": "dolor sit amet lorem ipsum ",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 70.85
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                0.0,
+                                73.6,
+                                216.57,
+                                19.2
+                            ],
+                            "text": "dolor sit amet lorem ipsum ",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 90.05
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                0.0,
+                                92.8,
+                                216.57,
+                                19.2
+                            ],
+                            "text": "dolor sit amet lorem ipsum ",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 109.25
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                0.0,
+                                112.0,
+                                216.57,
+                                19.2
+                            ],
+                            "text": "dolor sit amet lorem ipsum ",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 128.45
+                        },
+                        {
+                            "type": "text",
+                            "rect": [
+                                0.0,
+                                131.2,
+                                111.49,
+                                19.2
+                            ],
+                            "text": "dolor sit amet",
+                            "faceKey": "default:400:normal",
+                            "underline": false,
+                            "baselineY": 147.65
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

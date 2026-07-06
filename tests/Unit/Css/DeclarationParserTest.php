@@ -32,6 +32,46 @@ it('accepts negative margin (valid per CSS 2.2)', function () {
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
+// --- M7-T1 housekeeping, finding 3: padding shorthand sign-check parity with the longhands -----
+
+it('drops the whole padding shorthand with one warning when the single value is negative', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding', '-5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('drops the whole padding shorthand with one warning when only one of several values is negative', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding', '10px -5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('accepts an all-non-negative padding shorthand unchanged', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding', '10px 5%');
+    expect($result)->toEqual([
+        'padding-top' => LengthPercentage::px(10.0),
+        'padding-right' => LengthPercentage::percent(5.0),
+        'padding-bottom' => LengthPercentage::px(10.0),
+        'padding-left' => LengthPercentage::percent(5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still accepts a negative margin shorthand (margin stays permissive, unlike padding)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', '10px -5px');
+    expect($result)->toEqual([
+        'margin-top' => LengthPercentage::px(10.0),
+        'margin-right' => LengthPercentage::px(-5.0),
+        'margin-bottom' => LengthPercentage::px(10.0),
+        'margin-left' => LengthPercentage::px(-5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
 it('parses font-weight keywords and numeric 400/700', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('font-weight', 'normal'))->toBe(['font-weight' => 400]);
@@ -724,4 +764,227 @@ it('warns on a non-numeric opacity value', function () {
     $result = $parser->parse('opacity', 'transparent');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M7-T2: font-family becomes a fallback list -------------------------------------------
+
+it('parses a single unquoted font-family into a one-element list', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-family', 'Arial'))->toBe(['font-family' => ['Arial']]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('splits a font-family fallback list on commas, trimming quotes and whitespace per name', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-family', 'Arial, "Helvetica Neue", sans-serif');
+    expect($result)->toBe(['font-family' => ['Arial', 'Helvetica Neue', 'sans-serif']]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('drops empty entries from a malformed font-family list without warning', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-family', ' , Arial ,, '))->toBe(['font-family' => ['Arial']]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts a single-quoted font-family name', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-family', "'Courier New'"))->toBe(['font-family' => ['Courier New']]);
+});
+
+// --- M7-T2: white-space (minimal: normal|pre) ----------------------------------------------
+
+it('parses white-space: normal and pre', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('white-space', 'normal'))->toBe(['white-space' => 'normal']);
+    expect($parser->parse('white-space', 'pre'))->toBe(['white-space' => 'pre']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported white-space keyword (nowrap/pre-wrap/pre-line out of scope M7)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('white-space', 'nowrap');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M7-T3: list-style-type / list-style-position / list-style shorthand (css-lists-3 §3) -----
+
+it('parses all 5 supported list-style-type keywords', function () {
+    $parser = new DeclarationParser();
+    foreach (['disc', 'circle', 'square', 'decimal', 'none'] as $keyword) {
+        expect($parser->parse('list-style-type', $keyword))->toBe(['list-style-type' => $keyword]);
+    }
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported list-style-type keyword', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style-type', 'georgian');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts list-style-position: outside silently (no warning; the value is never consumed by ComputedStyle)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('list-style-position', 'outside'))->toBe(['list-style-position' => 'outside']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on list-style-position: inside (unsupported in M7)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style-position', 'inside');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('expands the list-style shorthand to list-style-type when only a type keyword is given', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('list-style', 'square'))->toBe(['list-style-type' => 'square']);
+    expect($parser->parse('list-style', 'none'))->toBe(['list-style-type' => 'none']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts "outside" alongside a type in the list-style shorthand (default position, no-op)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('list-style', 'square outside'))->toBe(['list-style-type' => 'square']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and drops the whole list-style shorthand when "inside" is present (position unsupported)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style', 'square inside');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns and drops the whole list-style shorthand on a list-style-image value (unsupported in M7)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style', 'url(bullet.png)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M7-T5 (CSS 2.2 §10.4/§10.7): min-width/max-width/min-height/max-height + overflow ---------
+
+it('parses min-width/max-width as length-percentage, same as width', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('min-width', '50px'))->toEqual(['min-width' => LengthPercentage::px(50.0)]);
+    expect($parser->parse('max-width', '80%'))->toEqual(['max-width' => LengthPercentage::percent(80.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses min-height/max-height as PX-ONLY lengths (no percentage, unlike min/max-width)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('min-height', '30px'))->toEqual(['min-height' => Length::px(30.0)]);
+    expect($parser->parse('max-height', '200px'))->toEqual(['max-height' => Length::px(200.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a percentage min-height/max-height with a warning (containing height not tracked)', function () {
+    foreach (['min-height', 'max-height'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '50%');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects negative min-width/max-width/min-height/max-height with a warning', function () {
+    foreach (['min-width', 'max-width', 'min-height', 'max-height'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '-5px');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('silently drops "min-width/min-height: auto" and "max-width/max-height: none" (both collapse to the initial no-constraint value)', function () {
+    foreach (['min-width' => 'auto', 'min-height' => 'auto', 'max-width' => 'none', 'max-height' => 'none'] as $property => $keyword) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, $keyword);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->toBeEmpty();
+    }
+});
+
+it('parses overflow: visible/hidden as-is', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('overflow', 'visible'))->toBe(['overflow' => 'visible']);
+    expect($parser->parse('overflow', 'hidden'))->toBe(['overflow' => 'hidden']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('coerces overflow: scroll/auto to hidden with a warning (no real scrolling in a print engine)', function () {
+    foreach (['scroll', 'auto'] as $keyword) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('overflow', $keyword);
+        expect($result)->toBe(['overflow' => 'hidden']);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects an unsupported overflow keyword with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('overflow', 'clip');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M7-T6 (CSS 2.2 §9.4.3/§9.5, floats + position reducido) -----------------------------------
+
+it('parses float: left/right/none', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('float', 'left'))->toBe(['float' => 'left']);
+    expect($parser->parse('float', 'right'))->toBe(['float' => 'right']);
+    expect($parser->parse('float', 'none'))->toBe(['float' => 'none']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses clear: left/right/both/none', function () {
+    $parser = new DeclarationParser();
+    foreach (['left', 'right', 'both', 'none'] as $keyword) {
+        expect($parser->parse('clear', $keyword))->toBe(['clear' => $keyword]);
+    }
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses position: static/relative/absolute', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('position', 'static'))->toBe(['position' => 'static']);
+    expect($parser->parse('position', 'relative'))->toBe(['position' => 'relative']);
+    expect($parser->parse('position', 'absolute'))->toBe(['position' => 'absolute']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on position: sticky and position: fixed (both out of scope, discarded)', function () {
+    foreach (['sticky', 'fixed'] as $keyword) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('position', $keyword);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->toContain("Unsupported keyword for position: $keyword");
+    }
+});
+
+it('parses left/right as length-percentage (same as width), negative allowed', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('left', '10px'))->toHaveKey('left');
+    expect($parser->parse('right', '50%'))->toHaveKey('right');
+    expect($parser->parse('left', '-10px'))->toHaveKey('left');
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses top/bottom as PX-ONLY lengths (no percentage), negative allowed (unlike height)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('top', '10px'))->toHaveKey('top');
+    expect($parser->parse('top', '-10px'))->toHaveKey('top');
+    expect($parser->parse('bottom', '-5px'))->toHaveKey('bottom');
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a percentage top/bottom with a warning (containing height not tracked, same as height)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('top', '50%');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toContain('Unsupported length for top: 50%');
 });

@@ -15,7 +15,7 @@ namespace Pliego\Css;
  * parseo — nunca en matches(), que puede invocarse miles de veces (una vez por elemento del
  * documento por regla) y no debe inundar de warnings repetidos.
  */
-final readonly class SelectorParser
+final class SelectorParser
 {
     private const string COMBINATOR_CHARS = '>+~';
     /** selectors-3 §6.3: operadores de comparación de [attr]. */
@@ -31,10 +31,23 @@ final readonly class SelectorParser
     /** Pseudo-clases funcionales (`:foo(...)`) que EXIGEN argumento. */
     private const array FUNCTIONAL_PSEUDO_CLASSES = ['not', 'nth-child'];
 
-    public function __construct(private ?WarningCollector $warnings = null) {}
+    /**
+     * M7-T1 housekeeping (review finding: double warning emission): un ":not(compound)" inválido
+     * (más de un selector simple, o :not() anidado) ya emite su PROPIO warning específico y más
+     * útil dentro de parseNegationArgument() antes de devolver null; ese null se propaga hasta
+     * parseCompound() y de ahí hasta el bucle de parse(), que — sin este flag — añadía TAMBIÉN el
+     * warning genérico "Invalid selector syntax", dejando dos warnings para un único selector
+     * inválido. Se resetea al empezar cada parse() (una instancia de SelectorParser se reutiliza
+     * para muchos selectores de la misma hoja) y se consulta justo antes de emitir el genérico:
+     * si ya hay uno específico, el genérico se omite y el flag se limpia.
+     */
+    private bool $specificWarningAlreadyEmitted = false;
+
+    public function __construct(private readonly ?WarningCollector $warnings = null) {}
 
     public function parse(string $selector): ?ComplexSelector
     {
+        $this->specificWarningAlreadyEmitted = false;
         $input = trim($selector);
         if ($input === '') {
             $this->warnings?->addWarning('Invalid selector syntax: empty selector');
@@ -52,6 +65,10 @@ final readonly class SelectorParser
         while (true) {
             $compound = $this->parseCompound($input, $pos, $length);
             if ($compound === null) {
+                if ($this->specificWarningAlreadyEmitted) {
+                    $this->specificWarningAlreadyEmitted = false;
+                    return null;
+                }
                 $this->warnings?->addWarning("Invalid selector syntax: \"$selector\"");
                 return null;
             }
@@ -93,6 +110,13 @@ final readonly class SelectorParser
         return new ComplexSelector($compounds);
     }
 
+    /**
+     * @phpstan-impure PHPStan otherwise remembers $this->specificWarningAlreadyEmitted as
+     * unconditionally false across this call and flags the check in parse() (right after calling
+     * this method) as an "always false" tautology — but parseCompound() can reach
+     * parseNegationArgument()/parseAttribute() several frames down and set that flag to true (see
+     * their own doc comments) before returning null.
+     */
     private function parseCompound(string $input, int &$pos, int $length): ?CompoundSelector
     {
         $universal = false;
@@ -195,7 +219,13 @@ final readonly class SelectorParser
         if ($value === null) {
             return null;
         }
-        $this->skipWhitespace($input, $pos, $length);
+        // M7-T1 housekeeping (Selectors-4 §6.3.1 grammar: <attr-matcher> <wq-name> <ws> <string>
+        // <ws> ['i' | 'I']? <ws> — the 'i'/'I' flag is a SEPARATE token from the string, so the
+        // grammar REQUIRES whitespace between them): capture whether skipWhitespace() actually
+        // consumed anything right here, so the check below can tell "v" i]" (valid, whitespace
+        // present) apart from "v"i]" (invalid, flag glued to the string — a parse error, not a
+        // silently-accepted flag).
+        $hadWhitespaceBeforeFlag = $this->skipWhitespace($input, $pos, $length);
 
         // Selectors-4 §6.3.1 (aceptado aquí por compatibilidad, fuera de selectors-3): flag 'i'/'I'
         // de case-insensitive matching. M6 nunca lo honra de verdad — se acepta la sintaxis pero el
@@ -204,6 +234,14 @@ final readonly class SelectorParser
         if ($pos < $length && ($input[$pos] === 'i' || $input[$pos] === 'I')) {
             $peek = $pos + 1;
             if ($peek >= $length || !$this->isIdentChar($input[$peek])) {
+                if (!$hadWhitespaceBeforeFlag) {
+                    $this->warnings?->addWarning(
+                        "Invalid attribute selector (the case-insensitivity flag requires whitespace "
+                        . "before it): [$name$operator\"$value\"$input[$pos]]",
+                    );
+                    $this->specificWarningAlreadyEmitted = true;
+                    return null;
+                }
                 $caseFlag = $input[$pos];
                 $pos++;
                 $this->skipWhitespace($input, $pos, $length);
@@ -345,6 +383,7 @@ final readonly class SelectorParser
             $this->warnings?->addWarning(
                 ":not() argument must be a single simple selector (no compounds, no nesting): \"$argument\"",
             );
+            $this->specificWarningAlreadyEmitted = true;
             return null;
         }
         return $compound;

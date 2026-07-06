@@ -643,3 +643,203 @@ it('treats a table as a direct flex item, never merged into the anonymous text-r
     expect($flex->children)->toHaveCount(1);
     expect($flex->children[0])->toBeInstanceOf(TableBox::class);
 });
+
+// --- M7-T2: white-space:pre (UA default on <pre>, ver Style\UserAgentStylesheet) --------------
+
+it('white-space:pre preserves internal whitespace and turns literal newlines into hard line breaks', function () {
+    $html = "<body><pre>line one\n  indented line\nline three</pre></body>";
+    $root = buildTree($html);
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    expect($pre->tag)->toBe('pre');
+    expect($pre->style->whiteSpace)->toBe('pre');
+
+    // 3 líneas -> 3 TextRun separados por 2 LineBreakRun reales (BoxTreeBuilder::textRunTokensFor()).
+    expect($pre->children)->toHaveCount(5);
+    [$l1, $br1, $l2, $br2, $l3] = $pre->children;
+    assert($l1 instanceof TextRun && $l2 instanceof TextRun && $l3 instanceof TextRun);
+    expect($br1)->toBeInstanceOf(LineBreakRun::class);
+    expect($br2)->toBeInstanceOf(LineBreakRun::class);
+    expect($l1->text)->toBe('line one');
+    // Los dos espacios iniciales de "  indented line" sobreviven -- collapseInternalWhitespace()
+    // NUNCA se llama bajo white-space:pre (ver textRunTokensFor()).
+    expect($l2->text)->toBe('  indented line');
+    expect($l3->text)->toBe('line three');
+});
+
+it('a blank line inside a <pre> (two consecutive newlines) produces no empty TextRun, just the two LineBreakRun', function () {
+    $html = "<body><pre>uno\n\ndos</pre></body>";
+    $root = buildTree($html);
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    expect($pre->children)->toHaveCount(4);
+    [$l1, $br1, $br2, $l2] = $pre->children;
+    assert($l1 instanceof TextRun && $l2 instanceof TextRun);
+    expect($br1)->toBeInstanceOf(LineBreakRun::class);
+    expect($br2)->toBeInstanceOf(LineBreakRun::class);
+    expect($l1->text)->toBe('uno');
+    expect($l2->text)->toBe('dos');
+});
+
+it('inherits white-space:pre into a nested inline element (e.g. <code> inside <pre>)', function () {
+    $html = "<body><pre><code>a\nb</code></pre></body>";
+    $root = buildTree($html);
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    // <code> es inline (INLINE_TAGS): su contenido se aplana en la secuencia del <pre>, pero
+    // conserva white-space:pre por HERENCIA (ver ComputedStyle::compute()).
+    expect($pre->children)->toHaveCount(3);
+    [$l1, $br, $l2] = $pre->children;
+    assert($l1 instanceof TextRun && $l2 instanceof TextRun);
+    expect($br)->toBeInstanceOf(LineBreakRun::class);
+    expect($l1->style->whiteSpace)->toBe('pre');
+    expect($l1->text)->toBe('a');
+    expect($l2->text)->toBe('b');
+});
+
+it('a normal (non-pre) paragraph is unaffected: internal whitespace still collapses to one space', function () {
+    $root = buildTree('<body><p>uno    dos</p></body>');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $text = $p->children[0];
+    assert($text instanceof TextRun);
+    expect($text->text)->toBe('uno dos');
+    expect($p->style->whiteSpace)->toBe('normal');
+});
+
+// --- M7-T2: kbd/samp/sub/sup become inline; sub/sup warn (vertical-align deferred to M8) ------
+
+it('treats kbd/samp as inline (monospace via the UA stylesheet), not block', function () {
+    $root = buildTree('<body><p>Press <kbd>Ctrl</kbd> or <samp>OK</samp>.</p></body>');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    // Todo el contenido de <p> se aplana a una única secuencia de TextRun (kbd/samp inline,
+    // fusionados/colapsados por collapse() igual que cualquier otro inline sin borde/fondo).
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+});
+
+it('warns exactly once per <sub>/<sup> occurrence and still renders their text inline', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings('<body><p>H<sub>2</sub>O<sup>+</sup></p></body>', __DIR__);
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+    $subWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, '<sub>')));
+    $supWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, '<sup>')));
+    expect($subWarnings)->toHaveCount(1);
+    expect($supWarnings)->toHaveCount(1);
+});
+
+// --- M7 final-review Finding D: float/position on an inline element warn (no behavioral change) -
+
+it('Finding D: float on an inline element (direct child) warns once and still flattens to plain inline text', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span class="floaty">middle</span> after</p></body>',
+        __DIR__,
+        '.floaty { float: left }',
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    // No behavioral change: still flattens to plain TextRun(s), float never applies to an inline
+    // element in this engine (InlineFlowContext never looks at $style->float).
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on an inline-level element')));
+    expect($floatWarnings)->toHaveCount(1);
+});
+
+it('Finding D: float on a NESTED inline element (descendant, via collectInline()) warns once too', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><span>outer <strong class="floaty">inner</strong></span></p></body>',
+        __DIR__,
+        '.floaty { float: left }',
+    );
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on an inline-level element')));
+    expect($floatWarnings)->toHaveCount(1);
+});
+
+it('Finding D: position:relative on an inline element warns once and applies no offset (no behavioral change)', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span class="rel">middle</span> after</p></body>',
+        __DIR__,
+        '.rel { position: relative; top: 50px; left: 50px }',
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on an inline-level element')));
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: position:absolute on an inline element warns once too', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span class="abs">middle</span> after</p></body>',
+        __DIR__,
+        '.abs { position: absolute; top: 10px }',
+    );
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on an inline-level element')));
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: float/position on an inline element only warn ONCE each even with multiple occurrences (addWarningOnce dedup)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><span class="a">one</span> <span class="b">two</span> <span class="c">three</span></p></body>',
+        __DIR__,
+        '.a { float: left } .b { float: right } .c { position: relative; top: 5px }',
+    );
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on an inline-level element')));
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on an inline-level element')));
+    expect($floatWarnings)->toHaveCount(1);
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: a plain inline element with neither float nor position emits neither warning (no false positive)', function () {
+    [, $warnings] = buildTreeCollectingWarnings('<body><p>before <span>middle</span> after</p></body>', __DIR__);
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline-level element'));
+    expect($relevant)->toBeEmpty();
+});
+
+// --- M7-T3: <li> display:list-item + <ol start> ------------------------------------------------
+
+it('gives <li> a Display::ListItem BlockBox via the UA stylesheet default', function () {
+    $root = buildTree('<body><ul><li>a</li></ul></body>');
+    $ul = $root->children[0];
+    assert($ul instanceof BlockBox);
+    $li = $ul->children[0];
+    assert($li instanceof BlockBox);
+    expect($li->style->display)->toBe(Display::ListItem);
+});
+
+it('leaves BlockBox::$listStart null for an <ol> without a start attribute', function () {
+    $root = buildTree('<body><ol><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBeNull();
+});
+
+it('parses a numeric start attribute on <ol> into BlockBox::$listStart', function () {
+    $root = buildTree('<body><ol start="5"><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBe(5);
+});
+
+it('parses a negative start attribute on <ol>', function () {
+    $root = buildTree('<body><ol start="-3"><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBe(-3);
+});
+
+it('treats a non-numeric start attribute on <ol> as absent (null)', function () {
+    $root = buildTree('<body><ol start="abc"><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBeNull();
+});

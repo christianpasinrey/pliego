@@ -4,17 +4,25 @@ declare(strict_types=1);
 
 namespace Pliego\Box;
 
+use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\WarningCollector;
 use Pliego\Image\ImageException;
 use Pliego\Image\ImageLoader;
 use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
+use Pliego\Style\Position;
 use Pliego\Style\StyleMap;
 
+/**
+ * M7-T4 (css-inline-3 reducido): "¿es este tag inline?" ya NO se decide aquí con una lista de
+ * tags hardcoded (el antiguo INLINE_TAGS, presente desde M1 hasta M7-T3) -- migró a
+ * Style\UserAgentStylesheet como una regla CSS real (`span, strong, ... { display: inline }`),
+ * consultada vía ComputedStyle::$display === Display::Inline en collectChildren()/collectInline()
+ * de más abajo. Ver el docblock de esa hoja para el razonamiento completo de la migración.
+ */
 final class BoxTreeBuilder
 {
-    private const array INLINE_TAGS = ['span', 'strong', 'em', 'b', 'i', 'a', 'small', 'code', 'u'];
-
     public function __construct(
         private readonly ImageLoader $imageLoader,
         private readonly WarningCollector $warnings,
@@ -34,7 +42,21 @@ final class BoxTreeBuilder
         if ($style->display === Display::Flex) {
             $children = $this->wrapAnonymousFlexItems($children, $style);
         }
-        return new BlockBox($style, $children, strtolower($element->tagName));
+        return new BlockBox($style, $children, strtolower($element->tagName), self::parseListStart($element));
+    }
+
+    /** M7-T3 (css-lists-3 §3, atributo HTML `start` de <ol>): entero con signo opcional; ausente
+     * o no puramente numérico -> null (= "empieza en 1", el default real per HTML). No se gatea
+     * por tag (leerlo en cualquier elemento es inocuo: solo el BlockBox de un <ol> real llega a
+     * consultarse para esto, ver BlockFlowContext) — mismo criterio de permisividad que
+     * parseColspan(), a diferencia de rowspan (que sí avisa por su sola presencia). */
+    private static function parseListStart(\Dom\Element $element): ?int
+    {
+        $value = $element->getAttribute('start');
+        if ($value === null || preg_match('/^-?\d+$/', trim($value)) !== 1) {
+            return null;
+        }
+        return (int) trim($value);
     }
 
     /**
@@ -48,17 +70,21 @@ final class BoxTreeBuilder
      * Display es Table construye un TableBox (buildTable()) en vez de recursar como BlockBox
      * plano — ver buildChildBox().
      *
-     * @return list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox>
+     * @return list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd>
      */
     private function collectChildren(\Dom\Element $element, StyleMap $styles, ComputedStyle $style): array
     {
         $children = [];
         /**
-         * @var list<TextRun|LineBreakRun|ImageBox> $pending secuencia inline pendiente de
-         *     colapsar (M1-T4). Puede incluir ImageBox (M3-T2 defect fix): una <img> anidada
-         *     dentro de un elemento inline se "hoistea" aquí como token de la secuencia — ver
-         *     collectInline() — y collapse() la trata como separador de secuencia, igual que un
-         *     LineBreakRun.
+         * @var list<TextRun|LineBreakRun|ImageBox|InlineBoxStart|InlineBoxEnd|BlockBox> $pending
+         *     secuencia inline pendiente de colapsar (M1-T4). Puede incluir ImageBox (M3-T2 defect
+         *     fix): una <img> anidada dentro de un elemento inline se "hoistea" aquí como token de
+         *     la secuencia — ver collectInline() — y collapse() la trata como separador de
+         *     secuencia, igual que un LineBreakRun. M7-T4: += InlineBoxStart/InlineBoxEnd (caja
+         *     inline real, ver hasVisibleInlineBox()) y BlockBox (un elemento display:inline-block
+         *     ENTERO, construido vía buildBlock() como cualquier bloque normal, pero colocado AQUÍ
+         *     —en la secuencia de runs— como token atómico en vez de en $children, para que
+         *     InlineFlowContext lo trate como un "glifo" gigante dentro de la línea).
          */
         $pending = [];
         $flush = function () use (&$children, &$pending): void {
@@ -69,7 +95,9 @@ final class BoxTreeBuilder
         };
         foreach ($element->childNodes as $node) {
             if ($node instanceof \Dom\Text) {
-                $pending[] = new TextRun(self::collapseInternalWhitespace($node->textContent ?? ''), $style);
+                foreach (self::textRunTokensFor($node->textContent ?? '', $style) as $token) {
+                    $pending[] = $token;
+                }
                 continue;
             }
             if (!$node instanceof \Dom\Element) {
@@ -92,8 +120,27 @@ final class BoxTreeBuilder
                 }
                 continue;
             }
-            if (in_array($tag, self::INLINE_TAGS, true)) {
+            // M7-T4: display:inline-block es un token ATÓMICO dentro de la MISMA secuencia de
+            // runs que TextRun/LineBreakRun (nunca se "flushea" a $children como un bloque
+            // normal) — buildBlock() reutiliza el pipeline COMPLETO (collectChildren recursivo,
+            // igual que cualquier hijo bloque real), la única diferencia es DÓNDE aterriza el
+            // BlockBox resultante. Se comprueba ANTES que Display::Inline porque ambos son
+            // mutuamente excluyentes (un elemento no puede tener los dos display a la vez).
+            if ($childStyle->display === Display::InlineBlock) {
+                $pending[] = $this->buildBlock($node, $styles);
+                continue;
+            }
+            if ($childStyle->display === Display::Inline) {
+                $this->warnIfUnsupportedSubOrSup($tag);
+                $this->warnIfFloatOrPositionOnInline($childStyle);
+                $hasBox = self::hasVisibleInlineBox($childStyle);
+                if ($hasBox) {
+                    $pending[] = new InlineBoxStart($childStyle, $tag);
+                }
                 $this->collectInline($node, $styles, $pending);
+                if ($hasBox) {
+                    $pending[] = new InlineBoxEnd();
+                }
                 continue;
             }
             $flush();
@@ -101,6 +148,39 @@ final class BoxTreeBuilder
         }
         $flush();
         return $children;
+    }
+
+    /**
+     * M7-T4 (css-inline-3 reducido, fast path CRÍTICO para estabilidad de goldens): un elemento
+     * Display::Inline SIN ninguna propiedad de caja visible (sin background, sin borde visible en
+     * ningún lado, sin padding no-cero en ningún lado) NUNCA produce InlineBoxStart/InlineBoxEnd —
+     * su contenido se sigue aplanando exactamente igual que ANTES de esta tarea (M1-M7-T3: un
+     * <span>/<strong>/... "normal", sin CSS de caja propio, como los usados en TODOS los goldens
+     * existentes) — collectChildren()/collectInline() nunca llaman a este método salvo para
+     * decidir SI envolver, así que el resultado de collapse() para un documento sin cajas inline
+     * visibles es BYTE-IDÉNTICO al de antes de esta tarea (misma secuencia de TextRun/LineBreakRun/
+     * ImageBox, sin ningún token nuevo intercalado que pudiera romper la fusión de runs adyacentes
+     * del mismo estilo, ver collapse()).
+     *
+     * Padding VERTICAL (top/bottom) se incluye en el chequeo aunque, por sí solo (sin background
+     * ni borde), no produce ninguna diferencia observable (ver InlineFlowContext: solo el padding
+     * HORIZONTAL afecta el ancho de línea) — incluirlo de todas formas es inofensivo (simplemente
+     * hace el fast path un pelín menos agresivo en ese caso límite) y evita tener que documentar
+     * una tercera categoría de "padding visible pero sin efecto".
+     */
+    private static function hasVisibleInlineBox(ComputedStyle $style): bool
+    {
+        if ($style->backgroundColor !== null) {
+            return true;
+        }
+        foreach ([$style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft] as $side) {
+            if ($side->style === BorderStyle::Solid && $side->widthPx > 0.0) {
+                return true;
+            }
+        }
+        $nonZero = static fn(LengthPercentage $lp): bool => $lp->calc !== null || $lp->value !== 0.0;
+        return $nonZero($style->paddingLeft) || $nonZero($style->paddingRight)
+            || $nonZero($style->paddingTop) || $nonZero($style->paddingBottom);
     }
 
     /**
@@ -356,13 +436,21 @@ final class BoxTreeBuilder
      * contenedor (M4-T1: ninguna de esas hereda), así que el anónimo nunca es él mismo un flex
      * container aunque su padre lo sea.
      *
-     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
+     * M7-T4: += InlineBoxStart/InlineBoxEnd (caja inline real) y BlockBox-con-display:InlineBlock
+     * (token atómico de inline-block, ver collectChildren()) al tramo "suelto" que se envuelve en
+     * el anónimo — TRATADOS IGUAL que TextRun/LineBreakRun (nunca son, por sí mismos, un flex item
+     * directo): un `<div style="display:flex"><span class="badge">x</span></div>` o un
+     * `<div style="display:flex">texto <a class="btn">click</a></div>` deben coalescer su
+     * contenido inline suelto en UN ÚNICO BlockBox anónimo, exactamente igual que texto plano —
+     * distinguido de un BlockBox flex item REAL únicamente por su propio $style->display.
+     *
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd> $children
      * @return list<BlockBox|ImageBox|TableBox>
      */
     private function wrapAnonymousFlexItems(array $children, ComputedStyle $containerStyle): array
     {
         $items = [];
-        /** @var list<TextRun|LineBreakRun> $run */
+        /** @var list<TextRun|LineBreakRun|InlineBoxStart|InlineBoxEnd|BlockBox> $run */
         $run = [];
         $flushRun = function () use (&$items, &$run, $containerStyle): void {
             if ($run === []) {
@@ -373,7 +461,13 @@ final class BoxTreeBuilder
             $run = [];
         };
         foreach ($children as $child) {
-            if ($child instanceof TextRun || $child instanceof LineBreakRun) {
+            if ($child instanceof TextRun || $child instanceof LineBreakRun
+                || $child instanceof InlineBoxStart || $child instanceof InlineBoxEnd
+            ) {
+                $run[] = $child;
+                continue;
+            }
+            if ($child instanceof BlockBox && $child->style->display === Display::InlineBlock) {
                 $run[] = $child;
                 continue;
             }
@@ -462,20 +556,34 @@ final class BoxTreeBuilder
      * RenderReport — el consumidor del reporte necesita saber que el layout aquí no es fiel al
      * documento fuente.
      *
-     * @param list<TextRun|LineBreakRun|ImageBox> $pending
+     * M7-T4: += InlineBoxStart/InlineBoxEnd para un descendiente Display::Inline con caja visible
+     * propia (mismo criterio que collectChildren(), ver hasVisibleInlineBox()) y += BlockBox para
+     * un descendiente display:inline-block (token atómico, igual tratamiento que en
+     * collectChildren()) — un <a class="btn">, aunque esté anidado DENTRO de otro inline
+     * (`<span><a class="btn">...</a></span>`), se resuelve exactamente igual sea cual sea su
+     * profundidad de anidamiento. Un descendiente que NO sea Display::Inline ni InlineBlock (p.ej.
+     * un bloque anidado por error dentro de un inline, HTML inválido) conserva el comportamiento
+     * permisivo heredado de M0/M1: se recorre igualmente, aplanando su contenido, SIN envolverlo en
+     * ningún token de caja (divergencia documentada, fuera de alcance — ver el brief, que solo
+     * pide cubrir el caso Inline/InlineBlock real).
+     *
+     * @param list<TextRun|LineBreakRun|ImageBox|InlineBoxStart|InlineBoxEnd|BlockBox> $pending
      */
     private function collectInline(\Dom\Element $element, StyleMap $styles, array &$pending): void
     {
         $style = $styles->get($element);
         foreach ($element->childNodes as $node) {
             if ($node instanceof \Dom\Text) {
-                $pending[] = new TextRun(self::collapseInternalWhitespace($node->textContent ?? ''), $style);
+                foreach (self::textRunTokensFor($node->textContent ?? '', $style) as $token) {
+                    $pending[] = $token;
+                }
                 continue;
             }
             if (!$node instanceof \Dom\Element) {
                 continue;
             }
-            if ($styles->get($node)->display === Display::None) {
+            $childStyle = $styles->get($node);
+            if ($childStyle->display === Display::None) {
                 continue;
             }
             $tag = strtolower($node->tagName);
@@ -490,19 +598,112 @@ final class BoxTreeBuilder
                 // mostrar.
                 $message = 'inline image hoisted to block level (inline replaced boxes not supported yet)';
                 $this->warnings->addWarning($src === '' ? $message : "$message: $src");
-                $imageBox = $this->buildImage($node, $styles->get($node));
+                $imageBox = $this->buildImage($node, $childStyle);
                 if ($imageBox !== null) {
                     $pending[] = $imageBox;
                 }
                 continue;
             }
+            if ($childStyle->display === Display::InlineBlock) {
+                $pending[] = $this->buildBlock($node, $styles);
+                continue;
+            }
+            $this->warnIfUnsupportedSubOrSup($tag);
+            if ($childStyle->display === Display::Inline) {
+                $this->warnIfFloatOrPositionOnInline($childStyle);
+            }
+            $hasBox = $childStyle->display === Display::Inline && self::hasVisibleInlineBox($childStyle);
+            if ($hasBox) {
+                $pending[] = new InlineBoxStart($childStyle, $tag);
+            }
             $this->collectInline($node, $styles, $pending);
+            if ($hasBox) {
+                $pending[] = new InlineBoxEnd();
+            }
+        }
+    }
+
+    /** M7-T2: sub/sup se soportan como texto inline plano (ver INLINE_TAGS) pero SIN el
+     * desplazamiento vertical de vertical-align:sub/super (fuera de alcance, M8) -- se avisa en
+     * cada aparición para que RenderReport deje constancia de la aproximación, igual criterio que
+     * el warning de "inline image hoisted" de arriba. */
+    private function warnIfUnsupportedSubOrSup(string $tag): void
+    {
+        if ($tag === 'sub' || $tag === 'sup') {
+            $this->warnings->addWarning(
+                "<$tag> rendered as plain inline text (vertical-align: sub/super not supported yet, M8)",
+            );
+        }
+    }
+
+    /**
+     * M7 final-review Finding D: `float` y/o `position: relative|absolute` declarados en un
+     * elemento Display::Inline no tienen NINGÚN efecto en este motor -- InlineFlowContext nunca
+     * examina ComputedStyle::$float/$position de un run/InlineBoxStart (solo BlockFlowContext lo
+     * hace, y únicamente para sus hijos de BLOQUE directos, ver el bucle de su layout()); un
+     * `<span style="float:left">`/`<a style="position:relative;top:10px">` simplemente se aplana
+     * como texto inline normal, sin sacarse de flujo ni desplazarse -- antes de esta tarea, ese
+     * "no-op" era completamente silencioso. Se avisa UNA SOLA VEZ por causa (WarningCollector::
+     * addWarningOnce(), no una vez por elemento/aparición -- a diferencia del warning de sub/sup
+     * de arriba, que SÍ es por-ocurrencia, M7-T2, sin tocar aquí) durante la vida del colector
+     * compartido, para que RenderReport deje constancia de la aproximación sin inundar de mensajes
+     * repetidos un documento con muchos `<span>` flotantes/posicionados. Llamado desde AMBOS
+     * dispatch points de un elemento Inline (collectChildren() para el hijo directo,
+     * collectInline() para un descendiente anidado a cualquier profundidad).
+     */
+    private function warnIfFloatOrPositionOnInline(ComputedStyle $childStyle): void
+    {
+        if ($childStyle->float !== null) {
+            $this->warnings->addWarningOnce(
+                'float-on-inline',
+                'float on an inline-level element has no effect (not supported yet): the element stays in normal inline flow',
+            );
+        }
+        if ($childStyle->position !== Position::Static) {
+            $this->warnings->addWarningOnce(
+                'position-on-inline',
+                'position:relative/absolute on an inline-level element has no effect (not supported yet): no offset is applied',
+            );
         }
     }
 
     private static function collapseInternalWhitespace(string $raw): string
     {
         return preg_replace('/\s+/', ' ', $raw) ?? '';
+    }
+
+    /**
+     * M7-T2 (CSS 2.2 §16.6.1, white-space:pre): un nodo de texto normal siempre produce un ÚNICO
+     * TextRun con su whitespace interno ya colapsado (collapseInternalWhitespace) -- collapse()
+     * hará el recorte de frontera después. Bajo white-space:pre, en cambio, NADA se colapsa (los
+     * espacios/tabs se conservan literalmente) y cada '\n' del texto fuente se convierte en un
+     * LineBreakRun real (idéntico a un <br> explícito) -- así el resto del pipeline (collapse(),
+     * InlineFlowContext) no necesita saber que el salto vino de un carácter en vez de una
+     * etiqueta. Un segmento vacío entre dos '\n' consecutivos (línea en blanco) no produce
+     * TextRun (no aporta nada, ver collapse()) pero el LineBreakRun that lo rodea ya fuerza el
+     * avance de línea por sí solo. \r\n se normaliza a \n primero (mismo criterio que cualquier
+     * editor/HTML parser); un '\r' suelto (Mac clásico, prácticamente inexistente hoy) NO se
+     * trata como salto -- fuera de alcance, no forma parte del contrato de esta tarea.
+     *
+     * @return list<TextRun|LineBreakRun>
+     */
+    private static function textRunTokensFor(string $raw, ComputedStyle $style): array
+    {
+        if ($style->whiteSpace !== 'pre') {
+            return [new TextRun(self::collapseInternalWhitespace($raw), $style)];
+        }
+        $lines = explode("\n", str_replace("\r\n", "\n", $raw));
+        $tokens = [];
+        $lastIndex = count($lines) - 1;
+        foreach ($lines as $index => $line) {
+            if ($line !== '') {
+                $tokens[] = new TextRun($line, $style);
+            }
+            if ($index !== $lastIndex) {
+                $tokens[] = new LineBreakRun();
+            }
+        }
+        return $tokens;
     }
 
     /**
@@ -525,20 +726,68 @@ final class BoxTreeBuilder
      * intercalada en el mismo orden en que apareció en el DOM entre el texto anterior y el
      * posterior.
      *
-     * @param list<TextRun|LineBreakRun|ImageBox> $tokens
-     * @return list<TextRun|LineBreakRun|ImageBox>
+     * M7-T4: += InlineBoxStart/InlineBoxEnd/BlockBox(inline-block). A diferencia de LineBreakRun/
+     * ImageBox (separadores "duros": cortan TAMBIÉN el espacio de frontera pendiente, $pendingSpace
+     * se resetea a false), estos tres son separadores "transparentes": SIEMPRE se emiten tal cual
+     * a $result (nunca se funden entre sí ni con un TextRun vecino — $mergeEligible se apaga), pero
+     * $pendingSpace NO se resetea, porque no representan ningún salto de línea/contenido opaco —
+     * un espacio de frontera que estaba pendiente ANTES de abrir/cerrar una caja (o antes de un
+     * inline-block) sigue "vivo" para el próximo TextRun real, y se adjunta —por la MISMA
+     * convención de siempre— al ÚLTIMO TextRun ya emitido, aunque uno o más de estos marcadores se
+     * hayan intercalado entre medias en $result (de ahí que el índice de ese último TextRun se
+     * rastree aparte, $lastTextIndex, en vez de asumir que siempre es el último elemento de
+     * $result — con marcadores de por medio, ya no lo es). Limitación documentada: si el espacio
+     * de frontera pendiente en realidad pertenece a un hermano SUELTO fuera de ambas cajas (p.ej.
+     * "<span>a</span> <span>b</span>", el espacio del medio no es hijo de ningún span) puede
+     * terminar adjuntado dentro de la caja del span ANTERIOR en vez de quedar fuera de toda caja —
+     * mismo tipo de aproximación que esta convención ya aceptaba antes de esta tarea (el espacio
+     * de frontera siempre "vive" en el run ya cerrado, nunca como token propio), ahora con una
+     * caja pintable de por medio en vez de solo texto invisible; no cubierto por ningún test de
+     * este milestone (edge case sin bg/borde solapado en ningún golden existente).
+     *
+     * @param list<TextRun|LineBreakRun|ImageBox|InlineBoxStart|InlineBoxEnd|BlockBox> $tokens
+     * @return list<TextRun|LineBreakRun|ImageBox|InlineBoxStart|InlineBoxEnd|BlockBox>
      */
     private static function collapse(array $tokens): array
     {
         $result = [];
-        // Se muta el run precedente con array_pop()+push() (nunca por índice) para que
-        // PHPStan siga viendo $result como list<...> de principio a fin.
-        $lastText = null;
+        // $lastTextIndex (índice en $result del último TextRun real emitido) sustituye a la
+        // variable $lastText de antes de esta tarea: con marcadores de caja intercalados,
+        // "el último TextRun" ya no es necesariamente el último ELEMENTO de $result, así que
+        // array_pop()+push() (el truco de antes) dejaría de apuntar al TextRun correcto —
+        // se escribe por índice explícito en su lugar. $mergeEligible es true solo cuando NADA
+        // (ni un marcador de caja, ni un separador duro) se ha emitido desde ese TextRun: es lo
+        // que impide fusionar dos TextRun de un mismo estilo que caen en lados opuestos de una
+        // caja (deben seguir siendo runs separados para que InlineFlowContext pueda medir el
+        // contenido de CADA caja de forma independiente).
+        $lastTextIndex = null;
+        $mergeEligible = false;
         $pendingSpace = false;
         foreach ($tokens as $token) {
             if ($token instanceof LineBreakRun || $token instanceof ImageBox) {
                 $result[] = $token;
-                $lastText = null;
+                $lastTextIndex = null;
+                $mergeEligible = false;
+                $pendingSpace = false;
+                continue;
+            }
+            if ($token instanceof InlineBoxStart || $token instanceof InlineBoxEnd || $token instanceof BlockBox) {
+                $result[] = $token;
+                $mergeEligible = false;
+                continue;
+            }
+            // M7-T2 (CSS 2.2 §16.6.1, white-space:pre): NINGÚN colapso/recorte/fusión de
+            // frontera para un TextRun 'pre' -- se emite verbatim, exactamente como llegó de
+            // textRunTokensFor() (que ya troceó por \n en LineBreakRun reales), y se trata como
+            // separador de secuencia para el run VECINO (igual que LineBreakRun/ImageBox arriba)
+            // para que un espacio de frontera normal no colapsado no se filtre hacia dentro/fuera
+            // de un tramo preformateado.
+            if ($token->style->whiteSpace === 'pre') {
+                if ($token->text !== '') {
+                    $result[] = $token;
+                }
+                $lastTextIndex = null;
+                $mergeEligible = false;
                 $pendingSpace = false;
                 continue;
             }
@@ -551,18 +800,18 @@ final class BoxTreeBuilder
                 $pendingSpace = $pendingSpace || $leading || $trailing;
                 continue;
             }
-            if ($lastText instanceof TextRun && $lastText->style === $token->style) {
-                array_pop($result);
-                $lastText = new TextRun($lastText->text . ($needsBoundarySpace ? ' ' : '') . $core, $token->style);
-                $result[] = $lastText;
+            $prevText = $lastTextIndex !== null ? $result[$lastTextIndex] : null;
+            if ($mergeEligible && $prevText instanceof TextRun && $prevText->style === $token->style) {
+                $result[$lastTextIndex] = new TextRun($prevText->text . ($needsBoundarySpace ? ' ' : '') . $core, $token->style);
             } else {
-                if ($needsBoundarySpace && $lastText instanceof TextRun) {
-                    array_pop($result);
-                    $lastText = new TextRun($lastText->text . ' ', $lastText->style);
-                    $result[] = $lastText;
+                if ($needsBoundarySpace && $prevText instanceof TextRun) {
+                    // $lastTextIndex es necesariamente no-null aquí -- es la ÚNICA vía por la que
+                    // $prevText puede ser un TextRun (ver la asignación ternaria de arriba).
+                    $result[$lastTextIndex] = new TextRun($prevText->text . ' ', $prevText->style);
                 }
-                $lastText = new TextRun($core, $token->style);
-                $result[] = $lastText;
+                $result[] = new TextRun($core, $token->style);
+                $lastTextIndex = count($result) - 1;
+                $mergeEligible = true;
             }
             $pendingSpace = $trailing;
         }
