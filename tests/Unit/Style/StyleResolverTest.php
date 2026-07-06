@@ -5,9 +5,14 @@ declare(strict_types=1);
 use Pliego\Css\StylesheetParser;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\LengthPercentage;
+use Pliego\Style\AlignItems;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\Display;
+use Pliego\Style\FlexDirection;
+use Pliego\Style\FlexWrap;
 use Pliego\Style\FontStyle;
+use Pliego\Style\JustifyContent;
 use Pliego\Style\StyleResolver;
 use Pliego\Style\TextAlign;
 
@@ -249,4 +254,59 @@ it('rejects a percentage height at parse time, leaving ComputedStyle::$height nu
     $img = $doc->querySelector('img');
     assert($img !== null);
     expect($map->get($img)->height)->toBeNull();
+});
+
+// --- M4-T1: flex properties on ComputedStyle (none inherit) -------------------------------
+
+it('computes display:flex as Display::Flex', function () {
+    [$doc, $map] = resolveDoc('div { display: flex }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->display)->toBe(Display::Flex);
+});
+
+it('defaults every flex property to its spec initial value, none inherited', function () {
+    [$doc, $map] = resolveDoc(
+        'body { flex-direction: column; flex-wrap: wrap; justify-content: center; align-items: center;'
+        . ' row-gap: 10px; column-gap: 5px; flex-grow: 2; flex-shrink: 3; flex-basis: 40px }',
+        '<body><p>x</p></body>',
+    );
+    $body = $doc->querySelector('body');
+    $p = $doc->querySelector('p');
+    assert($body !== null && $p !== null);
+
+    $bodyStyle = $map->get($body);
+    expect($bodyStyle->flexDirection)->toBe(FlexDirection::Column);
+    expect($bodyStyle->flexWrap)->toBe(FlexWrap::Wrap);
+    expect($bodyStyle->justifyContent)->toBe(JustifyContent::Center);
+    expect($bodyStyle->alignItems)->toBe(AlignItems::Center);
+    expect($bodyStyle->rowGapPx)->toBe(10.0);
+    expect($bodyStyle->columnGapPx)->toBe(5.0);
+    expect($bodyStyle->flexGrow)->toBe(2.0);
+    expect($bodyStyle->flexShrink)->toBe(3.0);
+    expect($bodyStyle->flexBasis)->toEqual(LengthPercentage::px(40.0));
+
+    // None of these properties inherit (css-flexbox-1: item properties + container-only
+    // properties are all non-inherited): the child falls back to the spec initial values,
+    // not the parent's declared ones.
+    $pStyle = $map->get($p);
+    expect($pStyle->flexDirection)->toBe(FlexDirection::Row);
+    expect($pStyle->flexWrap)->toBe(FlexWrap::NoWrap);
+    expect($pStyle->justifyContent)->toBe(JustifyContent::FlexStart);
+    expect($pStyle->alignItems)->toBe(AlignItems::Stretch);
+    expect($pStyle->rowGapPx)->toBe(0.0);
+    expect($pStyle->columnGapPx)->toBe(0.0);
+    expect($pStyle->flexGrow)->toBe(0.0);
+    expect($pStyle->flexShrink)->toBe(1.0);
+    expect($pStyle->flexBasis)->toBeNull();
+});
+
+it('computes the flex shorthand end to end through DeclarationParser + ComputedStyle', function () {
+    [$doc, $map] = resolveDoc('div { flex: 2 30px }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->flexGrow)->toBe(2.0);
+    expect($style->flexShrink)->toBe(1.0);
+    expect($style->flexBasis)->toEqual(LengthPercentage::px(30.0));
 });

@@ -82,13 +82,15 @@ $sampleHtml = <<<'HTML'
 
   <div class="band">Itinerario</div>
 
-  <div class="card">
+  <div class="card photo-card">
     <img src="playground-assets/sample-photo.jpg" width="120">
-    <p class="day"><strong>Sarria</strong> — <em>Giorno 1</em></p>
-    <p class="data">Data: 19/09/2026 · Pernottamento a <u>Sarria</u></p>
-    <p>Una volta arrivato a Sarria, ti consigliamo di visitare la città e di goderti
-    i suoi monumenti e le sue strade, dove si respira già l'atmosfera del Cammino.
-    Puoi <strong>prenotare online</strong> o scriverci — <em>siamo qui per aiutarti</em>.</p>
+    <div class="info">
+      <p class="day"><strong>Sarria</strong> — <em>Giorno 1</em></p>
+      <p class="data">Data: 19/09/2026 · Pernottamento a <u>Sarria</u></p>
+      <p>Una volta arrivato a Sarria, ti consigliamo di visitare la città e di goderti
+      i suoi monumenti e le sue strade, dove si respira già l'atmosfera del Cammino.
+      Puoi <strong>prenotare online</strong> o scriverci — <em>siamo qui per aiutarti</em>.</p>
+    </div>
   </div>
 
   <div class="card">
@@ -108,6 +110,8 @@ h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .price { background-color: #ffd500; padding: 14px; font-size: 20px; margin: 0 0 14px 0 }
 .band { background-color: #ffd500; padding: 10px; font-size: 18px; margin: 0 0 10px 0 }
 .card { background-color: #f4f4f4; padding: 12px; margin: 0 0 10px 0 }
+.photo-card { display: flex; gap: 12px }
+.info { flex: 1 }
 .day { margin: 0 0 4px 0; font-size: 16px }
 .data { border: 1px solid #cccccc; padding: 6px; color: #555555; font-size: 12px; margin: 0 0 6px 0 }
 .price { text-align: right }

@@ -4,10 +4,10 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M3); the
+> **Not published to Packagist yet.** This is an early milestone (M4); the
 > package is not installable via Composer from a registry at this point.
 
-## Status: M3 — images
+## Status: M4 — flexbox
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -21,10 +21,83 @@ replaced block-level element, JPEG passthrough (`DCTDecode`) and PNG decoding
 (gray/RGB/RGBA, `FlateDecode`, alpha via `/SMask`), intrinsic sizing from the
 file's own dimensions plus HTML `width`/`height` attributes, and a
 deduplicating `ImageRegistry` so the same photo referenced N times becomes
-one PDF XObject. It is still not a general-purpose renderer — flexbox is the
-milestone ahead (see [Roadmap](#roadmap)).
+one PDF XObject. M4 adds a **flexbox subset**: `display: flex` (row and
+column), `flex-wrap`, `gap`, `justify-content`, `align-items`, `flex-grow`/
+`flex-shrink`/`flex-basis` (including the `flex` shorthand) — enough to lay
+out the target document's photo+text cards the way an author would actually
+write them (`display: flex; gap: 12px` instead of stacking blocks), with the
+whole flex container treated as an atomic, indivisible unit for pagination
+purposes. It is still not a general-purpose renderer — tables/floats and the
+rest of flexbox-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
 
-### Supported as of M3
+### Supported as of M4
+
+- **Flexbox** (css-flexbox-1 subset): `display: flex` on a block-level
+  container (the container itself still participates in normal block flow —
+  margins/width/`box-sizing` resolve exactly like any other block).
+  - **`flex-direction`**: `row` (default) and `column`. Row wraps
+    (`flex-wrap: wrap`) into multiple lines, stacked with `row-gap` between
+    them — an overwide single item never splits or shrinks below its own
+    hypothetical size, it just keeps its own line. `flex-direction: column`
+    has **no wrap support** (a column is always exactly one vertical
+    "line") and **no min-content clamp** on its shrink path (row's shrink
+    does clamp to min-content and redistribute the remaining deficit —
+    column allows overflow instead, a deliberate simplification since no
+    document in scope needs it).
+  - **`gap`** (shorthand, sets both axes) / `row-gap` / `column-gap`, px
+    only. In row, `column-gap` sits between items on the same line and
+    `row-gap` stacks wrapped lines; in column the axis roles swap
+    (`row-gap` is the main-axis gap between stacked items).
+  - **`justify-content`**: `flex-start` (default), `center`, `flex-end`,
+    `space-between` — distributes the leftover main-axis space neither
+    `flex-grow` nor `flex-shrink` absorbed.
+  - **`align-items`**: `flex-start`, `center`, `flex-end`, `stretch`
+    (default). Stretch is a **geometry-only approximation**: an item
+    without a definite cross size gets its `BoxFragment` (background/
+    border box) resized to the line's cross size (minus its own
+    cross-axis margins, which are never stretched), but its own content is
+    never re-laid-out or re-centered inside the new box — text/child
+    boxes stay anchored where they were, and a stretched `<img>` keeps its
+    own intrinsic bitmap at its originally-measured pixel size: only the
+    surrounding box (background/borders) grows to fill the line, the
+    decoded image itself is never re-scaled or genuinely re-measured.
+  - **`flex-grow`**/**`flex-shrink`**/**`flex-basis`** (longhands) and the
+    `flex` shorthand (css-flexbox-1 §7.1.1's full keyword/number table:
+    `none`, `initial`, `auto`, `<N>`, `<width>`, `<N> <M>`, etc.). An item's
+    resolved main size is always treated as its **border-box** width,
+    whatever the source (`flex-basis`, its own `width`, or max-content); an
+    item that ALSO declares its own CSS `width` still grows/shrinks from
+    that width as its starting point instead of being locked to it — the
+    resolved flex size always wins at render time (the width only seeds the
+    hypothetical size flex-grow/shrink then adjust), and this holds for
+    every item kind: a plain block, an `<img>`, and — since the M4
+    final-review — an item that is itself a nested `display: flex`
+    container, whose own declared width is likewise overridden by its
+    parent's resolved main size instead of being re-resolved from scratch.
+    Shrinking clamps each
+    item at its own min-content (the longest unbreakable word) and
+    redistributes any remaining deficit in one extra pass — not the
+    spec's fully iterative resolution, but stable for the two-item cases
+    a real document produces.
+  - **Atomic pagination**: the `BoxFragment` a flex container produces is
+    marked indivisible for `Paginator` — it crosses a page boundary and
+    fits within one page → pushed whole (background, borders and every
+    child fragment together) to the next page, never split leaf-by-leaf
+    the way a plain block's content is; taller than one page → stays
+    where it lands, uncut (same pre-existing limit already documented for
+    an overlong text/image leaf, still with no warning channel here).
+  - **Not supported, reported as a warning rather than silently ignored or
+    approximated**: `order`, `align-self`, `align-content` (so a
+    multi-line row's declared container height only acts as a floor on
+    the total cross size, distributing nothing between lines),
+    `display: inline-flex`, `flex-basis: content`, `flex-direction:
+    row-reverse`/`column-reverse`, `flex-wrap: wrap-reverse`,
+    `justify-content`/`align-items: space-around`/`space-evenly`/
+    `baseline`, and any writing-mode/direction property (this engine is
+    left-to-right/top-to-bottom only, css-flexbox-1's abstract
+    start/end axes are never considered).
+
+### Supported as of M3 (carried forward unchanged)
 
 - **Images** (css-images-3 subset): `<img src="...">` as a replaced
   block-level box — inline images (an `<img>` nested inside `span`/`a`/etc.)
@@ -139,7 +212,10 @@ milestone ahead (see [Roadmap](#roadmap)).
   overflow is cut at the column edge instead. Either way, overflow only
   becomes visible/lossy when the neighboring column also paints into the
   shared boundary region.
-- No flexbox (M4), no tables/floats (M5+).
+- No tables/floats (M5+); flexbox is implemented as of M4 but only the
+  subset above — see "Supported as of M4" for what's excluded (`order`,
+  `align-self`, `align-content`, `inline-flex`, `flex-basis: content`,
+  `*-reverse`, writing modes) and the stretch/column simplifications.
 - **Images**: no indexed/palette PNG (color type 3), no interlaced (Adam7)
   PNG, no bit depths other than 8, no CMYK JPEG, no formats beyond JPEG/PNG
   (no GIF/WebP/SVG/BMP). No remote `src` (`http://`/`https://` is reported as
@@ -236,8 +312,8 @@ of flexbox/grid:
 |---|---|---|
 | **M1** | Real text: styled inline runs, UAX #14 line breaking, alignment, subsetting, ToUnicode | Bold/sizes/alignment from the target document; ~10× smaller PDFs than M0's whole-font embedding |
 | **M2** | Full box model — **borders**, width/margin/padding %, `box-sizing` — plus **`@page` margins, repeating margin boxes, `counter(page)`/`counter(pages)`** ("Page X of Y") | The bordered rows and numbered footer from the target document |
-| **M3** (this release) | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject, alpha via `/SMask`), deduplicated XObjects, intrinsic + attribute sizing | The photos in the itinerary cards |
-| **M4** | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width` | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
+| **M3** | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject, alpha via `/SMask`), deduplicated XObjects, intrinsic + attribute sizing | The photos in the itinerary cards |
+| **M4** (this release) | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width`, atomic pagination | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
 | **M5+** | Tables → floats/position → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Tables stay necessary for third-party/email-style HTML; flex gets completed to spec in its own milestone |
 
 ## License

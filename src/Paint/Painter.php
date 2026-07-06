@@ -7,6 +7,7 @@ namespace Pliego\Paint;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
@@ -27,26 +28,42 @@ final readonly class Painter
     public function paint(Page $page, Canvas $canvas): void
     {
         foreach ($page->fragments as $fragment) {
-            if ($fragment instanceof BoxFragment) {
-                if ($fragment->background !== null) {
-                    $canvas->fillRect($fragment->rect, $fragment->background);
-                }
-                $this->paintBorders($fragment, $canvas);
-            } elseif ($fragment instanceof TextFragment) {
-                // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
-                // rect->width === 0.0 para la línea vacía que deja un <br> forzado — nada que
-                // pintar (ni fillText, ni underline, ni por tanto registro de cara/glifos vía
-                // Canvas::fillText()).
-                if ($fragment->text === '' && $fragment->rect->width === 0.0) {
-                    continue;
-                }
-                $canvas->fillText($fragment);
-                if ($fragment->underline) {
-                    $this->paintUnderline($fragment, $canvas);
-                }
-            } elseif ($fragment instanceof ImageFragment) {
-                $canvas->drawImage($fragment->rect, $fragment->imageKey);
+            $this->paintFragment($fragment, $canvas);
+        }
+    }
+
+    /**
+     * M4-T5: extraído de paint() para poder RECURSAR — una hoja compuesta atómica (Paginator,
+     * ver su docblock de flatten()) llega aquí como un BoxFragment con $children NO vacío (antes
+     * de T5, todo BoxFragment que llegaba a un Page ya tenía children === [], aplanado de
+     * antemano; esa invariante ya no es universal). Orden de pintado sin cambios: fondo, luego
+     * bordes, luego — solo para el caso atómico — los hijos, en el mismo orden que
+     * Paginator::relocate() los deja (documento order, ver brief T5).
+     */
+    private function paintFragment(Fragment $fragment, Canvas $canvas): void
+    {
+        if ($fragment instanceof BoxFragment) {
+            if ($fragment->background !== null) {
+                $canvas->fillRect($fragment->rect, $fragment->background);
             }
+            $this->paintBorders($fragment, $canvas);
+            foreach ($fragment->children as $child) {
+                $this->paintFragment($child, $canvas);
+            }
+        } elseif ($fragment instanceof TextFragment) {
+            // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
+            // rect->width === 0.0 para la línea vacía que deja un <br> forzado — nada que
+            // pintar (ni fillText, ni underline, ni por tanto registro de cara/glifos vía
+            // Canvas::fillText()).
+            if ($fragment->text === '' && $fragment->rect->width === 0.0) {
+                return;
+            }
+            $canvas->fillText($fragment);
+            if ($fragment->underline) {
+                $this->paintUnderline($fragment, $canvas);
+            }
+        } elseif ($fragment instanceof ImageFragment) {
+            $canvas->drawImage($fragment->rect, $fragment->imageKey);
         }
     }
 

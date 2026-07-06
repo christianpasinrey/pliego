@@ -115,6 +115,66 @@ it('relocates an image preserving its imageKey and shrinking coordinates to the 
     expect($image->imageKey)->toBe('/tmp/tiny.jpg');
 });
 
+// --- M4-T5: atomic fragments (flex containers) push down or stay as a whole subtree -----------
+
+it('pushes an atomic fragment crossing the page boundary down as a whole subtree, children coordinates intact relative to the container', function () {
+    // Atomic container: y=990, height=60 (990..1050), page content height 1000 => crosses the
+    // 1000 boundary and fits within one page (60 <= 1000) => pushed down whole to start page 2.
+    // Two children at absolute y=1000 and y=1030 (offsets +10/+40 from the container's own top).
+    $child1 = textAt(1000.0, 10.0);
+    $child2 = textAt(1030.0, 10.0);
+    $atomicBox = new BoxFragment(new Rect(0, 990, 100, 60), new Color(0, 200, 0), [$child1, $child2], BorderSet::none(), atomic: true);
+    $root = new BoxFragment(new Rect(0, 0, 100, 1100), null, [$atomicBox], BorderSet::none());
+
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(2);
+    expect($pages[0]->fragments)->toHaveCount(0);
+
+    $relocated = $pages[1]->fragments[0];
+    assert($relocated instanceof BoxFragment);
+    expect($relocated->atomic)->toBeTrue();
+    expect($relocated->rect->y)->toBe(0.0); // pushed to the top of page 2
+    expect($relocated->children)->toHaveCount(2);
+
+    $relocatedChild1 = $relocated->children[0];
+    $relocatedChild2 = $relocated->children[1];
+    assert($relocatedChild1 instanceof TextFragment && $relocatedChild2 instanceof TextFragment);
+    // Offsets relative to the container preserved: 1000-990=10, 1030-990=40.
+    expect($relocatedChild1->rect->y)->toBe(10.0);
+    expect($relocatedChild2->rect->y)->toBe(40.0);
+});
+
+it('leaves an atomic fragment taller than the page crossing the boundary unsplit (documented push-down limitation, no warning channel)', function () {
+    // Height (1200) > page content height (1000): the generic push-down guard never fires,
+    // same documented limitation as an over-tall image/text fragment already has.
+    $child = textAt(500.0, 10.0);
+    $atomicBox = new BoxFragment(new Rect(0, 500.0, 100, 1200), new Color(0, 200, 0), [$child], BorderSet::none(), atomic: true);
+    $root = new BoxFragment(new Rect(0, 0, 100, 1800), null, [$atomicBox], BorderSet::none());
+
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    $box = $pages[0]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->rect->y)->toBe(500.0);
+    expect($box->rect->height)->toBe(1200.0);
+    expect($box->children[0]->rect()->y)->toBe(500.0);
+});
+
+it('does not decompose an atomic fragment into its individual children even when it fits entirely within one page', function () {
+    $child1 = textAt(10.0, 10.0);
+    $child2 = textAt(30.0, 10.0);
+    $atomicBox = new BoxFragment(new Rect(0, 0, 100, 50), null, [$child1, $child2], BorderSet::none(), atomic: true);
+    $root = new BoxFragment(new Rect(0, 0, 100, 50), null, [$atomicBox], BorderSet::none());
+
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
+    expect($pages[0]->fragments)->toHaveCount(1); // NOT flattened into 2 separate text leaves
+    $box = $pages[0]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->atomic)->toBeTrue();
+    expect($box->children)->toHaveCount(2);
+});
+
 it('leaves an image taller than the page crossing the boundary unsplit (documented push-down limitation)', function () {
     // Height > page content height ($h): the generic push-down guard (`height <= $h`) never
     // fires, so a too-tall image is never pushed to the next page — it just stays where it

@@ -38,7 +38,15 @@ final class FragmentDumper
         };
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * M4-T6: 'atomic' añadido de forma ADITIVA (nueva clave, mismo lugar en todos los boxes,
+     * ninguna clave existente se mueve ni cambia de valor) — refleja BoxFragment::$atomic (M4-T5),
+     * hasta ahora invisible en los goldens. Sin él, un golden de un contenedor flex no podría
+     * distinguir "este BoxFragment es la unidad de paginación indivisible que Paginator trata en
+     * bloque" de un box normal aplanado hijo a hijo — información de layout real, no solo de
+     * pintado, que pertenece al dump igual que rect/background/borders.
+     * @return array<string, mixed>
+     */
     private function dumpBox(BoxFragment $fragment): array
     {
         return [
@@ -46,6 +54,7 @@ final class FragmentDumper
             'rect' => $this->rect($fragment->rect),
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
             'borders' => $fragment->borders->isVisible() ? $this->borders($fragment->borders) : null,
+            'atomic' => $fragment->atomic,
             'children' => array_map($this->dump(...), $fragment->children),
         ];
     }

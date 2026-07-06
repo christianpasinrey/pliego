@@ -409,3 +409,65 @@ it('advances the cursor for the next sibling using the image margin-bottom, like
     expect($img->rect->height)->toBe(20.0);
     expect($p->rect->y)->toBe(20.0 + 15.0);
 });
+
+// M4-T2: BoxTreeBuilder envuelve el texto de un contenedor flex en un BlockBox anónimo
+// (tag "anonymous", estilo heredado del contenedor). En T2, BlockFlowContext todavía no
+// distinguía Display::Flex y TODO el subárbol (contenedor + anónimo) fluía como bloques
+// normales (de ahí que el test original comparara el CONTENEDOR flex completo contra un <div>
+// normal y salieran idénticos: ambos width:auto llenando el body). M4-T4 conecta
+// FlexFormattingContext de verdad, pero solo cambia el sizing del ITEM (el anónimo) — el
+// CONTENEDOR flex en sí sigue siendo un hijo de bloque normal del body (width:auto llena los
+// 500px igual que antes, ver BlockFlowContext::layout(), que solo mira el display de sus HIJOS,
+// nunca el propio). Lo que SÍ cambia es el anónimo DENTRO: sin flex-grow (default 0) ya no se
+// estira al content width del contenedor — se encoge a su base (auto → max-content del texto,
+// css-flexbox-1 §9.2), a diferencia de como fluía en T2 (como bloque normal, width:auto llenando
+// el contenedor). El TextFragment en sí sigue siendo idéntico en ambos casos (flex vs. plano):
+// ninguno de los anchos disponibles (500px en bloque, max-content en flex) fuerza un salto de
+// línea para una frase tan corta.
+it('the anonymous flex item shrinks to its text\'s max-content; the container and the text itself are unaffected (M4-T2 A/B, updated for M4-T4 sizing)', function () {
+    $flexFrag = layoutHtml('<body><div class="flex">hola mundo</div></body>', '.flex { display: flex }');
+    $plainFrag = layoutHtml('<body><div>hola mundo</div></body>', '');
+
+    $flexText = textFragments($flexFrag)[0];
+    $plainText = textFragments($plainFrag)[0];
+
+    expect($flexText->rect->x)->toBe($plainText->rect->x);
+    expect($flexText->rect->y)->toBe($plainText->rect->y);
+    expect($flexText->rect->width)->toBe($plainText->rect->width);
+    expect($flexText->rect->height)->toBe($plainText->rect->height);
+
+    // El CONTENEDOR flex (hijo directo del body) sigue siendo un bloque normal width:auto: llena
+    // el content width del body exactamente igual que el <div> plano — sin cambios de T2.
+    $flexContainer = $flexFrag->children[0];
+    $plainDiv = $plainFrag->children[0];
+    assert($flexContainer instanceof BoxFragment && $plainDiv instanceof BoxFragment);
+    expect($flexContainer->rect)->toEqual($plainDiv->rect);
+    expect($plainDiv->rect->width)->toBe(500.0);
+
+    // El ITEM anónimo (hijo del contenedor flex) es donde M4-T4 cambia el comportamiento: se
+    // encoge exactamente al max-content del texto en vez de llenar los 500px del contenedor.
+    $anonymousItem = $flexContainer->children[0];
+    assert($anonymousItem instanceof BoxFragment);
+    expect($anonymousItem->rect->width)->toBeLessThan($plainDiv->rect->width);
+    expect($anonymousItem->rect->width)->toBe($flexText->rect->width); // shrink-to-fit exacto
+    expect($anonymousItem->rect->x)->toBe($plainDiv->rect->x); // arranca en el mismo borde izq.
+});
+
+// M4-T4: prueba de WIRING end-to-end (CSS real -> BoxTreeBuilder -> BlockFlowContext ->
+// delegación perezosa a FlexFormattingContext), complementaria a los tests de algoritmo puro de
+// FlexFormattingContextTest.php (que construyen el árbol a mano). `flex: 2`/`flex: 1` sobre dos
+// hijos de un contenedor `display:flex; width:300px` reparte el ancho 200/100 exactamente.
+it('BlockFlowContext delegates a display:flex child to FlexFormattingContext end-to-end', function () {
+    $frag = layoutHtml(
+        '<body><div class="flex"><div class="a"></div><div class="b"></div></div></body>',
+        '.flex { display: flex; width: 300px } .a { flex: 2 } .b { flex: 1 }',
+    );
+    $flexDiv = $frag->children[0];
+    assert($flexDiv instanceof BoxFragment);
+    [$a, $b] = $flexDiv->children;
+    assert($a instanceof BoxFragment && $b instanceof BoxFragment);
+
+    expect($a->rect->width)->toBe(200.0);
+    expect($b->rect->width)->toBe(100.0);
+    expect($b->rect->x)->toBe($a->rect->right());
+});

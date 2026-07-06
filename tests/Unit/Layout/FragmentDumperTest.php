@@ -44,6 +44,7 @@ it('dumps a box fragment with a stable key order and a hex background', function
         'rect' => [0.0, 0.0, 10.0, 20.01],
         'background' => '#ff0000',
         'borders' => null,
+        'atomic' => false,
         'children' => [
             [
                 'type' => 'text',
@@ -67,6 +68,7 @@ it('dumps a box fragment with no background as null', function () {
         'rect' => [0.0, 0.0, 100.0, 50.0],
         'background' => null,
         'borders' => null,
+        'atomic' => false,
         'children' => [],
     ]);
 });
@@ -94,6 +96,7 @@ it('dumps a box fragment with visible borders (M2-T8), a hex color per solid sid
             'bottom' => null,
             'left' => null,
         ],
+        'atomic' => false,
         'children' => [],
     ]);
 });

@@ -12,6 +12,7 @@ use Pliego\Css\WarningCollector;
 use Pliego\Dom\HtmlParser;
 use Pliego\Image\ImageLoader;
 use Pliego\Style\CssStyleSource;
+use Pliego\Style\Display;
 use Pliego\Style\FontStyle;
 use Pliego\Style\StyleResolver;
 
@@ -266,4 +267,102 @@ it('hoists a failing inline image (nested in <span>): no ImageBox, both warnings
     expect($warnings)->toHaveCount(2);
     expect($warnings[0])->toContain('inline image hoisted to block level');
     expect($warnings[1])->toContain('Could not load image');
+});
+
+// M4-T2: css-flexbox-1 §4 — un contenedor flex convierte cada hijo en un "flex item". Un tramo
+// contiguo de TextRun|LineBreakRun se envuelve en un ÚNICO BlockBox anónimo ("anonymous", estilo
+// heredado del contenedor vía ComputedStyle::compute([], $containerStyle, 'div')); BlockBox e
+// ImageBox ya son items directos por sí mismos y NUNCA entran en el anónimo (un replaced box
+// corta el tramo de texto igual que ya hace LineBreakRun en collapse()). display:none sigue
+// podando items antes de llegar aquí (mismo mecanismo que en flujo normal).
+
+it('wraps a mixed text+div+img flex container into 3 items: anonymous, div, img', function () {
+    $root = buildTree(
+        '<body><div class="flex">texto<div>Bloque</div><img src="tiny.jpg"></div></body>',
+        '.flex { display: flex }',
+        null,
+        IMAGE_FIXTURES_DIR,
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->style->display)->toBe(Display::Flex);
+    expect($flex->children)->toHaveCount(3);
+    [$anon, $div, $img] = $flex->children;
+    assert($anon instanceof BlockBox && $div instanceof BlockBox && $img instanceof ImageBox);
+    expect($anon->tag)->toBe('anonymous');
+    expect($anon->children)->toHaveCount(1);
+    $textRun = $anon->children[0];
+    assert($textRun instanceof TextRun);
+    expect($textRun->text)->toBe('texto');
+    expect($div->tag)->toBe('div');
+});
+
+it('anonymous flex item style is block display and inherits container text properties', function () {
+    $root = buildTree(
+        '<body><div class="flex">hola</div></body>',
+        '.flex { display: flex; color: #ff0000; font-weight: bold; }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    $anon = $flex->children[0];
+    assert($anon instanceof BlockBox);
+    expect($anon->tag)->toBe('anonymous');
+    expect($anon->style->display)->toBe(Display::Block);
+    expect($anon->style->fontWeight)->toBe(700);
+    expect($anon->style->color->r)->toBe(255);
+    expect($anon->style->color->g)->toBe(0);
+    // display/flex properties never inherit (M4-T1): the anonymous wrapper is not itself a flex
+    // container even though its parent is.
+    expect($anon->style->display)->not->toBe(Display::Flex);
+});
+
+it('keeps <br> inside the anonymous wrapper as part of the same text run', function () {
+    $root = buildTree('<body><div class="flex">a<br>b</div></body>', '.flex { display: flex }');
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(1);
+    $anon = $flex->children[0];
+    assert($anon instanceof BlockBox);
+    expect($anon->children)->toHaveCount(3);
+    [$first, $break, $second] = $anon->children;
+    assert($first instanceof TextRun && $second instanceof TextRun);
+    expect($first->text)->toBe('a');
+    expect($break)->toBeInstanceOf(LineBreakRun::class);
+    expect($second->text)->toBe('b');
+});
+
+it('prunes display:none items inside a flex container', function () {
+    $root = buildTree(
+        '<body><div class="flex"><div class="hidden">a</div><div>b</div></div></body>',
+        '.flex { display: flex } .hidden { display: none }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(1);
+    $only = $flex->children[0];
+    assert($only instanceof BlockBox);
+    expect($only->children[0])->toBeInstanceOf(TextRun::class);
+});
+
+it('recurses into a nested flex container, each level with its own anonymous items', function () {
+    $root = buildTree(
+        '<body><div class="outer">outer-text<div class="inner">inner-text<div>inner-block</div></div></div></body>',
+        '.outer { display: flex } .inner { display: flex }',
+    );
+    $outer = $root->children[0];
+    assert($outer instanceof BlockBox);
+    expect($outer->style->display)->toBe(Display::Flex);
+    expect($outer->children)->toHaveCount(2);
+    [$outerAnon, $inner] = $outer->children;
+    assert($outerAnon instanceof BlockBox && $inner instanceof BlockBox);
+    expect($outerAnon->tag)->toBe('anonymous');
+    expect($inner->tag)->toBe('div');
+    expect($inner->style->display)->toBe(Display::Flex);
+
+    expect($inner->children)->toHaveCount(2);
+    [$innerAnon, $innerBlock] = $inner->children;
+    assert($innerAnon instanceof BlockBox && $innerBlock instanceof BlockBox);
+    expect($innerAnon->tag)->toBe('anonymous');
+    expect($innerAnon->children[0])->toBeInstanceOf(TextRun::class);
+    expect($innerBlock->tag)->toBe('div');
 });

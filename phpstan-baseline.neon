@@ -4,6 +4,30 @@ parameters:
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
 			identifier: offsetAccess.notFound
 			count: 1
+			path: tests/EndToEnd/ItineraryCompleteTest.php
+
+		-
+			message: '#^Parameter \#2 \$red of function imagecolorallocate expects int\<0, 255\>, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/ItineraryCompleteTest.php
+
+		-
+			message: '#^Parameter \#3 \$green of function imagecolorallocate expects int\<0, 255\>, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/ItineraryCompleteTest.php
+
+		-
+			message: '#^Parameter \#6 \$color of function imageline expects int, int\<0, max\>\|false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/ItineraryCompleteTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
 			path: tests/EndToEnd/ItinerarySkeletonTest.php
 
 		-
@@ -141,31 +165,31 @@ parameters:
 		-
 			message: '#^Cannot access property \$height on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 5
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$rect on mixed\.$#'
 			identifier: property.nonObject
-			count: 12
+			count: 21
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$width on mixed\.$#'
 			identifier: property.nonObject
-			count: 1
+			count: 4
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$x on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$y on mixed\.$#'
 			identifier: property.nonObject
-			count: 6
+			count: 8
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
@@ -221,6 +245,150 @@ parameters:
 			identifier: argument.type
 			count: 3
 			path: tests/Unit/Layout/BreakFinderTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
+			identifier: property.notFound
+			count: 3
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$ctx\.$#'
+			identifier: property.notFound
+			count: 26
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$face\.$#'
+			identifier: property.notFound
+			count: 2
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
+			identifier: property.notFound
+			count: 4
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$sizer\.$#'
+			identifier: property.notFound
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and 10\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Binary operation "\-" between mixed and 10\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset 0 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 9
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset 1 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 2
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset 2 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 3
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access property \$atomic on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access property \$children on mixed\.$#'
+			identifier: property.nonObject
+			count: 27
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access property \$height on mixed\.$#'
+			identifier: property.nonObject
+			count: 6
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access property \$rect on mixed\.$#'
+			identifier: property.nonObject
+			count: 7
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access property \$width on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot access property \$x on mixed\.$#'
+			identifier: property.nonObject
+			count: 7
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot call method layout\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 25
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot call method rect\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 8
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot call method right\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Cannot use array destructuring on mixed\.$#'
+			identifier: offsetAccess.nonArray
+			count: 12
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<float\|null\>\:\:toBeLessThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\BlockFlowContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
+			identifier: argument.type
+			count: 2
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
+
+		-
+			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\BlockFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
+			identifier: argument.type
+			count: 2
+			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
 			message: '#^Call to an undefined method Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy\:\:markTestSkipped\(\)\.$#'
@@ -313,6 +481,84 @@ parameters:
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$boldFace\.$#'
+			identifier: property.notFound
+			count: 5
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
+			identifier: property.notFound
+			count: 1
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$face\.$#'
+			identifier: property.notFound
+			count: 18
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
+			identifier: property.notFound
+			count: 22
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$sizer\.$#'
+			identifier: property.notFound
+			count: 23
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and 10\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and 12\.0 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Binary operation "\+" between mixed and mixed results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Cannot call method maxContentWidth\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 13
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Cannot call method minContentWidth\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 9
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 21
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeGreaterThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeLessThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Layout/IntrinsicSizerTest.php
+
+		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$bold\.$#'
 			identifier: property.notFound
 			count: 2
@@ -385,6 +631,12 @@ parameters:
 			path: tests/Unit/Pdf/PdfWriterTest.php
 
 		-
+			message: '#^Cannot access property \$alignItems on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$borderBottom on mixed\.$#'
 			identifier: property.nonObject
 			count: 5
@@ -421,7 +673,43 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access property \$columnGapPx on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$display on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$flexBasis on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$flexDirection on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$flexGrow on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$flexShrink on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$flexWrap on mixed\.$#'
 			identifier: property.nonObject
 			count: 2
 			path: tests/Unit/Style/StyleResolverTest.php
@@ -457,6 +745,12 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access property \$justifyContent on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$lineHeightPx on mixed\.$#'
 			identifier: property.nonObject
 			count: 5
@@ -472,6 +766,12 @@ parameters:
 			message: '#^Cannot access property \$px on mixed\.$#'
 			identifier: property.nonObject
 			count: 1
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$rowGapPx on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -513,13 +813,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 33
+			count: 37
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 31
+			count: 35
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

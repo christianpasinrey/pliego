@@ -77,7 +77,57 @@ final class BoxTreeBuilder
             $children[] = $this->buildBlock($node, $styles);
         }
         $flush();
+        if ($style->display === Display::Flex) {
+            $children = $this->wrapAnonymousFlexItems($children, $style);
+        }
         return new BlockBox($style, $children, strtolower($element->tagName));
+    }
+
+    /**
+     * css-flexbox-1 §4: cada hijo directo de un flex container se convierte en un "flex item".
+     * En este punto $children ya es la secuencia final y aplanada de hijos directos del
+     * contenedor (BlockBox/ImageBox directos + TextRun/LineBreakRun ya colapsados por
+     * collapse(), incluida cualquier ImageBox "hoisteada" desde un inline — ver collectInline()).
+     * Un tramo CONTIGUO de TextRun|LineBreakRun se envuelve en un ÚNICO BlockBox anónimo (tag
+     * "anonymous") por tramo; BlockBox e ImageBox ya son items directos por sí mismos y NUNCA
+     * entran en el anónimo — una ImageBox es un replaced box (css-images-3), que en flexbox es
+     * su propio item directo igual que un BlockBox, así que corta el tramo de texto exactamente
+     * igual que ya hace un LineBreakRun (nunca lo hace un anónimo distinto por LineBreakRun: ese
+     * sigue siendo un separador DENTRO del tramo de texto, per brief M4-T2).
+     *
+     * El estilo del anónimo es ComputedStyle::compute([], $containerStyle, 'div'): sin
+     * declaraciones propias, así que cae al initial value de todo salvo las propiedades
+     * heredadas de CSS 2.2 §6.1 (color, font-*, line-height, text-align, underline...), que
+     * toman el computed value de $containerStyle — nunca hereda las propiedades flex del
+     * contenedor (M4-T1: ninguna de esas hereda), así que el anónimo nunca es él mismo un flex
+     * container aunque su padre lo sea.
+     *
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox> $children
+     * @return list<BlockBox|ImageBox>
+     */
+    private function wrapAnonymousFlexItems(array $children, ComputedStyle $containerStyle): array
+    {
+        $items = [];
+        /** @var list<TextRun|LineBreakRun> $run */
+        $run = [];
+        $flushRun = function () use (&$items, &$run, $containerStyle): void {
+            if ($run === []) {
+                return;
+            }
+            $anonymousStyle = ComputedStyle::compute([], $containerStyle, 'div');
+            $items[] = new BlockBox($anonymousStyle, $run, 'anonymous');
+            $run = [];
+        };
+        foreach ($children as $child) {
+            if ($child instanceof TextRun || $child instanceof LineBreakRun) {
+                $run[] = $child;
+                continue;
+            }
+            $flushRun();
+            $items[] = $child;
+        }
+        $flushRun();
+        return $items;
     }
 
     /**

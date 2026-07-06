@@ -121,3 +121,39 @@ it('golden: replaced box sizing and ImageFragment (M3-T3)', function () {
 
     assertMatchesGolden('replaced-box-sizing', new FragmentDumper()->dump($fragment));
 });
+
+it('golden: THE CARD -- a flex row of a fixed-width photo plus a flex:1 text column, through the real HTML/CSS pipeline (M4-T6)', function () {
+    // Same recipe as FlexFormattingContextTest's "THE CARD" unit test (M4-T4/T5), but exercised end
+    // to end through HtmlParser -> StyleResolver -> BoxTreeBuilder -> BlockFlowContext, which lazily
+    // delegates the `.card` child to FlexFormattingContext (BlockFlowContext::flexContext(), M4-T4)
+    // instead of constructing the BlockBox/ImageBox tree by hand. tiny.jpg (committed fixture, 4x3px,
+    // ratio 0.75) sized by the HTML width attribute alone -- same fixture/convention as
+    // 'replaced-box-sizing' above -- so the photo's own natural height (120 * 0.75 = 90) comes from
+    // real intrinsic dims, not a hand-picked number.
+    $html = '<body><div class="card">'
+        . '<img src="tiny.jpg" width="120">'
+        . '<div class="info"><p class="day">Sarria</p>'
+        . '<p>Un breve paragrafo di testo per riempire lo spazio flessibile della scheda.</p></div>'
+        . '</div></body>';
+    $css = '.card { display: flex; gap: 12px; width: 300px } .info { flex: 1 } .day { font-weight: bold }';
+    $fragment = goldenLayoutHtml($html, $css, 300.0, __DIR__ . '/../../../resources/images');
+
+    assertMatchesGolden('flex-card', new FragmentDumper()->dump($fragment));
+});
+
+it('golden: flex-wrap -- 3 fixed-width/height images wrap into 2 lines inside a 200px container (M4-T6)', function () {
+    // Same numbers as FlexFormattingContextTest's wrap unit test (item widths 80/80/80 via the HTML
+    // width attribute, heights 30/50/20 via the height attribute, container 200px, row-gap:10,
+    // default column-gap:0) -- reproduced here through the full pipeline as a cross-check of the
+    // hand-verified unit test's arithmetic (item1+item2 = 160 <= 200 fits line 1; item3 would push
+    // to 240 > 200, opens line 2 alone), and to capture the wrap case's own golden geometry.
+    $html = '<body><div class="wrap">'
+        . '<img src="tiny.jpg" width="80" height="30">'
+        . '<img src="tiny.jpg" width="80" height="50">'
+        . '<img src="tiny.jpg" width="80" height="20">'
+        . '</div></body>';
+    $css = '.wrap { display: flex; flex-wrap: wrap; width: 200px; row-gap: 10px }';
+    $fragment = goldenLayoutHtml($html, $css, 200.0, __DIR__ . '/../../../resources/images');
+
+    assertMatchesGolden('flex-wrap', new FragmentDumper()->dump($fragment));
+});
