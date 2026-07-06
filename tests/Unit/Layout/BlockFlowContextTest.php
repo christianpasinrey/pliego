@@ -83,7 +83,10 @@ it('honours declared width', function () {
 it('excludes the last child margin-bottom from the parent content height', function () {
     // CSS 2.2 §10.6.3: la altura de contenido llega hasta el borde inferior del
     // border-box de la última caja en flujo; los márgenes se salen del cálculo.
-    $frag = layoutHtml('<body><div class="box"><p>x</p></div></body>', '.box { padding: 10px } p { margin-bottom: 10px }');
+    // M7-T2: margin-top:0 anula el default UA de <p> (margin: 1em 0, ver UserAgentStylesheet) —
+    // esta prueba verifica exclusivamente la exclusión del margin-BOTTOM final, no la aritmética
+    // de la hoja UA (cubierta aparte en FragmentDumperGoldenTest/StyleResolverTest).
+    $frag = layoutHtml('<body><div class="box"><p>x</p></div></body>', '.box { padding: 10px } p { margin-top: 0; margin-bottom: 10px }');
     $box = $frag->children[0];
     assert($box instanceof BoxFragment);
     $p = $box->children[0];
@@ -408,9 +411,11 @@ it('content-box (default) on an image is unaffected by the border-box fix (regre
 });
 
 it('advances the cursor for the next sibling using the image margin-bottom, like a normal block', function () {
+    // M7-T2: p { margin-top: 0 } anula el default UA de <p> (margin: 1em 0) -- esta prueba
+    // verifica el avance de cursor por el margin-bottom de la IMAGEN, no la hoja UA.
     $frag = layoutImageHtml(
         '<body><img src="tiny.jpg" width="10" height="20"><p>after</p></body>',
-        'img { margin-bottom: 15px }',
+        'img { margin-bottom: 15px } p { margin-top: 0 }',
         500.0,
     );
     [$img, $p] = $frag->children;
@@ -485,7 +490,9 @@ it('BlockFlowContext delegates a display:flex child to FlexFormattingContext end
 // ENTERA (reemplaza el skip de T3, ver su docblock) y el cursor avanza tras ella, así que el
 // hermano siguiente ya no se solapa con donde la tabla cayó.
 it('delegates a TableBox child to TableFormattingContext end-to-end, advancing the cursor past it', function () {
-    $frag = layoutHtml('<body><table><tr><td>a</td></tr></table><p>after</p></body>', '');
+    // M7-T2: p { margin-top: 0 } anula el default UA de <p> -- esta prueba verifica que el
+    // cursor avanza exactamente hasta el borde inferior de la TABLA, no la hoja UA.
+    $frag = layoutHtml('<body><table><tr><td>a</td></tr></table><p>after</p></body>', 'p { margin-top: 0 }');
     expect($frag->children)->toHaveCount(2);
     [$table, $after] = $frag->children;
     assert($table instanceof BoxFragment && $after instanceof BoxFragment);

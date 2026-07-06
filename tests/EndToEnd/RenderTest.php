@@ -61,15 +61,17 @@ it('registers an extra font family via ->font() and embeds it only when referenc
     // ->font() añade una cara nueva al catálogo; aquí reusamos DejaVuSans-Bold.ttf bajo la
     // familia 'acme' solo para comprobar el wiring Engine -> FontCatalog -> FontRegistry (no
     // nos interesa el glifo en sí). Como ninguna regla CSS referencia 'acme', el documento solo
-    // debe seguir usando la cara 'default' (1 sola Type0) — el catálogo puede tener caras
-    // registradas sin usar sin que eso embeba nada.
+    // debe seguir usando la familia 'default' — el catálogo puede tener caras registradas sin usar
+    // sin que eso embeba nada. sampleHtml() SIEMPRE incluye un <h1> (M7-T2: la hoja UA le da
+    // font-weight:bold, ver UserAgentStylesheet), así que 'default' ya aporta 2 caras por sí sola
+    // (400 para el <p>, 700 para el <h1>) incluso sin 'acme' de por medio.
     $path = sys_get_temp_dir() . '/pliego-e2e-extra-font.pdf';
     $ttf = __DIR__ . '/../../resources/fonts/DejaVuSans-Bold.ttf';
     Engine::make()->font('acme', 400, FontStyle::Normal, $ttf)->render(sampleHtml(1))->save($path);
     $pdf = (string) file_get_contents($path);
 
     expect($pdf)->toStartWith('%PDF-1.7');
-    expect(substr_count($pdf, '/Subtype /Type0'))->toBe(1);
+    expect(substr_count($pdf, '/Subtype /Type0'))->toBe(2);
 
     // Ahora sí se referencia 'acme' desde CSS: debe embeberse como cara adicional (2 Type0).
     $path2 = sys_get_temp_dir() . '/pliego-e2e-extra-font-used.pdf';

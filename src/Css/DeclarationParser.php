@@ -58,7 +58,6 @@ final class DeclarationParser
             'block', 'none', 'flex',
             'table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group',
         ],
-        'font-family' => null,
         'box-sizing' => ['content-box', 'border-box'],
         // css-flexbox-1 §5.1/§5.2/§8.2/§8.3: *-reverse, wrap-reverse, space-around/evenly y
         // baseline son válidos en CSS pero fuera de alcance en M4 — al no estar en la lista
@@ -70,6 +69,12 @@ final class DeclarationParser
         // CSS 2.2 §17.5.2: 'auto' (initial) y 'fixed' — M5-T4 consume $tableLayout, aquí solo
         // se valida y parsea el keyword.
         'table-layout' => ['auto', 'fixed'],
+        // M7-T2 (CSS 2.2 §16.6, reducido): 'normal' (initial, colapsa whitespace/envuelve línea,
+        // comportamiento de siempre) y 'pre' (no colapsa, \n fuerza salto de línea, sin wrap —
+        // ver BoxTreeBuilder::textRunTokensFor()/collapse() e InlineFlowContext::layout()).
+        // 'nowrap'/'pre-wrap'/'pre-line' son válidos en CSS pero fuera de alcance M7 -- caen al
+        // warning genérico de KEYWORD_PROPERTIES, igual que cualquier otro keyword no soportado.
+        'white-space' => ['normal', 'pre'],
     ];
 
     /** css-flexbox-1 §7.1.1: N sin unidad en la forma "flex: N ..." nunca admite signo (grow y
@@ -136,6 +141,9 @@ final class DeclarationParser
         if ($property === 'font-size') {
             return $this->parseFontSize($value);
         }
+        if ($property === 'font-family') {
+            return $this->parseFontFamily($value);
+        }
         if (in_array($property, self::COLOR_PROPERTIES, true)) {
             $color = Color::fromCss($value);
             if ($color === null) {
@@ -144,12 +152,16 @@ final class DeclarationParser
             return [$property => $color];
         }
         if (array_key_exists($property, self::KEYWORD_PROPERTIES)) {
+            // M7-T2: 'font-family' -- el único miembro con allowed=null ("cualquier string") --
+            // se sacó de este mapa a su propia rama (parseFontFamily(), ver arriba), así que
+            // TODOS los miembros restantes tienen ahora una lista real: el chequeo "$allowed !==
+            // null" quedaría siempre-verdadero (PHPStan lo marca), se retira.
             $allowed = self::KEYWORD_PROPERTIES[$property];
             $keyword = strtolower($value);
-            if ($allowed !== null && !in_array($keyword, $allowed, true)) {
+            if (!in_array($keyword, $allowed, true)) {
                 return $this->warn("Unsupported keyword for $property: $value");
             }
-            return [$property => $property === 'font-family' ? trim($value, '"\' ') : $keyword];
+            return [$property => $keyword];
         }
         if ($property === 'font-weight') {
             return $this->parseFontWeight($value);
@@ -493,6 +505,73 @@ final class DeclarationParser
             }
         }
         return $result;
+    }
+
+    /**
+     * M7-T2 (css-fonts-3 §5.3.1, fallback list): 'font-family' deja de ser un keyword suelto —
+     * el valor puede traer una lista de familias separadas por comas ('Arial, "Helvetica Neue",
+     * sans-serif'), cada una la propia CSS trata como candidata en orden de preferencia. ESTE
+     * parser solo trocea y limpia (comillas/espacios) cada nombre; NO resuelve genéricos
+     * (sans-serif/serif/monospace) ni comprueba qué familia está registrada -- eso vive en
+     * Layout, contra FontCatalog (ver Layout\Text\FontFamilyResolver), porque Style: [Css, Vendor]
+     * en deptrac.yaml prohíbe que esta capa dependa de Text (donde vive FontCatalog). Nunca
+     * avisa: una lista vacía o con nombres vacíos ("font-family: , ,") simplemente produce una
+     * lista más corta (incluso []), igual que CSS descarta en silencio un nombre de familia mal
+     * formado -- ComputedStyle::compute() cae a la lista heredada del padre cuando el resultado
+     * es [].
+     *
+     * @return array<string, mixed>
+     */
+    private function parseFontFamily(string $value): array
+    {
+        $names = [];
+        foreach (self::splitFontFamilyList($value) as $token) {
+            $name = trim($token, " \t\n\r\0\x0B\"'");
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        return ['font-family' => $names];
+    }
+
+    /**
+     * Trocea por comas de NIVEL SUPERIOR -- a diferencia de splitTopLevel() (que rastrea
+     * profundidad de paréntesis para calc()/var()), aquí lo que hay que respetar son las
+     * COMILLAS: un nombre de familia citado ('"Helvetica Neue"') nunca debería partirse aunque
+     * contuviera una coma literal dentro (no ocurre en ningún fixture de este motor, pero el
+     * escaneo es igual de barato que asumirlo sin más).
+     *
+     * @return list<string>
+     */
+    private static function splitFontFamilyList(string $value): array
+    {
+        $tokens = [];
+        $current = '';
+        $quote = null;
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $value[$i];
+            if ($quote !== null) {
+                $current .= $char;
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                $current .= $char;
+                continue;
+            }
+            if ($char === ',') {
+                $tokens[] = $current;
+                $current = '';
+                continue;
+            }
+            $current .= $char;
+        }
+        $tokens[] = $current;
+        return $tokens;
     }
 
     /** @return array<string, mixed> */

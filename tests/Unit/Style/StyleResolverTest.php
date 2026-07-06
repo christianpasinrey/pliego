@@ -886,8 +886,9 @@ it('keeps a var() literally inside a quoted custom property value un-substituted
     $p = $doc->querySelector('p');
     assert($p !== null);
     // font-family trims the surrounding quotes but must NOT have substituted --b: the literal
-    // text "var(--b)" survives, proving --b (Arial) was never touched.
-    expect($map->get($p)->fontFamily)->toBe('var(--b)');
+    // text "var(--b)" survives, proving --b (Arial) was never touched. (M7-T2: font-family is now
+    // a fallback list — a single un-substituted name still yields a one-element list.)
+    expect($map->get($p)->fontFamily)->toBe(['var(--b)']);
 });
 
 it('unsets every longhand of a shorthand when its var() substitution fails, not just the ones the fallback text would have produced', function () {
@@ -904,4 +905,134 @@ it('unsets every longhand of a shorthand when its var() substitution fails, not 
     expect($style->marginBottom->value)->toBe(0.0);
     expect($style->marginLeft->value)->toBe(0.0);
     expect($warnings)->not->toBeEmpty();
+});
+
+// --- M7-T2: complete UA stylesheet (CSS 2.2 Appendix D, adapted) + cascade origin ---------------
+
+it('sizes and bolds h1..h6 per the UA stylesheet (2/1.5/1.17/1/.83/.67 em)', function () {
+    [$doc, $map] = resolveDoc(
+        '',
+        '<body><h1>1</h1><h2>2</h2><h3>3</h3><h4>4</h4><h5>5</h5><h6>6</h6></body>',
+    );
+    $expectedEm = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.67];
+    foreach ($expectedEm as $tag => $em) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        $style = $map->get($el);
+        expect($style->fontSizePx)->toBe($em * 16.0);
+        expect($style->fontWeight)->toBe(700);
+    }
+});
+
+it('sizes h1..h6 top/bottom margins per the UA stylesheet, relative to each heading\'s OWN font-size', function () {
+    [$doc, $map] = resolveDoc('', '<body><h1>1</h1><h6>6</h6></body>');
+    $h1 = $doc->querySelector('h1');
+    $h6 = $doc->querySelector('h6');
+    assert($h1 !== null && $h6 !== null);
+    // h1: font-size 2em de 16px = 32px; margin .67em 0 -> .67 * 32 = 21.44px arriba/abajo.
+    expect($map->get($h1)->marginTop->value)->toBe(0.67 * 32.0);
+    expect($map->get($h1)->marginBottom->value)->toBe(0.67 * 32.0);
+    expect($map->get($h1)->marginLeft->value)->toBe(0.0);
+    // h6: font-size .67em de 16px = 10.72px; margin 1.67em 0 -> 1.67 * 10.72 = 17.9024px.
+    expect($map->get($h6)->marginTop->value)->toEqualWithDelta(1.67 * (0.67 * 16.0), 0.0001);
+});
+
+it('gives p/ul/ol/dl a 1em 0 margin and blockquote/figure a 1em 40px margin', function () {
+    [$doc, $map] = resolveDoc(
+        '',
+        '<body><p>p</p><ul><li>u</li></ul><ol><li>o</li></ol><dl><dt>d</dt></dl>'
+        . '<blockquote>b</blockquote><figure>f</figure></body>',
+    );
+    foreach (['p', 'ul', 'ol', 'dl'] as $tag) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        $style = $map->get($el);
+        expect($style->marginTop->value)->toBe(16.0);
+        expect($style->marginBottom->value)->toBe(16.0);
+        expect($style->marginLeft->value)->toBe(0.0);
+        expect($style->marginRight->value)->toBe(0.0);
+    }
+    foreach (['blockquote', 'figure'] as $tag) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        $style = $map->get($el);
+        expect($style->marginTop->value)->toBe(16.0);
+        expect($style->marginBottom->value)->toBe(16.0);
+        expect($style->marginLeft->value)->toBe(40.0);
+        expect($style->marginRight->value)->toBe(40.0);
+    }
+});
+
+it('gives ul/ol a 40px left padding (markers themselves are M8-out-of-scope, only the padding lands now)', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul><li>x</li></ul></body>');
+    $ul = $doc->querySelector('ul');
+    assert($ul !== null);
+    expect($map->get($ul)->paddingLeft->value)->toBe(40.0);
+});
+
+it('gives pre a monospace font, 1em 0 margin and white-space:pre', function () {
+    [$doc, $map] = resolveDoc('', '<body><pre>x</pre></body>');
+    $pre = $doc->querySelector('pre');
+    assert($pre !== null);
+    $style = $map->get($pre);
+    expect($style->fontFamily)->toBe(['monospace']);
+    expect($style->marginTop->value)->toBe(16.0);
+    expect($style->marginBottom->value)->toBe(16.0);
+    expect($style->whiteSpace)->toBe('pre');
+});
+
+it('gives code/kbd/samp a monospace font-family (inline, per BoxTreeBuilder::INLINE_TAGS)', function () {
+    [$doc, $map] = resolveDoc('', '<body><p><code>c</code><kbd>k</kbd><samp>s</samp></p></body>');
+    foreach (['code', 'kbd', 'samp'] as $tag) {
+        $el = $doc->querySelector($tag);
+        assert($el !== null);
+        expect($map->get($el)->fontFamily)->toBe(['monospace']);
+    }
+});
+
+it('gives hr a 1px solid top border and .5em 0 margin (auto side margins simplified to 0, documented)', function () {
+    [$doc, $map] = resolveDoc('', '<body><hr></body>');
+    $hr = $doc->querySelector('hr');
+    assert($hr !== null);
+    $style = $map->get($hr);
+    expect($style->borderTop->widthPx)->toBe(1.0);
+    expect($style->borderTop->style)->toBe(BorderStyle::Solid);
+    expect($style->marginTop->value)->toBe(8.0);
+    expect($style->marginBottom->value)->toBe(8.0);
+    expect($style->marginLeft->value)->toBe(0.0);
+});
+
+it('gives small a .83em font-size relative to the PARENT font-size (em, not the UA rule\'s own)', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x <small>y</small></p></body>');
+    $small = $doc->querySelector('small');
+    assert($small !== null);
+    expect($map->get($small)->fontSizePx)->toBe(0.83 * 16.0);
+});
+
+// --- M7-T2: cascade origin (CSS 2.2 §6.4.1) -- UA loses to author EVEN AT LOWER SPECIFICITY ----
+
+it('an author rule of LOWER specificity than the matching UA rule still wins (origin beats specificity)', function () {
+    // '*' universal selector: specificity (0,0,0), strictly lower than the UA `th { ... }` type
+    // selector (0,0,1) -- in real CSS cascade, origin is compared BEFORE specificity, so author
+    // always beats UA regardless of who has the "stronger" selector.
+    [$doc, $map] = resolveDoc('* { font-weight: normal }', '<body><table><tr><th>x</th></tr></table></body>');
+    $th = $doc->querySelector('th');
+    assert($th !== null);
+    expect($map->get($th)->fontWeight)->toBe(400);
+});
+
+it('an author !important rule always wins, regardless of origin or specificity', function () {
+    [$doc, $map] = resolveDoc('th { font-weight: normal !important }', '<body><table><tr><th>x</th></tr></table></body>');
+    $th = $doc->querySelector('th');
+    assert($th !== null);
+    expect($map->get($th)->fontWeight)->toBe(400);
+});
+
+it('an author rule can override display:none for a normally-hidden UA tag (head/script/...)', function () {
+    // Antes de M7-T2 (hardcoded HIDDEN_BY_DEFAULT), esto era IMPOSIBLE: el autor no tenía forma
+    // de ganarle a un tag-check en compute(). Ahora es solo otra regla en el cascade.
+    [$doc, $map] = resolveDoc('head { display: block }', '<html><head><title>t</title></head><body></body></html>');
+    $head = $doc->querySelector('head');
+    assert($head !== null);
+    expect($map->get($head)->display)->toBe(Display::Block);
 });

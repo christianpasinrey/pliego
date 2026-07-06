@@ -9,7 +9,9 @@ use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Text\BreakFinder;
+use Pliego\Layout\Text\FontFamilyResolver;
 use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
 use Pliego\Style\FlexDirection;
@@ -69,13 +71,16 @@ use Pliego\Text\FontFace;
 final class IntrinsicSizer
 {
     private BreakFinder $breakFinder;
+    private FontFamilyResolver $fontFamilyResolver;
     private ?ColumnExtentsCalculator $columnExtents = null;
 
     public function __construct(
         private TextMeasurer $measurer,
         private FontCatalog $catalog,
+        ?WarningCollector $warnings = null,
     ) {
         $this->breakFinder = new BreakFinder();
+        $this->fontFamilyResolver = new FontFamilyResolver($catalog, $warnings);
     }
 
     public function maxContentWidth(BlockBox|ImageBox|TableBox $box): float
@@ -338,8 +343,14 @@ final class IntrinsicSizer
         return $style->marginLeft->resolve(0.0) + $style->marginRight->resolve(0.0);
     }
 
+    /** M7-T2: ver el docblock análogo en InlineFlowContext::faceFor() -- misma resolución de
+     * lista de fallback, vía la misma clase (FontFamilyResolver), instancia propia (cada
+     * IntrinsicSizer/InlineFlowContext tiene la suya, pero comparten el mismo WarningCollector de
+     * fondo cuando Engine los conecta -- ver BlockFlowContext -- así que un warning "one-time" de
+     * fuente genérica ausente sigue siendo, en la práctica, uno por render, no uno por instancia). */
     private function faceFor(ComputedStyle $style): FontFace
     {
-        return $this->catalog->select($style->fontFamily, $style->fontWeight, $style->fontStyle === FontStyle::Italic);
+        $family = $this->fontFamilyResolver->resolve($style->fontFamily);
+        return $this->catalog->select($family, $style->fontWeight, $style->fontStyle === FontStyle::Italic);
     }
 }

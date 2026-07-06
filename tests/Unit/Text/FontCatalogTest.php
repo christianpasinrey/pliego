@@ -89,3 +89,39 @@ it('lists the faces used for embedding', function (): void {
     expect($keys)->toContain('default:400:normal');
     expect($keys)->toContain('default:700:italic');
 });
+
+// --- M7-T2: monospace/serif registered by default + hasFamily() -------------------------------
+
+it('registers monospace (DejaVu Sans Mono) and serif (DejaVu Serif) by default, regular + bold + italic + bold-italic', function (): void {
+    $catalog = FontCatalog::withDefaults();
+
+    $mono = $catalog->select('monospace', 400, false);
+    expect($mono->key)->toBe('monospace:400:normal');
+    expect($mono->font->bytes())->toBe(file_get_contents(fontCatalogFixturesDir() . '/DejaVuSansMono.ttf'));
+
+    $monoBold = $catalog->select('monospace', 700, false);
+    expect($monoBold->key)->toBe('monospace:700:normal');
+
+    $monoItalic = $catalog->select('monospace', 400, true);
+    expect($monoItalic->key)->toBe('monospace:400:italic');
+
+    $serif = $catalog->select('serif', 400, false);
+    expect($serif->key)->toBe('serif:400:normal');
+    expect($serif->font->bytes())->toBe(file_get_contents(fontCatalogFixturesDir() . '/DejaVuSerif.ttf'));
+
+    $serifBoldItalic = $catalog->select('serif', 700, true);
+    expect($serifBoldItalic->key)->toBe('serif:700:italic');
+});
+
+it('hasFamily() is case-insensitive and reflects only what was actually registered', function (): void {
+    $catalog = FontCatalog::withDefaults();
+
+    expect($catalog->hasFamily('default'))->toBeTrue();
+    expect($catalog->hasFamily('DEFAULT'))->toBeTrue();
+    expect($catalog->hasFamily('monospace'))->toBeTrue();
+    expect($catalog->hasFamily('Serif'))->toBeTrue();
+    expect($catalog->hasFamily('Arial'))->toBeFalse();
+
+    $catalog->register('Arial', 400, false, fontCatalogFixturesDir() . '/DejaVuSans.ttf');
+    expect($catalog->hasFamily('arial'))->toBeTrue();
+});

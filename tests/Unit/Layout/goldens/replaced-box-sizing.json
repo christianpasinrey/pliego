@@ -4,7 +4,7 @@
         0.0,
         0.0,
         300.0,
-        80.2
+        96.2
     ],
     "background": null,
     "borders": null,
@@ -79,7 +79,7 @@
             "type": "box",
             "rect": [
                 0.0,
-                61.0,
+                77.0,
                 300.0,
                 19.2
             ],
@@ -91,14 +91,14 @@
                     "type": "text",
                     "rect": [
                         0.0,
-                        61.0,
+                        77.0,
                         197.23,
                         19.2
                     ],
                     "text": "Texto tras las imagenes.",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 77.45
+                    "baselineY": 93.45
                 }
             ]
         }

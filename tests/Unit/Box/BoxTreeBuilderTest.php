@@ -643,3 +643,92 @@ it('treats a table as a direct flex item, never merged into the anonymous text-r
     expect($flex->children)->toHaveCount(1);
     expect($flex->children[0])->toBeInstanceOf(TableBox::class);
 });
+
+// --- M7-T2: white-space:pre (UA default on <pre>, ver Style\UserAgentStylesheet) --------------
+
+it('white-space:pre preserves internal whitespace and turns literal newlines into hard line breaks', function () {
+    $html = "<body><pre>line one\n  indented line\nline three</pre></body>";
+    $root = buildTree($html);
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    expect($pre->tag)->toBe('pre');
+    expect($pre->style->whiteSpace)->toBe('pre');
+
+    // 3 líneas -> 3 TextRun separados por 2 LineBreakRun reales (BoxTreeBuilder::textRunTokensFor()).
+    expect($pre->children)->toHaveCount(5);
+    [$l1, $br1, $l2, $br2, $l3] = $pre->children;
+    assert($l1 instanceof TextRun && $l2 instanceof TextRun && $l3 instanceof TextRun);
+    expect($br1)->toBeInstanceOf(LineBreakRun::class);
+    expect($br2)->toBeInstanceOf(LineBreakRun::class);
+    expect($l1->text)->toBe('line one');
+    // Los dos espacios iniciales de "  indented line" sobreviven -- collapseInternalWhitespace()
+    // NUNCA se llama bajo white-space:pre (ver textRunTokensFor()).
+    expect($l2->text)->toBe('  indented line');
+    expect($l3->text)->toBe('line three');
+});
+
+it('a blank line inside a <pre> (two consecutive newlines) produces no empty TextRun, just the two LineBreakRun', function () {
+    $html = "<body><pre>uno\n\ndos</pre></body>";
+    $root = buildTree($html);
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    expect($pre->children)->toHaveCount(4);
+    [$l1, $br1, $br2, $l2] = $pre->children;
+    assert($l1 instanceof TextRun && $l2 instanceof TextRun);
+    expect($br1)->toBeInstanceOf(LineBreakRun::class);
+    expect($br2)->toBeInstanceOf(LineBreakRun::class);
+    expect($l1->text)->toBe('uno');
+    expect($l2->text)->toBe('dos');
+});
+
+it('inherits white-space:pre into a nested inline element (e.g. <code> inside <pre>)', function () {
+    $html = "<body><pre><code>a\nb</code></pre></body>";
+    $root = buildTree($html);
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    // <code> es inline (INLINE_TAGS): su contenido se aplana en la secuencia del <pre>, pero
+    // conserva white-space:pre por HERENCIA (ver ComputedStyle::compute()).
+    expect($pre->children)->toHaveCount(3);
+    [$l1, $br, $l2] = $pre->children;
+    assert($l1 instanceof TextRun && $l2 instanceof TextRun);
+    expect($br)->toBeInstanceOf(LineBreakRun::class);
+    expect($l1->style->whiteSpace)->toBe('pre');
+    expect($l1->text)->toBe('a');
+    expect($l2->text)->toBe('b');
+});
+
+it('a normal (non-pre) paragraph is unaffected: internal whitespace still collapses to one space', function () {
+    $root = buildTree('<body><p>uno    dos</p></body>');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $text = $p->children[0];
+    assert($text instanceof TextRun);
+    expect($text->text)->toBe('uno dos');
+    expect($p->style->whiteSpace)->toBe('normal');
+});
+
+// --- M7-T2: kbd/samp/sub/sup become inline; sub/sup warn (vertical-align deferred to M8) ------
+
+it('treats kbd/samp as inline (monospace via the UA stylesheet), not block', function () {
+    $root = buildTree('<body><p>Press <kbd>Ctrl</kbd> or <samp>OK</samp>.</p></body>');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    // Todo el contenido de <p> se aplana a una única secuencia de TextRun (kbd/samp inline,
+    // fusionados/colapsados por collapse() igual que cualquier otro inline sin borde/fondo).
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+});
+
+it('warns exactly once per <sub>/<sup> occurrence and still renders their text inline', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings('<body><p>H<sub>2</sub>O<sup>+</sup></p></body>', __DIR__);
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+    $subWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, '<sub>')));
+    $supWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, '<sup>')));
+    expect($subWarnings)->toHaveCount(1);
+    expect($supWarnings)->toHaveCount(1);
+});

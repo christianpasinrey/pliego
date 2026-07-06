@@ -18,20 +18,23 @@ use Pliego\Css\WarningCollector;
 
 final readonly class ComputedStyle
 {
-    private const array HIDDEN_BY_DEFAULT = ['head', 'script', 'style', 'title', 'meta', 'link'];
-    /** UA stylesheet: b,strong → bold; M5-T2 añade th (CSS 2.1 §17.2, misma mecánica que HIDDEN_BY_DEFAULT). */
-    private const array BOLD_BY_DEFAULT = ['b', 'strong', 'th'];
-    /** UA stylesheet: i,em → italic. */
-    private const array ITALIC_BY_DEFAULT = ['i', 'em'];
-    /** UA stylesheet: a,u → underline. */
-    private const array UNDERLINE_BY_DEFAULT = ['a', 'u'];
-    /** UA stylesheet M5-T2: th → text-align center (CSS 2.1 §17.2, html.css de referencia). */
-    private const array CENTER_ALIGN_BY_DEFAULT = ['th'];
     /**
-     * UA stylesheet M5-T2: display por defecto de los elementos de tabla (CSS 2.1 §17.2 /
-     * html5 rendering hints). td y th comparten table-cell; tr/thead/tbody se mapean 1:1.
-     * tfoot/col/colgroup/caption quedan fuera del contrato M5 (no listados en el brief) y caen
-     * al default genérico (Display::Block), igual que cualquier otro tag desconocido.
+     * M7-T2 housekeeping: HIDDEN_BY_DEFAULT/BOLD_BY_DEFAULT/ITALIC_BY_DEFAULT/
+     * UNDERLINE_BY_DEFAULT/CENTER_ALIGN_BY_DEFAULT (constantes de tag-por-tag que vivían aquí
+     * desde M1/M5) MIGRARON a Style\UserAgentStylesheet como reglas CSS reales (display:none;
+     * font-weight:bold; font-style:italic; text-decoration:underline; text-align:center) —
+     * StyleResolver las antepone SIEMPRE al cascade con origen UA (ver esa clase), así que
+     * $declarations, para cuando llega aquí, YA contiene el valor ganador (UA o autor, quien
+     * gane) para estos cinco casos: display/font-weight/font-style/text-decoration/text-align se
+     * resuelven abajo con la MISMA lógica de herencia/initial-value que cualquier otra propiedad
+     * CSS normal, sin ninguna rama especial por $tag. Ganancia real (no solo limpieza): un autor
+     * ahora SÍ puede pisar estos defaults con su propia regla (p.ej. `head { display: block }`),
+     * algo que el hardcoding anterior no permitía — divergencia de CSS real que esta migración
+     * corrige de paso.
+     *
+     * TABLE_DISPLAY_BY_TAG es la EXCEPCIÓN deliberada: se queda hardcoded aquí (ver docblock de
+     * Style\UserAgentStylesheet para el porqué — observacionalmente sería un no-op migrarla, y
+     * la extensa batería de goldens de tabla M5/M6 depende de esta ruta exacta).
      */
     private const array TABLE_DISPLAY_BY_TAG = [
         'table' => Display::Table,
@@ -63,12 +66,28 @@ final readonly class ComputedStyle
         public ?Color $backgroundColor,
         public Color $color,
         public float $fontSizePx,
-        public string $fontFamily,
+        // M7-T2 (css-fonts-3 §5.3.1): deja de ser un único nombre de familia (string) para ser la
+        // LISTA CRUDA de fallback, ya troceada/limpiada por DeclarationParser::parseFontFamily()
+        // pero SIN resolver contra ningún catálogo de fuentes — Style no puede depender de Text
+        // (deptrac: Style: [Css, Vendor]), así que la resolución final (¿qué nombre de la lista
+        // está REGISTRADO, o es un genérico como sans-serif/serif/monospace?) vive en Layout,
+        // contra FontCatalog (ver Layout\Text\FontFamilyResolver, consumido por
+        // InlineFlowContext::faceFor()/IntrinsicSizer::faceFor()). ['default'] es el initial
+        // value sintético de este motor (nunca vacío: ver compute(), que cae a la lista heredada
+        // del padre cuando la propia declaración produce una lista vacía).
+        /** @var list<string> */
+        public array $fontFamily,
         public int $fontWeight,
         public FontStyle $fontStyle,
         public ?float $lineHeightPx,
         public TextAlign $textAlign,
         public bool $underline,
+        // M7-T2 (CSS 2.2 §16.6, reducido a normal|pre): SÍ hereda (a diferencia de la mayoría de
+        // propiedades de este constructor) — un <code> anidado dentro de un <pre> (patrón HTML
+        // habitual) debe conservar white-space:pre sin que el autor tenga que redeclararlo. Ver
+        // BoxTreeBuilder::textRunTokensFor()/collapse() (colapso de whitespace + \n -> LineBreakRun)
+        // e InlineFlowContext::layout() (wrapping desactivado para runs 'pre').
+        public string $whiteSpace,
         public BorderSide $borderTop,
         public BorderSide $borderRight,
         public BorderSide $borderBottom,
@@ -187,12 +206,13 @@ final readonly class ComputedStyle
             null,
             $rootColor,
             16.0,
-            'default',
+            ['default'],
             400,
             FontStyle::Normal,
             null,
             TextAlign::Left,
             false,
+            'normal',
             $noBorder,
             $noBorder,
             $noBorder,
@@ -248,10 +268,12 @@ final readonly class ComputedStyle
         $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
         $displayValue = $declarations['display'] ?? null;
-        // M5-T2: el default por tag ahora consulta también TABLE_DISPLAY_BY_TAG antes de caer a
-        // Block — HIDDEN_BY_DEFAULT sigue teniendo prioridad (p.ej. un <title> nunca es tabla).
+        // M7-T2: el default "oculto" (head/script/style/title/meta/link) YA NO vive aquí como
+        // lista de tags — es una regla UA real (Style\UserAgentStylesheet, display:none) que
+        // llega mezclada en $declarations['display'] como cualquier otro 'none' de autor, cubierta
+        // por el match de $displayValue de abajo. TABLE_DISPLAY_BY_TAG es la única tabla de
+        // defaults-por-tag que sigue viviendo aquí (ver su docblock para el porqué).
         $display = match (true) {
-            in_array($tag, self::HIDDEN_BY_DEFAULT, true) => Display::None,
             array_key_exists($tag, self::TABLE_DISPLAY_BY_TAG) => self::TABLE_DISPLAY_BY_TAG[$tag],
             default => Display::Block,
         };
@@ -358,29 +380,28 @@ final readonly class ComputedStyle
             return $v instanceof LengthPercentage || $v instanceof CssLength || $v instanceof CalcExpr;
         };
 
+        // M7-T2: el default por tag (b/strong/th → bold) MIGRÓ a Style\UserAgentStylesheet —
+        // $declarations['font-weight'] ya trae el valor ganador del cascade (UA o autor), así que
+        // esta rama vuelve a ser herencia CSS pura (int declarado > heredado del padre), sin
+        // ningún chequeo de $tag.
         $fontWeightValue = $declarations['font-weight'] ?? null;
-        $fontWeight = match (true) {
-            is_int($fontWeightValue) => $fontWeightValue,
-            in_array($tag, self::BOLD_BY_DEFAULT, true) => 700,
-            default => $parent->fontWeight,
-        };
+        $fontWeight = is_int($fontWeightValue) ? $fontWeightValue : $parent->fontWeight;
 
+        // M7-T2: idem para i/em → italic (antes ITALIC_BY_DEFAULT) — ya viene resuelto en
+        // $declarations vía la regla UA real.
         $fontStyleValue = $declarations['font-style'] ?? null;
-        $fontStyle = match (true) {
-            $fontStyleValue === 'italic' => FontStyle::Italic,
-            $fontStyleValue === 'normal' => FontStyle::Normal,
-            in_array($tag, self::ITALIC_BY_DEFAULT, true) => FontStyle::Italic,
+        $fontStyle = match ($fontStyleValue) {
+            'italic' => FontStyle::Italic,
+            'normal' => FontStyle::Normal,
             default => $parent->fontStyle,
         };
 
+        // M7-T2: idem para th → center (antes CENTER_ALIGN_BY_DEFAULT).
         $textAlignValue = $declarations['text-align'] ?? null;
-        $textAlign = match (true) {
-            $textAlignValue === 'left' => TextAlign::Left,
-            $textAlignValue === 'center' => TextAlign::Center,
-            $textAlignValue === 'right' => TextAlign::Right,
-            // UA stylesheet M5-T2: th → text-align center (CENTER_ALIGN_BY_DEFAULT), aplicada
-            // antes de caer a la herencia normal — misma prioridad que BOLD_BY_DEFAULT arriba.
-            in_array($tag, self::CENTER_ALIGN_BY_DEFAULT, true) => TextAlign::Center,
+        $textAlign = match ($textAlignValue) {
+            'left' => TextAlign::Left,
+            'center' => TextAlign::Center,
+            'right' => TextAlign::Right,
             default => $parent->textAlign,
         };
 
@@ -389,11 +410,21 @@ final readonly class ComputedStyle
          * aplica al elemento, no vía herencia formal). M1 la simplifica tratándola como heredada
          * porque el pipeline de texto todavía no soporta islas de decoración independientes de la
          * herencia tipográfica; T3+ revisará esto si la precisión total resulta necesaria.
+         *
+         * M7-T2: el default por tag (a/u → underline, antes UNDERLINE_BY_DEFAULT) MIGRÓ a
+         * Style\UserAgentStylesheet — ya llega resuelto en $declarations['text-decoration'].
          */
-        $underline = match (true) {
-            array_key_exists('text-decoration', $declarations) => (bool) $declarations['text-decoration'],
-            in_array($tag, self::UNDERLINE_BY_DEFAULT, true) => true,
-            default => $parent->underline,
+        $underline = array_key_exists('text-decoration', $declarations)
+            ? (bool) $declarations['text-decoration']
+            : $parent->underline;
+
+        // M7-T2 (CSS 2.2 §16.6, reducido a normal|pre): hereda del padre cuando no hay
+        // declaración propia — mismo patrón que $textAlign/$underline arriba.
+        $whiteSpaceValue = $declarations['white-space'] ?? null;
+        $whiteSpace = match ($whiteSpaceValue) {
+            'normal' => 'normal',
+            'pre' => 'pre',
+            default => $parent->whiteSpace,
         };
 
         $lineHeightPx = $parent->lineHeightPx;
@@ -554,6 +585,18 @@ final readonly class ComputedStyle
         $opacityValue = $declarations['opacity'] ?? null;
         $opacity = is_float($opacityValue) ? max(0.0, min(1.0, $opacityValue)) : 1.0;
 
+        // M7-T2: font-family ya no es un string único — DeclarationParser::parseFontFamily()
+        // produce list<string> (posiblemente vacía, p.ej. "font-family: ,,"). Una lista vacía (o
+        // con elementos no-string, defensivo, nunca ocurre desde el parser real) hereda del
+        // padre, igual que el resto de propiedades tipográficas sin declaración propia.
+        // array_filter(..., 'is_string') + array_values() es el idiom que PHPStan estrecha a
+        // list<string> sin necesidad de @var/assert (ver instrucciones del gate: prohibidos).
+        $fontFamilyValue = $declarations['font-family'] ?? null;
+        $fontFamily = is_array($fontFamilyValue) ? array_values(array_filter($fontFamilyValue, 'is_string')) : [];
+        if ($fontFamily === []) {
+            $fontFamily = $parent->fontFamily;
+        }
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -571,12 +614,13 @@ final readonly class ComputedStyle
             $resolveCurrentColor($declarations['background-color'] ?? null),
             $color,
             $fontSizePx,
-            is_string($declarations['font-family'] ?? null) ? $declarations['font-family'] : $parent->fontFamily,
+            $fontFamily,
             $fontWeight,
             $fontStyle,
             $lineHeightPx,
             $textAlign,
             $underline,
+            $whiteSpace,
             $borderSide('top'),
             $borderSide('right'),
             $borderSide('bottom'),

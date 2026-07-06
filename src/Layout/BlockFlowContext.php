@@ -63,7 +63,7 @@ final class BlockFlowContext implements FormattingContext
         private readonly FontCatalog $catalog,
         private readonly ?WarningCollector $warnings = null,
     ) {
-        $this->inline = new InlineFlowContext($measurer, $catalog);
+        $this->inline = new InlineFlowContext($measurer, $catalog, $warnings);
     }
 
     /** Ver docblock de clase: wiring explícito opcional del delegado flex (por defecto, perezoso). */
@@ -89,7 +89,7 @@ final class BlockFlowContext implements FormattingContext
             $this->flexContext = new FlexFormattingContext(
                 $this->measurer,
                 $this->catalog,
-                new IntrinsicSizer($this->measurer, $this->catalog),
+                new IntrinsicSizer($this->measurer, $this->catalog, $this->warnings),
                 $this->warnings,
             );
         }
@@ -102,7 +102,7 @@ final class BlockFlowContext implements FormattingContext
             $this->tableContext = new TableFormattingContext(
                 $this->measurer,
                 $this->catalog,
-                new IntrinsicSizer($this->measurer, $this->catalog),
+                new IntrinsicSizer($this->measurer, $this->catalog, $this->warnings),
                 $this->warnings,
             );
         }

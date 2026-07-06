@@ -477,13 +477,13 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
 			identifier: property.notFound
-			count: 12
+			count: 17
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
 			identifier: property.notFound
-			count: 15
+			count: 21
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
@@ -549,13 +549,13 @@ parameters:
 		-
 			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
 			identifier: argument.type
-			count: 9
+			count: 15
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
 			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
 			identifier: argument.type
-			count: 9
+			count: 14
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
@@ -999,7 +999,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$borderTop on mixed\.$#'
 			identifier: property.nonObject
-			count: 11
+			count: 13
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1023,7 +1023,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$display on mixed\.$#'
 			identifier: property.nonObject
-			count: 12
+			count: 13
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1065,13 +1065,13 @@ parameters:
 		-
 			message: '#^Cannot access property \$fontFamily on mixed\.$#'
 			identifier: property.nonObject
-			count: 1
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$fontSizePx on mixed\.$#'
 			identifier: property.nonObject
-			count: 7
+			count: 9
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1083,7 +1083,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$fontWeight on mixed\.$#'
 			identifier: property.nonObject
-			count: 8
+			count: 11
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1113,25 +1113,25 @@ parameters:
 		-
 			message: '#^Cannot access property \$marginBottom on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 8
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$marginLeft on mixed\.$#'
 			identifier: property.nonObject
-			count: 4
+			count: 8
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$marginRight on mixed\.$#'
 			identifier: property.nonObject
-			count: 4
+			count: 6
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$marginTop on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 9
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1143,7 +1143,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$paddingLeft on mixed\.$#'
 			identifier: property.nonObject
-			count: 9
+			count: 10
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1161,7 +1161,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$style on mixed\.$#'
 			identifier: property.nonObject
-			count: 4
+			count: 5
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1185,13 +1185,19 @@ parameters:
 		-
 			message: '#^Cannot access property \$value on mixed\.$#'
 			identifier: property.nonObject
-			count: 25
+			count: 43
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$verticalAlign on mixed\.$#'
 			identifier: property.nonObject
 			count: 4
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$whiteSpace on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1203,19 +1209,19 @@ parameters:
 		-
 			message: '#^Cannot access property \$widthPx on mixed\.$#'
 			identifier: property.nonObject
-			count: 4
+			count: 5
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 102
+			count: 117
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 93
+			count: 106
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

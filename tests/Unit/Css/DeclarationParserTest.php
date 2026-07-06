@@ -765,3 +765,45 @@ it('warns on a non-numeric opacity value', function () {
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M7-T2: font-family becomes a fallback list -------------------------------------------
+
+it('parses a single unquoted font-family into a one-element list', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-family', 'Arial'))->toBe(['font-family' => ['Arial']]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('splits a font-family fallback list on commas, trimming quotes and whitespace per name', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-family', 'Arial, "Helvetica Neue", sans-serif');
+    expect($result)->toBe(['font-family' => ['Arial', 'Helvetica Neue', 'sans-serif']]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('drops empty entries from a malformed font-family list without warning', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-family', ' , Arial ,, '))->toBe(['font-family' => ['Arial']]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts a single-quoted font-family name', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-family', "'Courier New'"))->toBe(['font-family' => ['Courier New']]);
+});
+
+// --- M7-T2: white-space (minimal: normal|pre) ----------------------------------------------
+
+it('parses white-space: normal and pre', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('white-space', 'normal'))->toBe(['white-space' => 'normal']);
+    expect($parser->parse('white-space', 'pre'))->toBe(['white-space' => 'pre']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported white-space keyword (nowrap/pre-wrap/pre-line out of scope M7)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('white-space', 'nowrap');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

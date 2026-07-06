@@ -4,7 +4,7 @@
         0.0,
         0.0,
         300.0,
-        64.0
+        80.0
     ],
     "background": null,
     "borders": null,
@@ -14,7 +14,7 @@
             "type": "box",
             "rect": [
                 0.0,
-                0.0,
+                16.0,
                 300.0,
                 64.0
             ],
@@ -26,27 +26,27 @@
                     "type": "text",
                     "rect": [
                         0.0,
-                        0.0,
+                        16.0,
                         106.25,
                         32.0
                     ],
                     "text": "Primera línea",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 22.85
+                    "baselineY": 38.85
                 },
                 {
                     "type": "text",
                     "rect": [
                         0.0,
-                        32.0,
+                        48.0,
                         114.16,
                         32.0
                     ],
                     "text": "Segunda línea",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 54.85
+                    "baselineY": 70.85
                 }
             ]
         }

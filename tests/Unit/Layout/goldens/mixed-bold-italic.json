@@ -4,7 +4,7 @@
         0.0,
         0.0,
         200.0,
-        96.0
+        112.0
     ],
     "background": null,
     "borders": null,
@@ -14,7 +14,7 @@
             "type": "box",
             "rect": [
                 0.0,
-                0.0,
+                16.0,
                 200.0,
                 96.0
             ],
@@ -26,92 +26,92 @@
                     "type": "text",
                     "rect": [
                         0.0,
-                        0.0,
+                        16.0,
                         140.39,
                         19.2
                     ],
                     "text": "Texto normal con ",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 16.45
+                    "baselineY": 32.45
                 },
                 {
                     "type": "text",
                     "rect": [
                         0.0,
-                        19.2,
+                        35.2,
                         71.09,
                         19.2
                     ],
                     "text": "negrita ",
                     "faceKey": "default:700:normal",
                     "underline": false,
-                    "baselineY": 35.65
+                    "baselineY": 51.65
                 },
                 {
                     "type": "text",
                     "rect": [
                         71.09,
-                        19.2,
+                        35.2,
                         14.55,
                         19.2
                     ],
                     "text": "y ",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 35.65
+                    "baselineY": 51.65
                 },
                 {
                     "type": "text",
                     "rect": [
                         85.64,
-                        19.2,
+                        35.2,
                         57.57,
                         19.2
                     ],
                     "text": "cursiva ",
                     "faceKey": "default:400:italic",
                     "underline": false,
-                    "baselineY": 35.65
+                    "baselineY": 51.65
                 },
                 {
                     "type": "text",
                     "rect": [
                         0.0,
-                        38.4,
+                        54.4,
                         163.0,
                         19.2
                     ],
                     "text": "mezclado de verdad ",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 54.85
+                    "baselineY": 70.85
                 },
                 {
                     "type": "text",
                     "rect": [
                         0.0,
-                        57.6,
+                        73.6,
                         186.6,
                         19.2
                     ],
                     "text": "para forzar el ajuste de ",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 74.05
+                    "baselineY": 90.05
                 },
                 {
                     "type": "text",
                     "rect": [
                         0.0,
-                        76.8,
+                        92.8,
                         43.77,
                         19.2
                     ],
                     "text": "línea.",
                     "faceKey": "default:400:normal",
                     "underline": false,
-                    "baselineY": 93.25
+                    "baselineY": 109.25
                 }
             ]
         }

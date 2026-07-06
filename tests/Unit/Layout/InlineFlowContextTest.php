@@ -184,3 +184,81 @@ it('never infinite-loops on a single word wider than the line', function () {
     expect($fragments[0]->text)->toBe('supercalifragilisticexpialidocious');
     expect($fragments[0]->rect->width)->toBeGreaterThan(10.0);
 });
+
+// --- M7-T2: white-space:pre disables wrapping (CSS 2.2 §16.6.1) --------------------------------
+
+it('does not wrap a white-space:pre run even when it exceeds the available width (overflow allowed, documented)', function () {
+    $pre = inlineStyle(['white-space' => 'pre']);
+    $text = 'a very long line that would normally wrap across multiple lines';
+    $runs = [new TextRun($text, $pre)];
+
+    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 50.0, $pre);
+
+    // Un único fragmento -- BreakFinder nunca se consulta para un run 'pre' (ver
+    // InlineFlowContext::layout()), así que el texto entero es una "palabra" atómica.
+    expect($fragments)->toHaveCount(1);
+    expect($fragments[0]->text)->toBe($text);
+    expect($fragments[0]->rect->width)->toBeGreaterThan(50.0);
+});
+
+it('still breaks a white-space:pre run at explicit LineBreakRun boundaries (hard breaks survive)', function () {
+    $pre = inlineStyle(['white-space' => 'pre']);
+    $runs = [
+        new TextRun('line one', $pre),
+        new LineBreakRun(),
+        new TextRun('line two', $pre),
+    ];
+
+    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout($runs, 0.0, 0.0, 500.0, $pre);
+
+    expect($fragments)->toHaveCount(2);
+    expect($fragments[0]->text)->toBe('line one');
+    expect($fragments[1]->text)->toBe('line two');
+    expect($fragments[1]->rect->y)->toBeGreaterThan($fragments[0]->rect->y);
+});
+
+// --- M7-T2: font-family fallback list resolution (generic keywords + registered names) --------
+
+it('resolves the monospace generic keyword to the DejaVu Sans Mono face', function () {
+    $style = inlineStyle(['font-family' => ['monospace']]);
+    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style);
+
+    expect($fragments[0]->faceKey)->toBe('monospace:400:normal');
+});
+
+it('resolves the serif generic keyword to the DejaVu Serif face', function () {
+    $style = inlineStyle(['font-family' => ['serif']]);
+    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('text', $style)], 0.0, 0.0, 500.0, $style);
+
+    expect($fragments[0]->faceKey)->toBe('serif:400:normal');
+});
+
+it('resolves a fallback list by picking the first name registered in the catalog', function () {
+    $style = inlineStyle(['font-family' => ['Unregistered Family', 'monospace']]);
+    $fragments = new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style);
+
+    expect($fragments[0]->faceKey)->toBe('monospace:400:normal');
+});
+
+it('falls back to the default family, with a warning, when every name in the list is unresolvable', function () {
+    $warnings = new Pliego\Css\WarningCollector();
+    $style = inlineStyle(['font-family' => ['Unregistered Family', 'monospace']]);
+    // catalog SIN registrar 'monospace' (uno nuevo, vacío de familias genéricas) para forzar el
+    // camino "ningún candidato resuelve" -- FontCatalog::withDefaults() SIEMPRE registra
+    // 'monospace' en este repo (ver su docblock), así que aquí se construye un catálogo mínimo a
+    // propósito.
+    $catalog = new Pliego\Text\FontCatalog();
+    $catalog->register('default', 400, false, __DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $fragments = new InlineFlowContext($this->measurer, $catalog, $warnings)
+        ->layout([new TextRun('code', $style)], 0.0, 0.0, 500.0, $style);
+
+    expect($fragments[0]->faceKey)->toBe('default:400:normal');
+    expect($warnings->drain())->toContain(
+        "Generic font family 'monospace' has no registered face; falling back to 'default'",
+    );
+});

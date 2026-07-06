@@ -13,7 +13,16 @@ use Pliego\Style\StyleMap;
 
 final class BoxTreeBuilder
 {
-    private const array INLINE_TAGS = ['span', 'strong', 'em', 'b', 'i', 'a', 'small', 'code', 'u'];
+    // M7-T2: kbd/samp se añaden junto a code (mismo trato UA -- font-family:monospace, ver
+    // UserAgentStylesheet -- y misma naturaleza inline que code, ya en esta lista desde M1).
+    // sub/sup se añaden como INLINE (para que un <sub>/<sup> DIRECTO hijo de un bloque, p.ej.
+    // "H<sub>2</sub>O" en un <p>, no se trate como caja de bloque) pero SIN ningún desplazamiento
+    // vertical propio -- vertical-align: sub/super es M8 (ver el warning que se emite al
+    // encontrarlos, warnIfUnsupportedSubOrSup()); el texto se renderiza en línea de base normal,
+    // con el mismo tamaño/estilo heredado que cualquier otro inline sin estilo propio.
+    private const array INLINE_TAGS = [
+        'span', 'strong', 'em', 'b', 'i', 'a', 'small', 'code', 'u', 'kbd', 'samp', 'sub', 'sup',
+    ];
 
     public function __construct(
         private readonly ImageLoader $imageLoader,
@@ -69,7 +78,9 @@ final class BoxTreeBuilder
         };
         foreach ($element->childNodes as $node) {
             if ($node instanceof \Dom\Text) {
-                $pending[] = new TextRun(self::collapseInternalWhitespace($node->textContent ?? ''), $style);
+                foreach (self::textRunTokensFor($node->textContent ?? '', $style) as $token) {
+                    $pending[] = $token;
+                }
                 continue;
             }
             if (!$node instanceof \Dom\Element) {
@@ -93,6 +104,7 @@ final class BoxTreeBuilder
                 continue;
             }
             if (in_array($tag, self::INLINE_TAGS, true)) {
+                $this->warnIfUnsupportedSubOrSup($tag);
                 $this->collectInline($node, $styles, $pending);
                 continue;
             }
@@ -469,7 +481,9 @@ final class BoxTreeBuilder
         $style = $styles->get($element);
         foreach ($element->childNodes as $node) {
             if ($node instanceof \Dom\Text) {
-                $pending[] = new TextRun(self::collapseInternalWhitespace($node->textContent ?? ''), $style);
+                foreach (self::textRunTokensFor($node->textContent ?? '', $style) as $token) {
+                    $pending[] = $token;
+                }
                 continue;
             }
             if (!$node instanceof \Dom\Element) {
@@ -496,13 +510,61 @@ final class BoxTreeBuilder
                 }
                 continue;
             }
+            $this->warnIfUnsupportedSubOrSup($tag);
             $this->collectInline($node, $styles, $pending);
+        }
+    }
+
+    /** M7-T2: sub/sup se soportan como texto inline plano (ver INLINE_TAGS) pero SIN el
+     * desplazamiento vertical de vertical-align:sub/super (fuera de alcance, M8) -- se avisa en
+     * cada aparición para que RenderReport deje constancia de la aproximación, igual criterio que
+     * el warning de "inline image hoisted" de arriba. */
+    private function warnIfUnsupportedSubOrSup(string $tag): void
+    {
+        if ($tag === 'sub' || $tag === 'sup') {
+            $this->warnings->addWarning(
+                "<$tag> rendered as plain inline text (vertical-align: sub/super not supported yet, M8)",
+            );
         }
     }
 
     private static function collapseInternalWhitespace(string $raw): string
     {
         return preg_replace('/\s+/', ' ', $raw) ?? '';
+    }
+
+    /**
+     * M7-T2 (CSS 2.2 §16.6.1, white-space:pre): un nodo de texto normal siempre produce un ÚNICO
+     * TextRun con su whitespace interno ya colapsado (collapseInternalWhitespace) -- collapse()
+     * hará el recorte de frontera después. Bajo white-space:pre, en cambio, NADA se colapsa (los
+     * espacios/tabs se conservan literalmente) y cada '\n' del texto fuente se convierte en un
+     * LineBreakRun real (idéntico a un <br> explícito) -- así el resto del pipeline (collapse(),
+     * InlineFlowContext) no necesita saber que el salto vino de un carácter en vez de una
+     * etiqueta. Un segmento vacío entre dos '\n' consecutivos (línea en blanco) no produce
+     * TextRun (no aporta nada, ver collapse()) pero el LineBreakRun that lo rodea ya fuerza el
+     * avance de línea por sí solo. \r\n se normaliza a \n primero (mismo criterio que cualquier
+     * editor/HTML parser); un '\r' suelto (Mac clásico, prácticamente inexistente hoy) NO se
+     * trata como salto -- fuera de alcance, no forma parte del contrato de esta tarea.
+     *
+     * @return list<TextRun|LineBreakRun>
+     */
+    private static function textRunTokensFor(string $raw, ComputedStyle $style): array
+    {
+        if ($style->whiteSpace !== 'pre') {
+            return [new TextRun(self::collapseInternalWhitespace($raw), $style)];
+        }
+        $lines = explode("\n", str_replace("\r\n", "\n", $raw));
+        $tokens = [];
+        $lastIndex = count($lines) - 1;
+        foreach ($lines as $index => $line) {
+            if ($line !== '') {
+                $tokens[] = new TextRun($line, $style);
+            }
+            if ($index !== $lastIndex) {
+                $tokens[] = new LineBreakRun();
+            }
+        }
+        return $tokens;
     }
 
     /**
@@ -538,6 +600,20 @@ final class BoxTreeBuilder
         foreach ($tokens as $token) {
             if ($token instanceof LineBreakRun || $token instanceof ImageBox) {
                 $result[] = $token;
+                $lastText = null;
+                $pendingSpace = false;
+                continue;
+            }
+            // M7-T2 (CSS 2.2 §16.6.1, white-space:pre): NINGÚN colapso/recorte/fusión de
+            // frontera para un TextRun 'pre' -- se emite verbatim, exactamente como llegó de
+            // textRunTokensFor() (que ya troceó por \n en LineBreakRun reales), y se trata como
+            // separador de secuencia para el run VECINO (igual que LineBreakRun/ImageBox arriba)
+            // para que un espacio de frontera normal no colapsado no se filtre hacia dentro/fuera
+            // de un tramo preformateado.
+            if ($token->style->whiteSpace === 'pre') {
+                if ($token->text !== '') {
+                    $result[] = $token;
+                }
                 $lastText = null;
                 $pendingSpace = false;
                 continue;

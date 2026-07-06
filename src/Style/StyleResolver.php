@@ -130,18 +130,30 @@ final class StyleResolver
             $this->allRules(),
             static fn(StyleRule $rule): bool => $rule->selector->matches($element),
         ));
-        // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2): el tier !important es la clave de
-        // ordenación PRIMARIA — un StyleRule marcado important siempre se procesa DESPUÉS de
-        // cualquiera normal (bool false < true en PHP, así que el <=> ya deja lo normal primero),
-        // sin importar especificidad, porque el bucle de más abajo va aplicando "última
-        // declaración gana" sobre $matching en este mismo orden. Especificidad y $order siguen
-        // siendo el desempate de siempre, pero SOLO dentro del mismo tier (nunca comparados entre
-        // tiers distintos, ver StyleRule). No hay tier user/UA important en este motor (solo
-        // author), así que dos niveles (normal, important) bastan.
+        // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2) + M7-T2 (§6.4.1, origen): el orden de
+        // ordenación es (1) !important, (2) origen, (3) especificidad, (4) $order — en ese orden
+        // de prioridad ESTRICTO, nunca comparados "cruzados" entre niveles distintos (un empate en
+        // el nivel N solo se desempata mirando el nivel N+1, jamás al revés). (1) !important:
+        // bool false < true en PHP, así que el <=> ya deja "normal" antes que "important" — porque
+        // el bucle de más abajo aplica "última declaración gana" sobre $matching en este mismo
+        // orden, un tier posterior siempre GANA sobre uno anterior. (2) origen: UA (userAgent=
+        // true) siempre antes que autor (false) DENTRO del mismo tier de importancia — esto
+        // reproduce el orden completo de §6.4.1 (UA normal < autor normal < autor important) con
+        // los tiers que este motor soporta (no existe tier "UA important": la hoja UA nunca
+        // declara !important, ver StyleRule::$userAgent). CRÍTICO: el origen se compara ANTES que
+        // la especificidad, no junto a/después de ella — un `body { font-weight: bold }` de autor
+        // (specificity 0,0,1) sigue ganando a la regla UA `th { font-weight: bold; ... }`
+        // (specificity 0,0,1, MISMA especificidad) simplemente por ser de un origen posterior,
+        // exactamente como CSS real: el origen decide el ganador ANTES de que la especificidad
+        // llegue a importar, nunca al revés.
         usort($matching, static function (StyleRule $a, StyleRule $b): int {
             $byImportant = $a->important <=> $b->important;
             if ($byImportant !== 0) {
                 return $byImportant;
+            }
+            $byOrigin = self::originRank($a) <=> self::originRank($b);
+            if ($byOrigin !== 0) {
+                return $byOrigin;
             }
             $bySpecificity = $a->selector->specificity()->compareTo($b->selector->specificity());
             return $bySpecificity !== 0 ? $bySpecificity : $a->order <=> $b->order;
@@ -221,17 +233,32 @@ final class StyleResolver
         return $result;
     }
 
-    /** @return list<StyleRule> */
+    /**
+     * M7-T2: la hoja UA (Style\UserAgentStylesheet) se antepone SIEMPRE, incondicionalmente —
+     * ningún $source la incluye explícitamente ni ningún caller (Engine, tests, goldens) necesita
+     * wiring propio para tenerla, igual que un navegador real siempre carga su hoja UA sin que la
+     * página la pida. El orden de concatenación aquí es cosmético (UA primero, luego $sources en
+     * orden): el ganador real entre UA y autor lo decide el comparador de
+     * matchedDeclarationsAndCustomProperties() por ORIGEN, no por esta posición en el array.
+     *
+     * @return list<StyleRule>
+     */
     private function allRules(): array
     {
         if ($this->rulesCache !== null) {
             return $this->rulesCache;
         }
-        $rules = [];
+        $rules = UserAgentStylesheet::rules();
         foreach ($this->sources as $source) {
             $rules = [...$rules, ...$source->rules()];
         }
         return $this->rulesCache = $rules;
+    }
+
+    /** UA (userAgent=true) siempre por debajo del autor (false) — ver comparador de arriba. */
+    private static function originRank(StyleRule $rule): int
+    {
+        return $rule->userAgent ? 0 : 1;
     }
 
     /**

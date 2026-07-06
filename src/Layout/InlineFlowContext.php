@@ -6,9 +6,11 @@ namespace Pliego\Layout;
 
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\Text\BreakFinder;
+use Pliego\Layout\Text\FontFamilyResolver;
 use Pliego\Style\ComputedStyle;
 use Pliego\Style\FontStyle;
 use Pliego\Style\TextAlign;
@@ -47,10 +49,15 @@ use Pliego\Text\FontFace;
  */
 final readonly class InlineFlowContext
 {
+    private FontFamilyResolver $fontFamilyResolver;
+
     public function __construct(
         private TextMeasurer $measurer,
         private FontCatalog $catalog,
-    ) {}
+        ?WarningCollector $warnings = null,
+    ) {
+        $this->fontFamilyResolver = new FontFamilyResolver($catalog, $warnings);
+    }
 
     /**
      * @param list<TextRun|LineBreakRun> $runs
@@ -84,6 +91,21 @@ final readonly class InlineFlowContext
             $face = $this->faceFor($run->style);
             $fontSize = $run->style->fontSizePx;
             $text = $run->text;
+
+            // M7-T2 (CSS 2.2 §16.6.1, white-space:pre): SIN oportunidades de corte dentro del
+            // run -- todo su texto es una única "palabra" atómica que nunca se parte a media
+            // línea (overflow permitido y documentado, ver brief). BoxTreeBuilder ya convirtió
+            // cada '\n' del texto fuente en un LineBreakRun real (ver textRunTokensFor()), así
+            // que el salto de línea "duro" entre tramos preformateados sigue funcionando exactamente
+            // igual que el resto de este bucle (rama LineBreakRun de arriba) -- lo único que se
+            // desactiva aquí es el WRAP dentro de un mismo tramo.
+            if ($run->style->whiteSpace === 'pre') {
+                $sliceWidth = $this->measurer->widthOf($text, $face, $fontSize);
+                $carry[] = ['run' => $run, 'face' => $face, 'text' => $text, 'width' => $sliceWidth];
+                $carryWidth += $sliceWidth;
+                continue;
+            }
+
             $segStart = 0;
 
             foreach ($finder->find($text) as $opportunity) {
@@ -266,8 +288,12 @@ final readonly class InlineFlowContext
         $lineWidth = 0.0;
     }
 
+    /** M7-T2: $style->fontFamily es ahora una lista de fallback (ver ComputedStyle) — se resuelve
+     * a UNA familia concreta (genérico traducido o primer nombre registrado, ver
+     * FontFamilyResolver) antes de pedirle la cara a FontCatalog. */
     private function faceFor(ComputedStyle $style): FontFace
     {
-        return $this->catalog->select($style->fontFamily, $style->fontWeight, $style->fontStyle === FontStyle::Italic);
+        $family = $this->fontFamilyResolver->resolve($style->fontFamily);
+        return $this->catalog->select($family, $style->fontWeight, $style->fontStyle === FontStyle::Italic);
     }
 }
