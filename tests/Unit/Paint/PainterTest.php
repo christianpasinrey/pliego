@@ -22,8 +22,12 @@ final class RecordingCanvas implements Canvas
 
     public function fillRect(Rect $rect, Color $color): void
     {
+        // M6-T5: sufijo ",a=N.NN" SOLO cuando alpha no es null (opaco) — así el formato de
+        // llamada registrado no cambia para ningún test anterior a esta tarea (todos usan colores
+        // opacos, alpha===null).
+        $alphaSuffix = $color->alpha !== null ? sprintf(',a=%.2F', $color->alpha) : '';
         $this->calls[] = sprintf(
-            'rect(%.2F,%.2F,%.2F,%.2F,#%02x%02x%02x)',
+            'rect(%.2F,%.2F,%.2F,%.2F,#%02x%02x%02x%s)',
             $rect->x,
             $rect->y,
             $rect->width,
@@ -31,6 +35,7 @@ final class RecordingCanvas implements Canvas
             $color->r,
             $color->g,
             $color->b,
+            $alphaSuffix,
         );
     }
 
@@ -41,12 +46,13 @@ final class RecordingCanvas implements Canvas
 
     public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void
     {
-        $this->calls[] = sprintf('line(%.2F,%.2F,%.2F,%.2F,%.2F)', $x1, $y1, $x2, $y2, $widthPx);
+        $alphaSuffix = $color->alpha !== null ? sprintf(',a=%.2F', $color->alpha) : '';
+        $this->calls[] = sprintf('line(%.2F,%.2F,%.2F,%.2F,%.2F%s)', $x1, $y1, $x2, $y2, $widthPx, $alphaSuffix);
     }
 
-    public function drawImage(Rect $rect, string $imageKey): void
+    public function drawImage(Rect $rect, string $imageKey, float $opacity = 1.0): void
     {
-        $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey);
+        $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey, $opacity);
     }
 }
 
@@ -277,7 +283,73 @@ it('paints an ImageFragment via Canvas::drawImage(), in document order between b
     new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000)',
-        'image(10.00,10.00,40.00,30.00,/tmp/tiny.jpg)',
+        'image(10.00,10.00,40.00,30.00,/tmp/tiny.jpg,1.00)',
         'text(Hola)',
     ]);
+});
+
+// M6-T5: opacity multiplies the element's OWN painted colors (background/border/underline/
+// image) — combined via Color::withOpacity() in Painter, NEVER affecting children (each fragment
+// carries its own opacity, default 1.0/opaque, see BoxFragment/TextFragment/ImageFragment).
+
+it('multiplies the background alpha by the BoxFragment opacity', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none(), opacity: 0.5),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000,a=0.50)']);
+});
+
+it('combines an rgba background alpha WITH the element opacity multiplicatively (0.5 alpha x 0.5 opacity = 0.25)', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), new Color(0, 0, 255, 0.5), [], BorderSet::none(), opacity: 0.5),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#0000ff,a=0.25)']);
+});
+
+it('does NOT apply a BoxFragment opacity to its children (M6 divergence: no real transparency group)', function () {
+    $canvas = new RecordingCanvas();
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $inner = new BoxFragment(new Rect(0, 0, 40, 30), new Color(0, 0, 255), [$innerText], BorderSet::none());
+    $outer = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$inner], BorderSet::none(), atomic: true, opacity: 0.5);
+    $page = new Page(1, [$outer]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000,a=0.50)', // outer: dimmed by its own opacity
+        'rect(0.00,0.00,40.00,30.00,#0000ff)',          // inner: its OWN opacity is 1.0, untouched
+        'text(Hi)',
+    ]);
+});
+
+it('multiplies a visible border side alpha by the BoxFragment opacity', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, opacity: 0.4)]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    foreach ($canvas->calls as $call) {
+        expect($call)->toContain('a=0.40');
+    }
+    expect($canvas->calls)->toHaveCount(4);
+});
+
+it('multiplies the underline stroke alpha by the TextFragment opacity', function () {
+    $canvas = new RecordingCanvas();
+    $rect = new Rect(10, 10, 50, 19.2);
+    $page = new Page(1, [
+        new TextFragment($rect, 'Hola', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', true, 0.5),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toHaveCount(2);
+    expect($canvas->calls[1])->toContain('a=0.50');
+});
+
+it('passes the ImageFragment opacity through to Canvas::drawImage()', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [new ImageFragment(new Rect(0, 0, 40, 30), '/tmp/tiny.jpg', 0.3)]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe(['image(0.00,0.00,40.00,30.00,/tmp/tiny.jpg,0.30)']);
 });

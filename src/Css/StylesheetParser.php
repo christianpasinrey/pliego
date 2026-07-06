@@ -39,30 +39,82 @@ final class StylesheetParser
 
         $document = (new SabberwormParser($css))->parse();
         $declarationParser = new DeclarationParser();
+        $selectorWarnings = new WarningCollector();
+        $selectorParser = new SelectorParser($selectorWarnings);
         $rules = [];
         $warnings = $pageWarnings;
         $order = 0;
         foreach ($document->getAllDeclarationBlocks() as $block) {
-            $declarations = [];
+            // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2): un bloque puede mezclar
+            // declaraciones !important y normales — se acumulan en DOS mapas separados (mismo
+            // tipado/expansión de shorthand de siempre, ver mergeDeclaration()) para poder emitir
+            // hasta DOS StyleRule por selector más abajo, uno por tier (ver StyleRule).
+            $normalDeclarations = [];
+            $importantDeclarations = [];
             foreach ($block->getRules() as $rule) {
-                foreach ($declarationParser->parse($rule->getRule(), (string) $rule->getValue()) as $property => $value) {
-                    $declarations[$property] = $value;
+                $property = trim($rule->getRule());
+                $rawValue = trim((string) $rule->getValue());
+                if ($rule->getIsImportant()) {
+                    $importantDeclarations = $this->mergeDeclaration($importantDeclarations, $property, $rawValue, $declarationParser);
+                } else {
+                    $normalDeclarations = $this->mergeDeclaration($normalDeclarations, $property, $rawValue, $declarationParser);
                 }
             }
             $warnings = [...$warnings, ...$declarationParser->drainWarnings()];
             foreach ($block->getSelectors() as $sabberwormSelector) {
                 $selectorString = is_string($sabberwormSelector) ? $sabberwormSelector : $sabberwormSelector->getSelector();
-                $selector = Selector::fromString($selectorString);
+                $selector = $selectorParser->parse($selectorString);
+                $warnings = [...$warnings, ...$selectorWarnings->drain()];
                 if ($selector === null) {
-                    $warnings[] = 'Unsupported selector in M0: ' . $selectorString;
                     continue;
                 }
-                if ($declarations !== []) {
-                    $rules[] = new StyleRule($selector, $declarations, $order++);
+                if ($normalDeclarations !== []) {
+                    $rules[] = new StyleRule($selector, $normalDeclarations, $order++);
+                }
+                if ($importantDeclarations !== []) {
+                    $rules[] = new StyleRule($selector, $importantDeclarations, $order++, important: true);
                 }
             }
         }
         return new ParseResult($rules, $warnings, $pageRule);
+    }
+
+    /**
+     * Tipa una única declaración cruda (propiedad + valor, ya sin el sufijo "!important" — lo
+     * despoja Sabberworm, ver Rule::parse()) y la fusiona en $target, con las MISMAS tres ramas
+     * de siempre (custom property cruda / DeferredDeclaration si hay var() / DeclarationParser
+     * normal) — solo que ahora $target es uno de los dos mapas (normal/important) que decide el
+     * llamador según $rule->getIsImportant(), en vez del único mapa $declarations de antes de
+     * esta tarea (fast path idéntico, cero regresión de tipado).
+     *
+     * @param array<string, mixed> $target
+     * @return array<string, mixed>
+     */
+    private function mergeDeclaration(array $target, string $property, string $rawValue, DeclarationParser $declarationParser): array
+    {
+        // css-variables-1 §2: una custom property (--x) se captura CRUDA, sin tipar nunca (ni
+        // siquiera cuando no contiene var()) — su valor final depende del elemento (herencia +
+        // cascade), y css-variables-1 exige case-sensitivity real (--Sp !== --sp), así que NO se
+        // pasa por strtolower() como el resto de propiedades (ver DeclarationParser::parse(),
+        // que sí lo hace).
+        if (str_starts_with($property, '--')) {
+            $target[$property] = $rawValue;
+            return $target;
+        }
+        // M6-T4: cualquier declaración cuyo valor contenga var(...) se difiere COMPLETA (valor
+        // crudo, propiedad tal cual — shorthand sin expandir) porque su tipado definitivo
+        // depende de las custom properties heredadas del elemento, que solo StyleResolver
+        // conoce (compute-time, por elemento) — ver DeferredDeclaration. Las reglas SIN var()
+        // siguen tipándose aquí mismo, en tiempo de parseo (fast path intacto, cero regresión
+        // para el 99% de las hojas de estilo sin variables).
+        if (str_contains($rawValue, 'var(')) {
+            $target[strtolower($property)] = new DeferredDeclaration($rawValue);
+            return $target;
+        }
+        foreach ($declarationParser->parse($property, $rawValue) as $parsedProperty => $value) {
+            $target[$parsedProperty] = $value;
+        }
+        return $target;
     }
 
     /**

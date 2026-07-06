@@ -23,7 +23,7 @@ use Pliego\Text\FontCatalog;
 /** @param array<string, mixed> $declarations */
 function flexStyle(array $declarations = [], ?ComputedStyle $parent = null): ComputedStyle
 {
-    return ComputedStyle::compute($declarations, $parent ?? ComputedStyle::root(), 'div');
+    return ComputedStyle::compute($declarations, $parent ?? ComputedStyle::root(), 'div', 16.0);
 }
 
 beforeEach(function (): void {

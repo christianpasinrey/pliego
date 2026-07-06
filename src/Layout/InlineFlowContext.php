@@ -209,6 +209,7 @@ final readonly class InlineFlowContext
                 $blockStyle->color,
                 $face->key,
                 $blockStyle->underline,
+                $blockStyle->opacity,
             );
             $cursorY += $lineHeight;
             return;
@@ -255,6 +256,7 @@ final readonly class InlineFlowContext
                 $style->color,
                 $entry['face']->key,
                 $style->underline,
+                $style->opacity,
             );
             $cursorX += $entry['width'];
         }

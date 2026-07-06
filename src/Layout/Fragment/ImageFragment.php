@@ -20,6 +20,11 @@ final readonly class ImageFragment implements Fragment
     public function __construct(
         public Rect $rect,
         public string $imageKey,
+        // M6-T5: opacity PROPIA del elemento <img> (ComputedStyle::$opacity, default 1.0) —
+        // pasada tal cual a Canvas::drawImage() (ISO 32000-1 §8.4.5 ExtGState /ca, ver PdfCanvas),
+        // ya que una imagen no tiene un Color propio en el que combinarla (a diferencia de
+        // BoxFragment/TextFragment).
+        public float $opacity = 1.0,
     ) {}
 
     public function rect(): Rect

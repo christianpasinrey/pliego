@@ -78,3 +78,24 @@ it('reduces the usable content width when @page declares a larger margin, forcin
 
     expect($linesNarrow)->toBeGreaterThan($linesDefault);
 });
+
+// --- M6 final-review fix, finding 3: @page accepts cm/mm/in/pt, same as element margins --------
+
+it('shifts the content area by the exact px-per-cm factor when @page declares a cm margin', function () {
+    $path = sys_get_temp_dir() . '/pliego-page-rule-cm.pdf';
+    Engine::make()->stylesheet('@page { margin: 2cm }')->render('<body><p>Texto</p></body>')->save($path);
+    [$x] = firstTextPosition((string) file_get_contents($path));
+
+    // css-values-3 §5.2 exact factor, same one CssLength::PX_PER_CM uses: 2cm = 2 * 96/2.54 px.
+    $marginPx = 2.0 * (96.0 / 2.54);
+    expect($x)->toBe(round($marginPx * 0.75, 2));
+});
+
+it('warns and falls back to the Engine default margin for rem in @page (no font context at page level)', function () {
+    $path = sys_get_temp_dir() . '/pliego-page-rule-rem-fallback.pdf';
+    $report = Engine::make()->stylesheet('@page { margin: 1.5rem }')->render('<body><p>Texto</p></body>')->save($path);
+    [$x] = firstTextPosition((string) file_get_contents($path));
+
+    expect($x)->toBe(round(48.0 * 0.75, 2));
+    expect($report->warnings)->not->toBeEmpty();
+});

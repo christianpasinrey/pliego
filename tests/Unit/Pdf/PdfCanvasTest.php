@@ -200,3 +200,130 @@ it('places a deferred XObject via q/cm/Do/Q at page-absolute px coordinates and 
     expect($pdf)->toContain(sprintf('q 1 0 0 1 %.2F %.2F cm /%s Do Q', $expectedX, $expectedY, $ref->name));
     expect($pdf)->toContain("/XObject << /{$ref->name} {$ref->objectId} 0 R >>");
 });
+
+// M6-T5: ExtGState (ISO 32000-1 §8.4.5) — /GSn gs before an op whose Color has alpha != 1,
+// wrapped in q/Q; dedup by value; transparent paints nothing.
+
+it('emits a /GSn gs inside q/Q for a fillRect with alpha < 1, and registers a /ca /CA ExtGState dict', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 100, 50), new Color(255, 0, 0, 0.5));
+    });
+    expect($pdf)->toContain('q');
+    expect($pdf)->toContain('/GS1 gs');
+    expect($pdf)->toContain('Q');
+    expect($pdf)->toContain('/Type /ExtGState');
+    expect($pdf)->toContain('/ca 0.500');
+    expect($pdf)->toContain('/CA 0.500');
+    expect($pdf)->toContain('1.000 0.000 0.000 rg');
+});
+
+it('does NOT emit a gs op or wrap in q/Q for a fully opaque color (alpha null)', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 100, 50), new Color(255, 0, 0));
+    });
+    expect($pdf)->not->toContain('gs');
+    expect($pdf)->not->toContain('/ExtGState');
+});
+
+it('dedups two elements sharing the same alpha value into a SINGLE ExtGState object', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 10, 10), new Color(255, 0, 0, 0.5));
+        $canvas->fillRect(new Rect(20, 20, 10, 10), new Color(0, 0, 255, 0.5));
+    });
+    expect(substr_count($pdf, '/Type /ExtGState'))->toBe(1);
+    expect(substr_count($pdf, '/GS1 gs'))->toBe(2);
+});
+
+it('registers TWO distinct ExtGState objects for two different alpha values', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 10, 10), new Color(255, 0, 0, 0.5));
+        $canvas->fillRect(new Rect(20, 20, 10, 10), new Color(0, 0, 255, 0.25));
+    });
+    expect(substr_count($pdf, '/Type /ExtGState'))->toBe(2);
+    expect($pdf)->toContain('/GS1 gs')->toContain('/GS2 gs');
+    expect($pdf)->toContain('/ca 0.500')->toContain('/ca 0.250');
+});
+
+it('registers the ExtGState resources in the page /Resources dict', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 10, 10), new Color(255, 0, 0, 0.5));
+    });
+    expect($pdf)->toContain('/ExtGState <<')->toContain('/GS1');
+});
+
+it('paints NOTHING for a fully transparent fillRect (alpha 0) — no re/f op at all', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 100, 50), new Color(0, 0, 0, 0.0));
+    });
+    expect($pdf)->not->toContain(' re f');
+    expect($pdf)->not->toContain('/ExtGState');
+});
+
+it('emits a gs op for a strokeLine with alpha < 1', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeLine(0.0, 0.0, 10.0, 0.0, 1.0, new Color(0, 0, 0, 0.5));
+    });
+    expect($pdf)->toContain('/GS1 gs')->toContain('/ca 0.500');
+});
+
+it('emits a gs op for fillText when the color has alpha < 1', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 0, 0.5), 'default:400:normal', false));
+    });
+    expect($pdf)->toContain('/GS1 gs')->toContain('/ca 0.500')->toContain('Tj');
+});
+
+it('paints NOTHING for fillText when the color is fully transparent (alpha 0) — no glyphs registered either', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 0, 0.0), 'default:400:normal', false));
+    });
+    expect($pdf)->not->toContain('Tj');
+    expect($pdf)->not->toContain('/ExtGState');
+});
+
+it('combines opacity 0.5 over an rgba(0,0,255,0.5) color into an effective /ca 0.250', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 255, 0.5), 'default:400:normal', false, 0.5));
+    });
+    expect($pdf)->toContain('/ca 0.250');
+});
+
+it('inserts /GSn gs right after the opening q for a drawImage with opacity < 1, same q/Q scope as cm', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($imagePath): void {
+        $canvas->drawImage(new Rect(0.0, 0.0, 10.0, 10.0), $imagePath, 0.5);
+    });
+    expect($pdf)->toContain("q\n/GS1 gs\n");
+    expect($pdf)->toContain('/ca 0.500');
+    expect($pdf)->toContain('/Im1 Do Q');
+});
+
+it('paints NOTHING for a drawImage with opacity 0 — no XObject registered, no Do op', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($imagePath): void {
+        $canvas->drawImage(new Rect(0.0, 0.0, 10.0, 10.0), $imagePath, 0.0);
+    });
+    expect($pdf)->not->toContain('/Subtype /Image');
+    expect($pdf)->not->toContain('Do');
+});
+
+// M6-T6 (controller addition, T5 review): byte-level proof of the q/Q scoping guarantee
+// documented on emitWithAlpha() — an alpha'd op's `gs` is scoped to its OWN q/Q pair and must
+// never leak onto whatever paints right after it.
+
+it('leaves NO residual gs state after an alpha\'d op: the very next opaque op starts right at "Q\\n", byte for byte', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 10, 10), new Color(255, 0, 0, 0.5)); // alpha'd: q/gs/rg/Q
+        $canvas->fillRect(new Rect(20, 20, 10, 10), new Color(0, 0, 255));    // opaque: rg only, unwrapped
+    });
+    // The opaque fillRect's own body (its "rg" line) is untouched by emitWithAlpha() and is
+    // appended immediately after the alpha'd op's closing "Q\n" — a literal substring match
+    // proves there is no dangling "gs"/stray "q" between the two ops, at the byte level.
+    expect($pdf)->toContain("Q\n0.000 0.000 1.000 rg");
+    // Sanity: exactly one q/Q scope opened total (the alpha'd op's own) — the opaque op that
+    // follows adds neither a new q/Q pair nor a second "gs" (the /GS1 name also appears once
+    // more in the page's /Resources /ExtGState dict, unrelated to the content stream itself).
+    expect(substr_count($pdf, "q\n"))->toBe(1);
+    expect(substr_count($pdf, "Q\n"))->toBe(1);
+    expect(substr_count($pdf, '/GS1 gs'))->toBe(1);
+});

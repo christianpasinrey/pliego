@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 use Pliego\Css\DeclarationParser;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
+use Pliego\Css\Value\LengthUnit;
 
 it('rejects negative padding as an invalid length with a warning', function () {
     $parser = new DeclarationParser();
@@ -136,18 +139,56 @@ it('expands mixed px/percent margin shorthand values', function () {
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('warns on % for font-size (unsupported until M3+)', function () {
+// --- M6-T3: em/rem/pt/cm/mm/in (css-values-3 §5-6) --------------------------------------
+
+it('exactly folds 1in/1pt/1cm/1mm to px at parse time on width', function () {
     $parser = new DeclarationParser();
-    $result = $parser->parse('font-size', '150%');
-    expect($result)->toBe([]);
-    expect($parser->drainWarnings())->not->toBeEmpty();
+    expect($parser->parse('width', '1in'))->toEqual(['width' => LengthPercentage::px(96.0)]);
+    expect($parser->parse('width', '1pt'))->toEqual(['width' => LengthPercentage::px(96.0 / 72.0)]);
+    expect($parser->parse('width', '1cm'))->toEqual(['width' => LengthPercentage::px(96.0 / 2.54)]);
+    expect($parser->parse('width', '1mm'))->toEqual(['width' => LengthPercentage::px(9.6 / 2.54)]);
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('warns on % for line-height (unsupported until M3+)', function () {
+it('keeps em/rem symbolic (CssLength) on width/margin/padding until ComputedStyle::compute resolves them', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('width', '2em'))->toEqual(['width' => CssLength::of(2.0, LengthUnit::Em)]);
+    expect($parser->parse('margin-left', '1.5rem'))->toEqual(['margin-left' => CssLength::of(1.5, LengthUnit::Rem)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands a margin shorthand mixing em/rem/px/% ("1em 2rem 10px 5%")', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', '1em 2rem 10px 5%');
+    expect($result)->toEqual([
+        'margin-top' => CssLength::of(1.0, LengthUnit::Em),
+        'margin-right' => CssLength::of(2.0, LengthUnit::Rem),
+        'margin-bottom' => LengthPercentage::px(10.0),
+        'margin-left' => LengthPercentage::percent(5.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('keeps em/rem symbolic on font-size/height/border-width until ComputedStyle::compute resolves them', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('font-size', '2em'))->toEqual(['font-size' => CssLength::of(2.0, LengthUnit::Em)]);
+    expect($parser->parse('height', '1.5rem'))->toEqual(['height' => CssLength::of(1.5, LengthUnit::Rem)]);
+    expect($parser->parse('border-top-width', '0.1em'))->toEqual(['border-top-width' => CssLength::of(0.1, LengthUnit::Em)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts % for font-size as a symbolic CssLength (M6-T3: resolved against the parent font-size in ComputedStyle::compute)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', '150%');
+    expect($result)->toEqual(['font-size' => CssLength::of(150.0, LengthUnit::Percent)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts % for line-height as a symbolic CssLength (M6-T3: resolved against the own font-size in ComputedStyle::compute)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('line-height', '150%');
-    expect($result)->toBe([]);
-    expect($parser->drainWarnings())->not->toBeEmpty();
+    expect($result)->toEqual(['line-height' => CssLength::of(150.0, LengthUnit::Percent)]);
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
 // --- M2-T2: bordes (longhands + shorthands) ---------------------------------------------
@@ -517,4 +558,170 @@ it('parses vertical-align top/middle/bottom and warns on baseline/sub/super/perc
         expect($result)->toBe([]);
         expect($parser->drainWarnings())->not->toBeEmpty();
     }
+});
+
+// --- M6-T4: calc() parsed into a symbolic CalcExpr (css-values-3 §8) ---------------------
+
+it('parses calc() on width into a symbolic CalcExpr, not yet resolved', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(100% - 20px)');
+    expect($result)->toEqual(['width' => CalcExpr::of(100.0, 0.0, 0.0, -20.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses calc() with em on font-size into a symbolic CalcExpr', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(1em + 4px)');
+    expect($result)->toEqual(['font-size' => CalcExpr::of(0.0, 1.0, 0.0, 4.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses calc() on a pure-length property (height)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('height', 'calc(2px + 3px)');
+    expect($result)->toEqual(['height' => CalcExpr::of(0.0, 0.0, 0.0, 5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('splits a shorthand token containing an internal-space calc() correctly (no naive whitespace split)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin', 'calc(1em + 4px) 10px');
+    expect($result)->toEqual([
+        'margin-top' => CalcExpr::of(0.0, 1.0, 0.0, 4.0),
+        'margin-right' => LengthPercentage::px(10.0),
+        'margin-bottom' => CalcExpr::of(0.0, 1.0, 0.0, 4.0),
+        'margin-left' => LengthPercentage::px(10.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and drops the declaration when calc() itself is invalid (division by zero)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(10px / 0)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('does not fall back to plain length parsing when a value looks like calc() but is malformed', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(100% - )');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M6-T4 fix, finding 2: a calc() with NO em/rem/% is a definite px value already knowable at
+// parse time — fold it and run the same non-negative check a literal value would get. ----------
+
+it('rejects a definite negative calc() for a non-negative property at parse time: padding-left:calc(-5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding-left', 'calc(-5px)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts a definite negative calc() for margin at parse time (margins may be negative)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('margin-left', 'calc(-5px)');
+    expect($result)->toEqual(['margin-left' => CalcExpr::of(0.0, 0.0, 0.0, -5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts a %-bearing calc() regardless of apparent sign at parse time (documented gap): padding-left:calc(10% - 999px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('padding-left', 'calc(10% - 999px)');
+    expect($result)->toEqual(['padding-left' => CalcExpr::of(10.0, 0.0, 0.0, -999.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M6 final-review fix, finding 2: font-size/line-height calc() gets the SAME definite-negative
+// check padding/width/etc. already got in M6-T4 — closes the one property family left out there. --
+
+it('rejects a definite negative calc() font-size at parse time: font-size:calc(-5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(-5px)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts a definite positive calc() font-size at parse time: font-size:calc(5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(5px)');
+    expect($result)->toEqual(['font-size' => CalcExpr::of(0.0, 0.0, 0.0, 5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still accepts a calc() with % or em on font-size (sign not knowable until compute-time, unchanged)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(1em - 999px)');
+    expect($result)->toEqual(['font-size' => CalcExpr::of(0.0, 1.0, 0.0, -999.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a definite negative calc() line-height at parse time: line-height:calc(-5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(-5px)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts a definite positive calc() line-height at parse time: line-height:calc(5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(5px)');
+    expect($result)->toEqual(['line-height' => CalcExpr::of(0.0, 0.0, 0.0, 5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M6-T5: full color syntax reaches color/background-color/border-*-color via the SAME
+// Color::fromCss() call already exercised above for hex/keywords — these just prove rgb()/hsl()/
+// currentColor flow through the property dispatcher unchanged. -------------------------------
+
+it('parses color/background-color with rgb()/rgba()', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('color', 'rgb(139, 94, 52)'))->toEqual(['color' => new Color(139, 94, 52)]);
+    expect($parser->parse('background-color', 'rgba(0, 0, 255, 0.5)'))
+        ->toEqual(['background-color' => new Color(0, 0, 255, 0.5)]);
+});
+
+it('parses color/background-color with hsl()/hsla()', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('color', 'hsl(0, 100%, 50%)'))->toEqual(['color' => new Color(255, 0, 0)]);
+});
+
+it('parses currentColor for color/background-color/border-color as the sentinel', function () {
+    $parser = new DeclarationParser();
+    $color = $parser->parse('color', 'currentColor');
+    expect($color['color'])->toBeInstanceOf(Color::class);
+    expect($color['color']->isCurrentColor)->toBeTrue();
+    $bg = $parser->parse('background-color', 'currentColor');
+    expect($bg['background-color']->isCurrentColor)->toBeTrue();
+    $border = $parser->parse('border-top-color', 'currentColor');
+    expect($border['border-top-color']->isCurrentColor)->toBeTrue();
+});
+
+it('parses "transparent" for background-color as alpha 0', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-color', 'transparent');
+    expect($result['background-color'])->toEqual(new Color(0, 0, 0, 0.0));
+});
+
+// --- M6-T5: opacity — clamped to [0,1], NOT a warning when out of range (css-values-3 §4.3). ---
+
+it('parses opacity as a float', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('opacity', '0.5'))->toBe(['opacity' => 0.5]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('clamps opacity above 1 to 1.0 and below 0 to 0.0, without a warning', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('opacity', '2'))->toBe(['opacity' => 1.0]);
+    expect($parser->parse('opacity', '-1'))->toBe(['opacity' => 0.0]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on a non-numeric opacity value', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('opacity', 'transparent');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
 });

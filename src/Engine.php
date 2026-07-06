@@ -99,15 +99,16 @@ final class Engine
             // dependencias de Engine (`--fail-on-uncovered` deja de verificar nada aquí).
             $parseResult = (new StylesheetParser())->parse($this->css);
             $document = HtmlParser::parse($html);
-            $styles = (new StyleResolver([new CssStyleSource($parseResult)]))->resolve($document);
-            // M5-T1 (housekeeping): un ÚNICO WarningCollector, compartido entre BoxTreeBuilder
-            // (imágenes), BlockFlowContext/FlexFormattingContext (layout) y Paginator
-            // (paginación) — antes de esta tarea solo cubría imágenes; ahora RenderReport también
-            // refleja limitaciones de layout/paginación (ver los docblocks de esas clases). Se
-            // drena al FINAL (ver el `$warnings = [...]` justo antes del `return`), después de
-            // consumir el generador de Paginator::paginate(), para no perder los warnings que
-            // solo se emiten DURANTE esa iteración.
+            // M5-T1 (housekeeping) + M6-T4: un ÚNICO WarningCollector, compartido entre
+            // StyleResolver (var()/calc(), M6-T4), BoxTreeBuilder (imágenes),
+            // BlockFlowContext/FlexFormattingContext (layout) y Paginator (paginación) — antes de
+            // M6-T4 solo cubría imágenes/layout/paginación; ahora RenderReport también refleja
+            // limitaciones de resolución de estilos (ver los docblocks de esas clases). Se drena
+            // al FINAL (ver el `$warnings = [...]` justo antes del `return`), después de consumir
+            // el generador de Paginator::paginate(), para no perder los warnings que solo se
+            // emiten DURANTE esa iteración.
             $layoutWarnings = new WarningCollector();
+            $styles = (new StyleResolver([new CssStyleSource($parseResult)], $layoutWarnings))->resolve($document);
             $imageLoader = new ImageLoader();
             $boxTree = (new BoxTreeBuilder($imageLoader, $layoutWarnings, $this->basePath))->build($document, $styles);
 

@@ -231,9 +231,11 @@ final class BoxTreeBuilder
      * adopta el de su elemento contenedor). */
     private function wrapLooseContentInAnonymousRow(string $text, ComputedStyle $containerStyle, bool $isHeader): TableRowBox
     {
-        $cellStyle = ComputedStyle::compute([], $containerStyle, 'td');
+        // M6-T3: $remBase es inerte aquí — declarations=[] nunca contiene un CssLength en rem,
+        // así que cualquier valor produce el mismo resultado (ver ComputedStyle::compute()).
+        $cellStyle = ComputedStyle::compute([], $containerStyle, 'td', $containerStyle->fontSizePx);
         $cell = new TableCellBox($cellStyle, [new TextRun($text, $containerStyle)], 1, 'anonymous');
-        $rowStyle = ComputedStyle::compute([], $containerStyle, 'tr');
+        $rowStyle = ComputedStyle::compute([], $containerStyle, 'tr', $containerStyle->fontSizePx);
         return new TableRowBox($rowStyle, [$cell], $isHeader);
     }
 
@@ -248,9 +250,9 @@ final class BoxTreeBuilder
         ComputedStyle $containerStyle,
         bool $isHeader,
     ): TableRowBox {
-        $cellStyle = ComputedStyle::compute([], $containerStyle, 'td');
+        $cellStyle = ComputedStyle::compute([], $containerStyle, 'td', $containerStyle->fontSizePx);
         $cell = new TableCellBox($cellStyle, [$this->buildChildBox($element, $styles, $childStyle)], 1, 'anonymous');
-        $rowStyle = ComputedStyle::compute([], $containerStyle, 'tr');
+        $rowStyle = ComputedStyle::compute([], $containerStyle, 'tr', $containerStyle->fontSizePx);
         return new TableRowBox($rowStyle, [$cell], $isHeader);
     }
 
@@ -272,7 +274,7 @@ final class BoxTreeBuilder
                 if ($text === '') {
                     continue;
                 }
-                $cellStyle = ComputedStyle::compute([], $trStyle, 'td');
+                $cellStyle = ComputedStyle::compute([], $trStyle, 'td', $trStyle->fontSizePx);
                 $cells[] = new TableCellBox($cellStyle, [new TextRun($text, $trStyle)], 1, 'anonymous');
                 continue;
             }
@@ -287,7 +289,7 @@ final class BoxTreeBuilder
                 $cells[] = $this->buildTableCell($node, $styles);
                 continue;
             }
-            $cellStyle = ComputedStyle::compute([], $trStyle, 'td');
+            $cellStyle = ComputedStyle::compute([], $trStyle, 'td', $trStyle->fontSizePx);
             $cells[] = new TableCellBox($cellStyle, [$this->buildChildBox($node, $styles, $childStyle)], 1, 'anonymous');
         }
         return new TableRowBox($trStyle, $cells, $isHeader);
@@ -366,7 +368,7 @@ final class BoxTreeBuilder
             if ($run === []) {
                 return;
             }
-            $anonymousStyle = ComputedStyle::compute([], $containerStyle, 'div');
+            $anonymousStyle = ComputedStyle::compute([], $containerStyle, 'div', $containerStyle->fontSizePx);
             $items[] = new BlockBox($anonymousStyle, $run, 'anonymous');
             $run = [];
         };

@@ -50,6 +50,20 @@ final class PdfWriter
      */
     private array $deferred = [];
     private bool $deferredWritten = false;
+    /**
+     * @var array<int, int> "milli-alpha" (round($ca*1000), entero 0-1000) => object id, dedup por
+     *      valor (M6-T5) — clave ENTERA a propósito, no el string formateado "%.3F": un
+     *      sprintf('%.3F', $ca) devuelve un `numeric-string` para PHPStan, y PHP convierte
+     *      AUTOMÁTICAMENTE una clave de array que "parece" un entero canónico a int (p.ej.
+     *      "123" => 123) — PHPStan no puede descartar esa posibilidad para un `numeric-string`
+     *      genérico, así que infiere `array<int|string, int>` para la propiedad entera y el
+     *      `array<string, int>` declarado deja de aceptarlo (assign.propertyType). Una clave int
+     *      explícita elimina la ambigüedad de raíz, sin ensanchar el tipo real de la propiedad.
+     */
+    private array $extGStateIds = [];
+    /** @var array<int, string> misma clave "milli-alpha" => nombre de recurso ("GS1", "GS2", ...), en orden de creación */
+    private array $extGStateNames = [];
+    private int $nextExtGStateIndex = 1;
 
     /** @param resource $stream */
     public function __construct(private readonly mixed $stream) {}
@@ -75,8 +89,10 @@ final class PdfWriter
      * @param array<string, int> $fontRefs resource name (e.g. "F1") => font object id
      * @param array<string, int> $xobjectRefs resource name (e.g. "XO1") => Form XObject object id
      *        (M2-T7 margin-box labels — see DeferredXObject/defer())
+     * @param array<string, int> $extGStateRefs resource name (e.g. "GS1") => ExtGState object id
+     *        (M6-T5 alpha — see registerExtGState()/extGStatePageResources())
      */
-    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs, array $xobjectRefs = []): void
+    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs, array $xobjectRefs = [], array $extGStateRefs = []): void
     {
         $contentId = $this->allocateObjectId();
         $length = strlen($contentStream);
@@ -90,6 +106,10 @@ final class PdfWriter
         $xobjects = $this->refDict($xobjectRefs);
         if ($xobjects !== null) {
             $resourceParts[] = "/XObject << $xobjects>>";
+        }
+        $extGStates = $this->refDict($extGStateRefs);
+        if ($extGStates !== null) {
+            $resourceParts[] = "/ExtGState << $extGStates>>";
         }
         $resources = $resourceParts === [] ? '<< >>' : '<< ' . implode(' ', $resourceParts) . ' >>';
 
@@ -164,6 +184,58 @@ final class PdfWriter
             $entries .= "/$name $objectId 0 R ";
         }
         return $entries;
+    }
+
+    /**
+     * ISO 32000-1 §8.4.5: registra (dedup por VALOR, no por identidad de llamada) un ExtGState
+     * con /ca y /CA fijados ambos a $ca (constant alpha para fill y stroke — M6-T5 no distingue
+     * un alpha de fill de uno de stroke, así que ambas entradas comparten el mismo valor). A
+     * diferencia de defer()/FontRegistry (que retrasan la escritura del objeto hasta que se
+     * conoce algo que aún no existe), un ExtGState no depende de NADA que se resuelva más tarde
+     * — se escribe INMEDIATAMENTE, en la primera llamada para cada valor distinto de $ca; no hay
+     * ninguna ordering contract que respetar frente a esta clase (puede llamarse en cualquier
+     * momento antes de finish()). Devuelve el object id (ya escrito).
+     */
+    public function registerExtGState(float $ca): int
+    {
+        $milliAlpha = self::milliAlpha($ca);
+        if (isset($this->extGStateIds[$milliAlpha])) {
+            return $this->extGStateIds[$milliAlpha];
+        }
+        $objectId = $this->allocateObjectId();
+        $name = 'GS' . $this->nextExtGStateIndex++;
+        $this->extGStateIds[$milliAlpha] = $objectId;
+        $this->extGStateNames[$milliAlpha] = $name;
+        $formatted = sprintf('%.3F', $milliAlpha / 1000.0);
+        $this->writeObject($objectId, "<< /Type /ExtGState /ca $formatted /CA $formatted >>");
+        return $objectId;
+    }
+
+    /** Nombre de recurso ("GS1", "GS2", ...) del ExtGState para $ca, registrándolo (dedup) si hace falta. */
+    public function extGStateResourceName(float $ca): string
+    {
+        $this->registerExtGState($ca);
+        return $this->extGStateNames[self::milliAlpha($ca)];
+    }
+
+    /**
+     * @return array<string, int> resourceName ("GS1", ...) => objectId de TODOS los ExtGState
+     *         registrados hasta el momento — mismo patrón "acumula globalmente, sobre-incluye en
+     *         cada página" que FontRegistry::pageResources()/ImageRegistry::pageResources().
+     */
+    public function extGStatePageResources(): array
+    {
+        $resources = [];
+        foreach ($this->extGStateNames as $milliAlpha => $name) {
+            $resources[$name] = $this->extGStateIds[$milliAlpha];
+        }
+        return $resources;
+    }
+
+    /** Clampa $ca a [0,1] y lo convierte a la clave de dedup entera (ver docblock de $extGStateIds). */
+    private static function milliAlpha(float $ca): int
+    {
+        return (int) round(max(0.0, min(1.0, $ca)) * 1000.0);
     }
 
     public function finish(): void

@@ -44,6 +44,7 @@ final class GeometryShift
             self::translateChildrenY($fragment->children, $deltaY),
             $fragment->borders,
             $fragment->atomic,
+            $fragment->opacity,
         );
     }
 
@@ -65,10 +66,12 @@ final class GeometryShift
                     $child->color,
                     $child->faceKey,
                     $child->underline,
+                    $child->opacity,
                 ),
                 $child instanceof ImageFragment => new ImageFragment(
                     new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
                     $child->imageKey,
+                    $child->opacity,
                 ),
                 default => throw new \LogicException('Unknown fragment leaf: ' . $child::class),
             };

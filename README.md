@@ -4,10 +4,10 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M5); the
+> **Not published to Packagist yet.** This is an early milestone (M6); the
 > package is not installable via Composer from a registry at this point.
 
-## Status: M5 — tables
+## Status: M6 — CSS core
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -33,10 +33,97 @@ separated-borders box model, auto **and** fixed column-width algorithms,
 `colspan`, `vertical-align`, and row-atomic pagination — enough to render
 third-party/email-style HTML (a classic email layout is exactly nested
 `<table>`s: a photo cell + a text cell per row, a bordered data table inside
-the text cell) without asking the author to rewrite it as flexbox first. It
-is still not a general-purpose renderer — floats and the rest of tables-to-
-spec (`border-collapse`, `rowspan`, repeating `<thead>`) are the milestones
-ahead (see [Roadmap](#roadmap)).
+the text cell) without asking the author to rewrite it as flexbox first. M6
+replaces the M0-M5 CSS subset (a single compound selector, px/%-only
+lengths, hex/named colors) with a real **CSS core**: selector combinators
+and `:nth-child`/`:not`, `em`/`rem`/physical units resolved against the
+right font-size at the right time, `:root` **custom properties** (`var()`)
+and `calc()`, and the **full color syntax** (`rgb()`/`rgba()`/`hsl()`/
+`hsla()`, 148 named colors, `transparent`/`currentColor`) with real alpha
+compositing via PDF `ExtGState`. It is still not a general-purpose renderer
+— floats, `:hover`-style dynamic pseudo-classes (meaningless in paged
+media), `@media`, and the rest of tables-to-spec are the milestones ahead
+(see [Roadmap](#roadmap)).
+
+### Supported as of M6
+
+- **Selectors** (selectors-3 subset, replacing M0-M5's single-compound-only
+  matching): a full selector is a chain of compound selectors joined by
+  **combinators** — descendant (space), child (`>`), next-sibling (`+`),
+  subsequent-sibling (`~`) — matched right-to-left, plus **specificity**
+  (`Specificity`, an (a,b,c) value object with its own `compareTo()` — the
+  cascade now orders by real specificity, not just source order, replacing
+  M0-M5's `int`-returning `specificity()`).
+  - **Attribute selectors**: `[attr]`, `[attr=val]`, `[attr~=val]`,
+    `[attr^=val]`, `[attr$=val]`, `[attr*=val]`, `[attr|=val]`. The
+    selectors-4 case-insensitivity flag (`[attr=val i]`) parses but always
+    falls back to case-sensitive matching (one-time warning) — it is not
+    actually honored.
+  - **Pseudo-classes**: `:root`, `:first-child`, `:last-child`,
+    `:nth-child(An+B|odd|even)`, `:not(<single compound selector>)` (no
+    nesting, no comma-separated compounds inside `:not()`).
+  - **Not supported, reported as a warning rather than silently ignored**:
+    `:hover`/`:focus`/`:active`/`:visited`/`:link` (parsed for specificity,
+    but permanently excluded from matching — dynamic states have no
+    meaning in paged/print media, not a "not implemented yet" gap),
+    `:nth-of-type` and the rest of the `-of-type` family, and any unknown
+    pseudo-class. `::before`/`::after` and every other pseudo-*element*
+    aren't parsed at all (they need to generate boxes of their own — M7).
+- **Units** (css-values-3 §5-6): `em` (relative to the element's **own**
+  computed font-size — except in `font-size` itself, where css-values-3
+  §5.2 measures em/% against the **parent's** font-size to avoid a
+  self-referential circularity) and `rem` (always relative to the
+  **document root**'s computed font-size, however deeply nested the
+  element is — never the nearest ancestor). Physical units `pt`/`cm`/`mm`/
+  `in` fold to px at parse time (exact 96dpi factors). No viewport units
+  (`vh`/`vw`) — reported as an unsupported-unit warning like any other
+  unrecognized token.
+- **Custom properties and `calc()`** (css-variables-1, css-values-3 §8):
+  `--name: value` declarations (inherited down the tree, resolved at
+  compute time) and `var(--name, fallback)` with cycle detection (a cyclic
+  reference is "invalid at computed-value time": falls back if a fallback
+  exists, otherwise the whole declaration is dropped, with a warning).
+  `calc()` supports `+ - * /` with correct precedence and parentheses,
+  mixing `%`/`em`/`rem`/px/physical units and unitless numbers (including
+  the Bootstrap spacer idiom `calc(var(--bs-spacing) * .5)` and bare
+  leading-dot decimals like `.5rem`); a structurally invalid expression
+  (e.g. `10px * 20px`, both sides carrying a unit) or a division by zero is
+  a warning, the declaration dropped.
+  - **Known gap**: a `calc()` whose result depends on a `%` component
+    can't have its **sign** validated until Layout, when the containing
+    block is finally known — unlike a plain `%` literal or an em/rem-only
+    `calc()`, both of which get their negative-value check at parse/
+    compute time. In practice this means `width: calc(-50% + 10px)` on a
+    property that forbids negative values will not warn the way
+    `width: -10px` would; it is simply used as computed. Not fixed until a
+    used-value clamp lands (M7+).
+- **Colors** (css-color-3/4 subset): hex, the **148 CSS named colors**
+  (both `gray`/`grey` spellings, `rebeccapurple`; generated — not
+  hand-typed — from the `color-name` npm package by
+  `scripts/generate-named-colors.php`, see that script's own header for
+  usage/regeneration/verification), `rgb()`/`rgba()`, `hsl()`/`hsla()`
+  (**classic comma syntax only** — the css-color-4 space+`/`-alpha syntax,
+  `rgb(255 0 0 / 50%)`, is not recognized and falls through to the generic
+  unsupported-color warning), `transparent`, and `currentColor` (resolves
+  against the element's own computed `color` for
+  `background-color`/`border-*-color`; for `color` itself it resolves
+  against the **inherited** value, since it can't refer to itself).
+  `opacity` (a plain `0`-`1` number, silently clamped — not the `%` syntax)
+  composes multiplicatively with a color's own alpha (`rgba(...,0.5)` with
+  `opacity:0.5` → effective alpha 0.25). Alpha renders as a real PDF
+  `ExtGState` (`/ca`/`/CA`, deduped by value) scoped to a `q`/`Q` block
+  around just the op that needs it — a fully opaque color (the vast
+  majority) costs zero extra bytes, byte-identical to pre-M6 output.
+  - **Documented divergence**: `opacity` does **not** propagate to
+    descendants as a real CSS/PDF transparency group would — each
+    `BoxFragment`/`TextFragment`/`ImageFragment` only ever applies its
+    *own* computed opacity at paint time. A semi-transparent parent
+    container does not visually dim its children as a group; each child
+    renders at whatever opacity *it itself* resolved to (1.0 by default,
+    since `opacity` doesn't inherit). Full transparency-group compositing
+    is out of scope until M7+.
+  - No `color-mix()`, `lab()`/`lch()`/`oklab()`/`oklch()`, or any other
+    css-color-4/5 function.
 
 ### Supported as of M5
 
@@ -279,7 +366,6 @@ ahead (see [Roadmap](#roadmap)).
 ### Explicitly deferred (not bugs — documented M1/M2 simplifications)
 
 - No margin collapsing.
-- No selector combinators beyond a single compound selector.
 - A background (or a visible border) that would visually cross a page
   boundary is pushed whole to the next page rather than split — it never
   paints twice or gets cut mid-box.
@@ -303,7 +389,8 @@ ahead (see [Roadmap](#roadmap)).
   overflow is cut at the column edge instead. Either way, overflow only
   becomes visible/lossy when the neighboring column also paints into the
   shared boundary region.
-- No floats/position (M6+); tables are implemented as of M5 but only the
+- No floats/position, no `@media`, no pseudo-elements (`::before`/`::after`)
+  — all M7+; tables are implemented as of M5 but only the
   subset above — see "Supported as of M5" for what's excluded
   (`border-collapse`, `rowspan`, a repeating `<thead>` per page,
   `<caption>`/`<col>`/`<colgroup>`/`<tfoot>`, `vertical-align: baseline`).
@@ -379,7 +466,11 @@ actually referenced by matched CSS get embedded. Instead of `->save($path)`,
 HTML/CSS editors on the left, a live PDF preview on the right) backed by the
 same `Engine` API described above, plus a warnings panel that surfaces every
 unsupported CSS declaration the engine reported instead of silently
-dropping it.
+dropping it. The pre-loaded sample (M6) leads with a `:root { --brand: ...;
+--stripe: rgba(...); ... }` custom-properties block, `calc(var(--gap) *
+.75)` for a padding, and a "Riepilogo tappe" table striped via
+`tbody tr:nth-child(odd) { background-color: var(--stripe) }` — modern CSS
+rendering correctly on the very first click, no editing required.
 
 To run it locally:
 
@@ -409,8 +500,9 @@ of flexbox/grid:
 | **M2** | Full box model — **borders**, width/margin/padding %, `box-sizing` — plus **`@page` margins, repeating margin boxes, `counter(page)`/`counter(pages)`** ("Page X of Y") | The bordered rows and numbered footer from the target document |
 | **M3** | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject, alpha via `/SMask`), deduplicated XObjects, intrinsic + attribute sizing | The photos in the itinerary cards |
 | **M4** | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width`, atomic pagination | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
-| **M5** (this release) | **Tables subset**: `table`/`thead`/`tbody`/`tr`/`td`/`th`, auto + fixed column-width algorithms, `colspan`, separated borders (`border-spacing`), cell `vertical-align`, nested tables, row-atomic pagination | Third-party/email-style HTML is built from `<table>`s, not flexbox — a classic email layout (photo cell + text cell, bordered data table inside) renders without rewriting it first |
-| **M6+** | Floats/position → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Flex gets completed to spec in its own milestone; floats round out the box model |
+| **M5** | **Tables subset**: `table`/`thead`/`tbody`/`tr`/`td`/`th`, auto + fixed column-width algorithms, `colspan`, separated borders (`border-spacing`), cell `vertical-align`, nested tables, row-atomic pagination | Third-party/email-style HTML is built from `<table>`s, not flexbox — a classic email layout (photo cell + text cell, bordered data table inside) renders without rewriting it first |
+| **M6** (this release) | **CSS core**: selector combinators + `:nth-child`/`:not` + specificity, `em`/`rem`/physical units, `:root` custom properties + `calc()`, full color syntax (`rgb()`/`hsl()`/148 named colors) + alpha via `ExtGState` | Real-world stylesheets (Bootstrap-flavored CSS especially) lean on `var()`/`calc()`, `rem`, and combinators/`:nth-child` for the exact "striped table" pattern used everywhere — none of that worked before M6 |
+| **M7+** | Floats/position → pseudo-elements (`::before`/`::after`) → `@media` → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Flex gets completed to spec in its own milestone; floats round out the box model |
 
 ## License
 

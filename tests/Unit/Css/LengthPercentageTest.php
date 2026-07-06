@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Pliego\Css\Value\CalcValue;
 use Pliego\Css\Value\LengthPercentage;
 
 it('parses px values', function () {
@@ -27,4 +28,11 @@ it('resolves percent against the containing block', function () {
 });
 it('resolves px independently of the containing block', function () {
     expect(LengthPercentage::px(16.0)->resolve(200.0))->toBe(16.0);
+});
+
+// --- M6-T4: calc()-with-% deferred variant -----------------------------------------------
+
+it('resolves a deferred calc() value ("100% - 20px" against 400 -> 380)', function () {
+    $lp = LengthPercentage::calc(CalcValue::of(100.0, -20.0));
+    expect($lp->resolve(400.0))->toBe(380.0);
 });

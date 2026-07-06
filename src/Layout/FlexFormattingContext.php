@@ -173,7 +173,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         if ($items === []) {
             $lineCross = $declaredContentHeight ?? 0.0;
             $height = $lineCross + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
-            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true);
+            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity);
         }
 
         if ($style->flexDirection === FlexDirection::Column) {
@@ -235,7 +235,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $contentBottom = $contentTop + $totalCross;
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity);
     }
 
     /**
@@ -453,6 +453,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->children,
             $fragment->borders,
             $fragment->atomic,
+            $fragment->opacity,
         );
     }
 
@@ -818,7 +819,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $contentBottom = $contentTop + $lineCross;
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity);
     }
 
     /**

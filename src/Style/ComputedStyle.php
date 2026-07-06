@@ -4,11 +4,17 @@ declare(strict_types=1);
 
 namespace Pliego\Style;
 
+use Pliego\Css\DeclarationParser;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\CalcExpr;
+use Pliego\Css\Value\CalcValue;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
+use Pliego\Css\Value\LengthUnit;
+use Pliego\Css\WarningCollector;
 
 final readonly class ComputedStyle
 {
@@ -92,7 +98,72 @@ final readonly class ComputedStyle
         public float $borderSpacingPx,
         public string $tableLayout,
         public VerticalAlign $verticalAlign,
+        // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
+        // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
+        // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
+        // sobre los colores PROPIOS del elemento (fondo/texto/bordes/subrayado/imagen) en el
+        // punto de pintado (ver Color::withOpacity(), Layout\*FormattingContext y Paint\Painter) —
+        // NUNCA se hornea aquí en $color/$backgroundColor/border-*-color, porque esos SÍ pueden
+        // heredar o servir de currentColor para un hijo, y ese hijo NO debe heredar la opacity de
+        // este elemento (divergencia M6 documentada: cada elemento solo pinta con su PROPIA
+        // opacity, sin semántica real de "transparency group" que afecte también a los
+        // descendientes como grupo — eso es M7+).
+        public float $opacity = 1.0,
+        // M6-T4 (css-variables-1 §2-3): custom properties SÍ heredan siempre (a diferencia de
+        // casi todas las demás propiedades de este constructor, que no heredan por defecto) — es
+        // el mecanismo de herencia el que hace que var(--bs-primary) funcione en cualquier
+        // descendiente de :root sin que cada regla tenga que redeclarar la variable. Valor CRUDO
+        // (string, puede contener var() anidado sin resolver todavía si vino de un padre cuyo
+        // propio --x también depende de otro — VarResolver resuelve la cadena completa on-demand
+        // en cada uso, ver StyleResolver::resolveDeferred()).
+        /** @var array<string, string> */
+        public array $customProperties = [],
     ) {}
+
+    /**
+     * M6-T3 (css-values-3 §5.2): resolución de font-size — la ÚNICA propiedad donde em/%
+     * se miden contra el font-size del PADRE (nunca el propio, evita la circularidad
+     * "relativo a sí mismo"); rem contra $remBase. Extraído a un método público estático
+     * porque StyleResolver::resolveRoot() necesita este MISMO cálculo para derivar el remBase
+     * del árbol a partir del font-size del documentElement, sin duplicar la lógica ni caer en
+     * el bug de recalcular dos veces con un remBase distinto cada vez (ver StyleResolver).
+     */
+    public static function resolveFontSizePx(mixed $fontSizeValue, float $parentFontSizePx, float $remBase): float
+    {
+        if ($fontSizeValue instanceof Length) {
+            return $fontSizeValue->px;
+        }
+        if ($fontSizeValue instanceof CssLength) {
+            return match ($fontSizeValue->unit) {
+                LengthUnit::Percent => ($fontSizeValue->value / 100.0) * $parentFontSizePx,
+                LengthUnit::Em => $fontSizeValue->value * $parentFontSizePx,
+                LengthUnit::Rem => $fontSizeValue->value * $remBase,
+                default => $parentFontSizePx,
+            };
+        }
+        // M6-T4 (css-values-3 §8): font-size es la única propiedad donde % TAMBIÉN se resuelve
+        // ya mismo (contra el font-size del padre, igual que em) — nunca se difiere a Layout
+        // como en width/margin/padding — así que $percentBase se pasa igual que $emBase
+        // (foldCalcWithOwnBase asume ambos iguales, ver su docblock).
+        if ($fontSizeValue instanceof CalcExpr) {
+            return self::foldCalcWithOwnBase($fontSizeValue, $parentFontSizePx, $remBase);
+        }
+        return $parentFontSizePx;
+    }
+
+    /**
+     * M6-T4: plegado de un calc() en un contexto donde % NUNCA se difiere a Layout — font-size
+     * (% y em contra el font-size del padre) y line-height (% y em contra el font-size PROPIO,
+     * ya resuelto) comparten esta forma: un único $ownBase sirve de base tanto para em como para
+     * %, así que fold() SIEMPRE devuelve un float puro aquí (nunca un CalcValue diferido) — el
+     * fallback a $ownBase solo satisface el tipo CalcValue|float de fold() ante PHPStan, nunca se
+     * alcanza en la práctica.
+     */
+    private static function foldCalcWithOwnBase(CalcExpr $expr, float $ownBase, float $remBase): float
+    {
+        $folded = $expr->fold($ownBase, $remBase, $ownBase);
+        return is_float($folded) ? $folded : $ownBase;
+    }
 
     public static function root(): self
     {
@@ -145,10 +216,35 @@ final readonly class ComputedStyle
     /**
      * CSS 2.2 §6.1-6.2: propiedades heredadas toman el computed value del padre;
      * el resto parte del initial value. Las declaraciones ganadoras sobrescriben.
+     *
+     * M6-T3 (css-values-3 §5-6): $remBase es el font-size computado del elemento raíz
+     * (documentElement), capturado y threadeado por StyleResolver — 1rem se resuelve contra
+     * ESTE valor en todo el árbol, nunca contra el padre inmediato. Es donde las unidades
+     * simbólicas (Em/Rem/Percent-en-font-size/line-height, ver CssLength) mueren: cualquier
+     * CssLength que sobreviva hasta aquí se resuelve a Length/LengthPercentage (solo px|%) antes
+     * de construir el ComputedStyle — ningún consumidor fuera de Style\ ve jamás un CssLength.
+     *
+     * M6-T4: $customProperties es el mapa YA FUSIONADO (heredado del padre + propio del cascade,
+     * propio gana) que StyleResolver calculó para este elemento — se limita a threadearse hasta
+     * el nuevo campo homónimo (para que los hijos lo hereden a su vez); la sustitución de var()
+     * en las declaraciones normales YA ocurrió antes de llegar aquí (ver
+     * StyleResolver::resolveDeferred()), así que $declarations nunca contiene var() sin resolver
+     * a estas alturas. $warnings (opcional, igual patrón que Layout\*FormattingContext) recibe los
+     * warnings de plegado de calc() que solo pueden detectarse aquí (depende del font-size propio/
+     * raíz de ESTE elemento): % en una propiedad que no la admite (height/gap/border-width/
+     * border-spacing) y — en tareas futuras — signo inválido.
+     *
      * @param array<string, mixed> $declarations
+     * @param array<string, string> $customProperties
      */
-    public static function compute(array $declarations, self $parent, string $tagName): self
-    {
+    public static function compute(
+        array $declarations,
+        self $parent,
+        string $tagName,
+        float $remBase,
+        array $customProperties = [],
+        ?WarningCollector $warnings = null,
+    ): self {
         $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
         $displayValue = $declarations['display'] ?? null;
@@ -175,14 +271,92 @@ final readonly class ComputedStyle
             'table-row-group' => Display::TableRowGroup,
             default => $display,
         };
-        $length = static fn(string $key): ?Length => ($declarations[$key] ?? null) instanceof Length ? $declarations[$key] : null;
-        $lengthPercentage = static fn(string $key): LengthPercentage => ($declarations[$key] ?? null) instanceof LengthPercentage ? $declarations[$key] : $zero;
-        $hasLengthPercentage = static fn(string $key): bool => ($declarations[$key] ?? null) instanceof LengthPercentage;
+        // M6-T3: font-size se resuelve ANTES que cualquier otra propiedad porque su resultado
+        // ($fontSizePx) es la base "own font-size" que usan em/% en TODAS las demás propiedades
+        // de este elemento (ver $resolveCssLength más abajo). font-size es la ÚNICA propiedad
+        // donde em/% se miden contra el font-size del PADRE, no el propio (css-values-3 §5.2 /
+        // CSS 2.2 §10.8.1: evita la circularidad "font-size relativo a sí mismo"); rem siempre
+        // contra $remBase, igual que en cualquier otra propiedad.
+        $fontSizeValue = $declarations['font-size'] ?? null;
+        $fontSizePx = self::resolveFontSizePx($fontSizeValue, $parent->fontSizePx, $remBase);
 
-        // Nullsafe + ?? en la misma expresión dispara un falso positivo de PHPStan (ver
-        // BlockFlowContext::layout()); se separa en dos sentencias como allí.
-        $fontSizeLength = $length('font-size');
-        $fontSizePx = $fontSizeLength !== null ? $fontSizeLength->px : $parent->fontSizePx;
+        // Resolución genérica de CssLength simbólico para TODAS las demás propiedades (margin/
+        // padding/width/height/row-gap/column-gap/border-width/border-spacing/flex-basis): em
+        // contra el font-size PROPIO ($fontSizePx, ya resuelto arriba), rem contra $remBase. Px
+        // (incluye pt/cm/mm/in, ya plegados en CssLength::fromCss) pasa el valor tal cual.
+        $resolveCssLength = static fn(CssLength $css): float => match ($css->unit) {
+            LengthUnit::Em => $css->value * $fontSizePx,
+            LengthUnit::Rem => $css->value * $remBase,
+            default => $css->value,
+        };
+        // M6-T4 (css-values-3 §8): plegado de un CalcExpr en un contexto de longitud PURA (sin
+        // %, height/row-gap/column-gap/border-*-width/border-spacing) — $percentBase=null en
+        // fold(): si el árbol contenía %, el resultado es un CalcValue (no un float) y eso es
+        // justo la señal de "% no soportado aquí", igual que el rechazo ya existente de "50%"
+        // literal en esas mismas propiedades (ver DeclarationParser::LENGTH_PROPERTIES) — mismo
+        // resultado observable (warning + valor descartado), vía un camino distinto.
+        //
+        // M6-T4 fix (Finding 2, parte 2): un CalcExpr con em/rem (sin %) no tenía signo conocible
+        // en DeclarationParser::rawValueOf() (dependía del font-size propio) — AHORA que
+        // $fontSizePx/$remBase existen, se re-chequea aquí con el MISMO
+        // DeclarationParser::NON_NEGATIVE_PROPERTIES que usaría un literal, ej. `calc(-1em)` en
+        // padding a font-size 16 → -16px → warning + valor descartado (mismo resultado observable
+        // que `padding-left: -16px` a secas). $label son siempre nombres de propiedad reales
+        // (height/row-gap/column-gap/border-$side-width/border-spacing, todas SIEMPRE no-negativas
+        // en esta rama), así que el chequeo nunca es un falso "always true/false" para PHPStan.
+        $resolveCalcPure = static function (CalcExpr $expr, string $label, float $default) use ($fontSizePx, $remBase, $warnings): float {
+            $folded = $expr->fold($fontSizePx, $remBase, null);
+            if ($folded instanceof CalcValue) {
+                $warnings?->addWarning("calc() with % not supported for $label (percentage discarded)");
+                return $default;
+            }
+            if ($folded < 0.0 && in_array($label, DeclarationParser::NON_NEGATIVE_PROPERTIES, true)) {
+                $warnings?->addWarning("Negative value not allowed for $label (calc() resolved to $folded at compute time)");
+                return $default;
+            }
+            return $folded;
+        };
+        // Contraparte para longitud+porcentaje (margin/padding/width/flex-basis): % SÍ se admite,
+        // pero se difiere a Layout igual que un "50%" literal — LengthPercentage::calc() envuelve
+        // el CalcValue diferido, resolve($containingBlockPx) ya sabe interpretarlo (ver esa clase).
+        // M6-T4 fix (Finding 2, parte 2): mismo re-chequeo que $resolveCalcPure arriba, pero SOLO
+        // cuando el plegado dio un float definitivo (sin %) — si hay % el signo sigue sin poder
+        // conocerse hasta Layout (gap documentado, ver el reporte de M6-T4 §4), así que NO se
+        // chequea aquí. margin-* nunca está en NON_NEGATIVE_PROPERTIES (los márgenes SÍ admiten
+        // negativo, CSS 2.2 §8.3), así que este mismo código los deja pasar sin warning.
+        $resolveCalcLengthPercentage = static function (CalcExpr $expr, string $label) use ($fontSizePx, $remBase, $warnings): LengthPercentage {
+            $folded = $expr->fold($fontSizePx, $remBase, null);
+            if ($folded instanceof CalcValue) {
+                return LengthPercentage::calc($folded);
+            }
+            if ($folded < 0.0 && in_array($label, DeclarationParser::NON_NEGATIVE_PROPERTIES, true)) {
+                $warnings?->addWarning("Negative value not allowed for $label (calc() resolved to $folded at compute time)");
+                return LengthPercentage::zero();
+            }
+            return LengthPercentage::px($folded);
+        };
+        $length = static function (string $key) use ($declarations, $resolveCssLength, $resolveCalcPure): ?Length {
+            $v = $declarations[$key] ?? null;
+            return match (true) {
+                $v instanceof Length => $v,
+                $v instanceof CssLength => Length::px($resolveCssLength($v)),
+                $v instanceof CalcExpr => Length::px($resolveCalcPure($v, $key, 0.0)),
+                default => null,
+            };
+        };
+        $lengthPercentage = static function (string $key) use ($declarations, $resolveCssLength, $resolveCalcLengthPercentage, $zero): LengthPercentage {
+            $v = $declarations[$key] ?? null;
+            return match (true) {
+                $v instanceof LengthPercentage => $v,
+                $v instanceof CssLength => LengthPercentage::px($resolveCssLength($v)),
+                $v instanceof CalcExpr => $resolveCalcLengthPercentage($v, $key),
+                default => $zero,
+            };
+        };
+        $hasLengthPercentage = static function (string $key) use ($declarations): bool {
+            $v = $declarations[$key] ?? null;
+            return $v instanceof LengthPercentage || $v instanceof CssLength || $v instanceof CalcExpr;
+        };
 
         $fontWeightValue = $declarations['font-weight'] ?? null;
         $fontWeight = match (true) {
@@ -229,15 +403,47 @@ final readonly class ComputedStyle
                 $lineHeightValue === null => null,
                 $lineHeightValue instanceof Length => $lineHeightValue->px,
                 is_float($lineHeightValue) => $lineHeightValue * $fontSizePx,
+                // M6-T3: %/em en line-height se miden contra el font-size PROPIO (ya resuelto
+                // arriba, igual que el multiplicador unitless de la rama anterior); rem contra
+                // $remBase, igual que en cualquier otra propiedad no-font-size.
+                $lineHeightValue instanceof CssLength => match ($lineHeightValue->unit) {
+                    LengthUnit::Percent => ($lineHeightValue->value / 100.0) * $fontSizePx,
+                    LengthUnit::Em => $lineHeightValue->value * $fontSizePx,
+                    LengthUnit::Rem => $lineHeightValue->value * $remBase,
+                    default => null,
+                },
+                // M6-T4: igual que font-size, % en line-height se resuelve YA (contra el propio
+                // font-size, no diferido a Layout) — comparte foldCalcWithOwnBase con font-size.
+                $lineHeightValue instanceof CalcExpr => self::foldCalcWithOwnBase($lineHeightValue, $fontSizePx, $remBase),
                 default => null,
             };
         }
 
         // color se computa antes de ensamblar los bordes: border-{side}-color por defecto
         // es currentColor (CSS 2.2 §8.5.3), es decir, el color computado de este elemento.
-        $color = ($declarations['color'] ?? null) instanceof Color ? $declarations['color'] : $parent->color;
+        //
+        // M6-T5 (css-color-3 §4.4): 'color: currentColor' es el ÚNICO caso donde el sentinel NO
+        // puede resolverse contra el propio $color (circular — todavía no existe) — CSS lo fija
+        // al valor HEREDADO del padre, exactamente igual que si 'color' no se hubiera declarado en
+        // absoluto (de ahí que ambas ramas del match converjan al mismo $parent->color).
+        $declaredColor = $declarations['color'] ?? null;
+        $color = match (true) {
+            $declaredColor instanceof Color && $declaredColor->isCurrentColor => $parent->color,
+            $declaredColor instanceof Color => $declaredColor,
+            default => $parent->color,
+        };
 
-        $borderSide = static function (string $side) use ($declarations, $color): BorderSide {
+        // M6-T5: helper compartido por background-color y border-*-color — 'currentColor' (o
+        // ausencia total de declaración, ver $borderSide más abajo) resuelve al $color YA
+        // computado arriba (nunca al $parent->color: aquí currentColor SÍ puede referirse al color
+        // propio de ESTE elemento, porque ya existe).
+        $resolveCurrentColor = static fn(mixed $declared): ?Color => match (true) {
+            $declared instanceof Color && $declared->isCurrentColor => $color,
+            $declared instanceof Color => $declared,
+            default => null,
+        };
+
+        $borderSide = static function (string $side) use ($declarations, $color, $resolveCurrentColor, $resolveCssLength, $resolveCalcPure): BorderSide {
             $width = $declarations["border-$side-width"] ?? null;
             $style = $declarations["border-$side-style"] ?? null;
             $sideColor = $declarations["border-$side-color"] ?? null;
@@ -246,11 +452,17 @@ final readonly class ComputedStyle
             // computed value of the border width is 0" — el ancho USADO se calcula aquí, en
             // origen, para que ningún consumidor (BlockFlowContext, Painter) pueda leer
             // ->widthPx sin pasar por esta regla.
-            $widthPx = $resolvedStyle === BorderStyle::Solid && $width instanceof Length ? $width->px : 0.0;
+            $widthPx = match (true) {
+                $resolvedStyle !== BorderStyle::Solid => 0.0,
+                $width instanceof Length => $width->px,
+                $width instanceof CssLength => $resolveCssLength($width),
+                $width instanceof CalcExpr => $resolveCalcPure($width, "border-$side-width", 0.0),
+                default => 0.0,
+            };
             return new BorderSide(
                 $widthPx,
                 $resolvedStyle,
-                $sideColor instanceof Color ? $sideColor : $color,
+                $resolveCurrentColor($sideColor) ?? $color,
             );
         };
 
@@ -279,23 +491,45 @@ final readonly class ComputedStyle
             default => AlignItems::Stretch,
         };
         $rowGapValue = $declarations['row-gap'] ?? null;
-        $rowGapPx = $rowGapValue instanceof Length ? $rowGapValue->px : 0.0;
+        $rowGapPx = match (true) {
+            $rowGapValue instanceof Length => $rowGapValue->px,
+            $rowGapValue instanceof CssLength => $resolveCssLength($rowGapValue),
+            $rowGapValue instanceof CalcExpr => $resolveCalcPure($rowGapValue, 'row-gap', 0.0),
+            default => 0.0,
+        };
         $columnGapValue = $declarations['column-gap'] ?? null;
-        $columnGapPx = $columnGapValue instanceof Length ? $columnGapValue->px : 0.0;
+        $columnGapPx = match (true) {
+            $columnGapValue instanceof Length => $columnGapValue->px,
+            $columnGapValue instanceof CssLength => $resolveCssLength($columnGapValue),
+            $columnGapValue instanceof CalcExpr => $resolveCalcPure($columnGapValue, 'column-gap', 0.0),
+            default => 0.0,
+        };
         $flexGrowValue = $declarations['flex-grow'] ?? null;
         $flexGrow = is_float($flexGrowValue) ? $flexGrowValue : 0.0;
         $flexShrinkValue = $declarations['flex-shrink'] ?? null;
         $flexShrink = is_float($flexShrinkValue) ? $flexShrinkValue : 1.0;
-        // flex-basis: la longhand/shorthand emiten 'auto' (string) o un LengthPercentage; el
-        // sentinel 'auto' y la ausencia de declaración colapsan al mismo null (= auto), igual que
-        // el resto de propiedades opcionales de este método.
+        // flex-basis: la longhand/shorthand emiten 'auto' (string), un LengthPercentage o un
+        // CssLength simbólico (em/rem, M6-T3, resuelto contra el font-size propio/raíz igual que
+        // el resto de longitudes no-font-size); el sentinel 'auto' y la ausencia de declaración
+        // colapsan al mismo null (= auto), igual que el resto de propiedades opcionales de este
+        // método.
         $flexBasisValue = $declarations['flex-basis'] ?? null;
-        $flexBasis = $flexBasisValue instanceof LengthPercentage ? $flexBasisValue : null;
+        $flexBasis = match (true) {
+            $flexBasisValue instanceof LengthPercentage => $flexBasisValue,
+            $flexBasisValue instanceof CssLength => LengthPercentage::px($resolveCssLength($flexBasisValue)),
+            $flexBasisValue instanceof CalcExpr => $resolveCalcLengthPercentage($flexBasisValue, 'flex-basis'),
+            default => null,
+        };
 
         // M5-T2: border-spacing SÍ hereda (CSS 2.2 §17.6.1) — a diferencia de todo lo demás en
         // esta sección, el fallback sin declaración propia es $parent->borderSpacingPx, no 0.0.
         $borderSpacingValue = $declarations['border-spacing'] ?? null;
-        $borderSpacingPx = $borderSpacingValue instanceof Length ? $borderSpacingValue->px : $parent->borderSpacingPx;
+        $borderSpacingPx = match (true) {
+            $borderSpacingValue instanceof Length => $borderSpacingValue->px,
+            $borderSpacingValue instanceof CssLength => $resolveCssLength($borderSpacingValue),
+            $borderSpacingValue instanceof CalcExpr => $resolveCalcPure($borderSpacingValue, 'border-spacing', $parent->borderSpacingPx),
+            default => $parent->borderSpacingPx,
+        };
 
         // table-layout NO hereda (CSS 2.2 §17.5.2): initial value 'auto' siempre que no haya
         // declaración propia, nunca $parent->tableLayout.
@@ -312,6 +546,14 @@ final readonly class ComputedStyle
             default => VerticalAlign::Top,
         };
 
+        // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
+        // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
+        // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
+        // opacity llega por un camino distinto a DeclarationParser, ej. una expansión futura de
+        // shorthand) y no debería activarse nunca desde el pipeline real.
+        $opacityValue = $declarations['opacity'] ?? null;
+        $opacity = is_float($opacityValue) ? max(0.0, min(1.0, $opacityValue)) : 1.0;
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -326,7 +568,7 @@ final readonly class ComputedStyle
             // height NO hereda (igual que width): siempre parte de las propias declaraciones del
             // elemento, nunca del padre.
             $length('height'),
-            ($declarations['background-color'] ?? null) instanceof Color ? $declarations['background-color'] : null,
+            $resolveCurrentColor($declarations['background-color'] ?? null),
             $color,
             $fontSizePx,
             is_string($declarations['font-family'] ?? null) ? $declarations['font-family'] : $parent->fontFamily,
@@ -352,6 +594,8 @@ final readonly class ComputedStyle
             $borderSpacingPx,
             $tableLayout,
             $verticalAlign,
+            $opacity,
+            $customProperties,
         );
     }
 }
