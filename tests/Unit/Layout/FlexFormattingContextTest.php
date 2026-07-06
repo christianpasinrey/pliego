@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
@@ -632,4 +633,34 @@ it('A/B: wrap + align-items:center produces the exact same geometry as hand-comp
     expect($f3->rect->height)->toBe(20.0);
 
     expect($frag->rect->height)->toBe(80.0); // same total as the original wrap test (unaffected by align-items)
+});
+
+// --- M5-T6: table as direct flex item not supported yet; warning contract enforcement -----
+
+it('warns when a table is a direct flex item, and the table is skipped (other items still lay out)', function () {
+    $warnings = new WarningCollector();
+    $ctx = new FlexFormattingContext($this->measurer, $this->catalog, $this->sizer, $warnings);
+
+    // Create a flex container with a table child and a block child.
+    // The table should be skipped with a warning, but the block should still lay out normally.
+    $table = new TableBox(flexStyle(), [], 'table');
+    $block = new BlockBox(flexStyle(['width' => LengthPercentage::px(100.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(300.0)]),
+        [$table, $block],
+        'div',
+    );
+
+    $frag = $ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+
+    // Should warn exactly once about the table.
+    expect($warnings->drain())->toBe([
+        'table as direct flex item not supported yet: skipped',
+    ]);
+
+    // Only the block should be in the layout, table should be dropped.
+    expect($frag->children)->toHaveCount(1);
+    $childFrag = $frag->children[0];
+    assert($childFrag instanceof BoxFragment);
+    expect($childFrag->rect->width)->toBe(100.0);
 });

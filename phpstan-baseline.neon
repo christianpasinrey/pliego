@@ -279,7 +279,7 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
 			identifier: property.notFound
-			count: 5
+			count: 6
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -297,13 +297,13 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
 			identifier: property.notFound
-			count: 6
+			count: 7
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$sizer\.$#'
 			identifier: property.notFound
-			count: 3
+			count: 4
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -417,7 +417,7 @@ parameters:
 		-
 			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\FlexFormattingContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
 			identifier: argument.type
-			count: 2
+			count: 3
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -429,13 +429,13 @@ parameters:
 		-
 			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\FlexFormattingContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
 			identifier: argument.type
-			count: 2
+			count: 3
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
 			message: '#^Parameter \#3 \$sizer of class Pliego\\Layout\\FlexFormattingContext constructor expects Pliego\\Layout\\IntrinsicSizer, mixed given\.$#'
 			identifier: argument.type
-			count: 2
+			count: 3
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-

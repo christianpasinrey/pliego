@@ -168,7 +168,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         }
 
         $borders = new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft);
-        $items = self::flexItems($container->children);
+        $items = $this->flexItems($container->children);
 
         if ($items === []) {
             $lineCross = $declaredContentHeight ?? 0.0;
@@ -373,23 +373,26 @@ final readonly class FlexFormattingContext implements FormattingContext
      *
      * M5-T3/T4: $children puede incluir TableBox (una tabla es, ella misma, un flex item DIRECTO —
      * ver BlockBox::$children y wrapAnonymousFlexItems()). El filtro whitelist de abajo (solo
-     * BlockBox|ImageBox) ya la excluye SIN cambios: M5-T4 le da a TableBox su propio
-     * TableFormattingContext (consumido desde BlockFlowContext, no desde aquí) pero DELIBERADAMENTE
-     * no la convierte en un tipo de flex item válido — sigue excluida (mismo patrón "skip,
-     * documented, no crash" que BlockFlowContext/IntrinsicSizer aplican en sus propios recorridos
-     * de hijos): una TableBox como item flex DIRECTO simplemente desaparece de $items, no participa
-     * del layout de línea ni del cálculo de tamaños, pero tampoco crashea. Sigue así como mínimo
-     * hasta M5-T6 (ver su brief); ningún test de este milestone la ejercita como item flex.
+     * BlockBox|ImageBox) la excluye: M5-T4 le da a TableBox su propio TableFormattingContext
+     * (consumido desde BlockFlowContext, no desde aquí) pero DELIBERADAMENTE no la convierte en un
+     * tipo de flex item válido — sigue excluida. M5-T6 (M5 final-review): una TableBox como item
+     * flex DIRECTO simplemente desaparece de $items con un warning, no participa del layout de
+     * línea ni del cálculo de tamaños, pero tampoco crashea (contrato de excluded-values-warn:
+     * exclusión deliberada, valor conocido, warning a través del canal M5-T1). Support real via
+     * flex-child layout delegating a TableFormattingContext (similar a BlockFlowContext pattern)
+     * queda en M6+.
      *
      * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
      * @return list<BlockBox|ImageBox>
      */
-    private static function flexItems(array $children): array
+    private function flexItems(array $children): array
     {
         $items = [];
         foreach ($children as $child) {
             if ($child instanceof BlockBox || $child instanceof ImageBox) {
                 $items[] = $child;
+            } elseif ($child instanceof TableBox) {
+                $this->warn('table as direct flex item not supported yet: skipped');
             }
         }
         return $items;
