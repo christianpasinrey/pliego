@@ -930,3 +930,61 @@ it('rejects an unsupported overflow keyword with a warning', function () {
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M7-T6 (CSS 2.2 §9.4.3/§9.5, floats + position reducido) -----------------------------------
+
+it('parses float: left/right/none', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('float', 'left'))->toBe(['float' => 'left']);
+    expect($parser->parse('float', 'right'))->toBe(['float' => 'right']);
+    expect($parser->parse('float', 'none'))->toBe(['float' => 'none']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses clear: left/right/both/none', function () {
+    $parser = new DeclarationParser();
+    foreach (['left', 'right', 'both', 'none'] as $keyword) {
+        expect($parser->parse('clear', $keyword))->toBe(['clear' => $keyword]);
+    }
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses position: static/relative/absolute', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('position', 'static'))->toBe(['position' => 'static']);
+    expect($parser->parse('position', 'relative'))->toBe(['position' => 'relative']);
+    expect($parser->parse('position', 'absolute'))->toBe(['position' => 'absolute']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on position: sticky and position: fixed (both out of scope, discarded)', function () {
+    foreach (['sticky', 'fixed'] as $keyword) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('position', $keyword);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->toContain("Unsupported keyword for position: $keyword");
+    }
+});
+
+it('parses left/right as length-percentage (same as width), negative allowed', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('left', '10px'))->toHaveKey('left');
+    expect($parser->parse('right', '50%'))->toHaveKey('right');
+    expect($parser->parse('left', '-10px'))->toHaveKey('left');
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses top/bottom as PX-ONLY lengths (no percentage), negative allowed (unlike height)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('top', '10px'))->toHaveKey('top');
+    expect($parser->parse('top', '-10px'))->toHaveKey('top');
+    expect($parser->parse('bottom', '-5px'))->toHaveKey('bottom');
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a percentage top/bottom with a warning (containing height not tracked, same as height)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('top', '50%');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toContain('Unsupported length for top: 50%');
+});

@@ -1191,3 +1191,173 @@ it('max-width caps an inline-block\'s declared width', function () {
     assert($tag instanceof BoxFragment);
     expect($tag->rect->width)->toBe(100.0);
 });
+
+// M7-T6 (CSS 2.2 §9.5/§9.4.3/§10, floats + position:relative/absolute reducido). Este motor NO
+// soporta el atributo HTML `style="..."` (todo CSS llega vía hoja de estilos con selectores, ver
+// BoxTreeBuilder/StyleResolver) -- estos tests usan clases + un stylesheet, como el resto del
+// fichero.
+
+it('M7-T6: two left floats sit side by side; a third that no longer fits stacks BELOW both', function () {
+    $frag = layoutHtml(
+        '<body><div class="a"></div><div class="b"></div><div class="c"></div></body>',
+        '.a { float: left; width: 200px; min-height: 50px; background-color: #ff0000 }'
+        . '.b { float: left; width: 200px; min-height: 50px; background-color: #00ff00 }'
+        . '.c { float: left; width: 200px; min-height: 50px; background-color: #0000ff }',
+        500.0,
+    );
+
+    $red = findBoxByBackground($frag, '#ff0000');
+    $green = findBoxByBackground($frag, '#00ff00');
+    $blue = findBoxByBackground($frag, '#0000ff');
+    assert($red instanceof BoxFragment);
+    assert($green instanceof BoxFragment);
+    assert($blue instanceof BoxFragment);
+
+    // Primer float: banda completa libre -- se coloca en el borde izquierdo.
+    expect($red->rect->x)->toBe(0.0);
+    expect($red->rect->y)->toBe(0.0);
+    // Segundo float: cabe a la derecha del primero (200 + 200 = 400 <= 500).
+    expect($green->rect->x)->toBe(200.0);
+    expect($green->rect->y)->toBe(0.0);
+    // Tercer float: 200(rojo)+200(verde)+200 = 600 > 500 no cabe junto a ninguno de los dos ->
+    // baja hasta Y=50 (el borde inferior de AMBOS, que comparten altura) donde el hueco vuelve a
+    // ser el ancho completo.
+    expect($blue->rect->x)->toBe(0.0);
+    expect($blue->rect->y)->toBe(50.0);
+});
+
+it('M7-T6: a floated block is removed from flow -- the next normal sibling does not skip past it', function () {
+    $frag = layoutHtml(
+        '<body><div class="float-box"></div><div class="sibling">sibling</div></body>',
+        '.float-box { float: left; width: 100px; min-height: 200px; background-color: #ff0000 }'
+        . '.sibling { background-color: #00ff00 }',
+        500.0,
+    );
+    $sibling = findBoxByBackground($frag, '#00ff00');
+    assert($sibling instanceof BoxFragment);
+    // El float NO avanza el cursor de flujo -- el hermano normal empieza en y=0, no en y=200.
+    expect($sibling->rect->y)->toBe(0.0);
+});
+
+it('M7-T6: clear:both jumps the cleared element below the tallest relevant float band', function () {
+    $frag = layoutHtml(
+        '<body><div class="left"></div><div class="right"></div><div class="cleared">cleared</div></body>',
+        '.left { float: left; width: 100px; min-height: 80px; background-color: #ff0000 }'
+        . '.right { float: right; width: 100px; min-height: 40px; background-color: #00ff00 }'
+        . '.cleared { clear: both; background-color: #0000ff }',
+        500.0,
+    );
+    $cleared = findBoxByBackground($frag, '#0000ff');
+    assert($cleared instanceof BoxFragment);
+    // El float izquierdo (80px) es más alto que el derecho (40px) -- clear:both baja hasta el
+    // más alto de los dos, 80.
+    expect($cleared->rect->y)->toBe(80.0);
+});
+
+it('M7-T6: a float taller than its (non-BFC) container does NOT extend the container\'s own height', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="float-box"></div></div></body>',
+        '.outer { background-color: #eeeeee }'
+        . '.float-box { float: left; width: 50px; min-height: 300px; background-color: #ff0000 }',
+        500.0,
+    );
+    $outer = findBoxByBackground($frag, '#eeeeee');
+    assert($outer instanceof BoxFragment);
+    // El outer div NO establece su propio BFC (overflow:visible, position:static) -- el float
+    // "escapa" hacia el BFC de la raíz y NO cuenta para la altura de ESTE contenedor (CSS 2.2
+    // §9.5 default: floats no contribuyen a la altura del contenedor).
+    expect($outer->rect->height)->toBe(0.0);
+});
+
+it('M7-T6: overflow:hidden makes the BFC root CONTAIN its float\'s height (CSS 2.2 §10.6.7)', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="float-box"></div></div></body>',
+        '.outer { overflow: hidden; background-color: #eeeeee }'
+        . '.float-box { float: left; width: 50px; min-height: 300px; background-color: #ff0000 }',
+        500.0,
+    );
+    $outer = findBoxByBackground($frag, '#eeeeee');
+    assert($outer instanceof BoxFragment);
+    // overflow:hidden establece su PROPIO BFC -- a diferencia del test anterior, este SÍ contiene
+    // la altura de su float.
+    expect($outer->rect->height)->toBe(300.0);
+});
+
+it('M7-T6: position:relative shifts top/left (siblings/layout untouched)', function () {
+    $frag = layoutHtml(
+        '<body><div class="rel">x</div></body>',
+        '.rel { position: relative; top: 10px; left: 20px; background-color: #ff0000 }',
+        500.0,
+    );
+    $div = findBoxByBackground($frag, '#ff0000');
+    assert($div instanceof BoxFragment);
+    // Sin ningún margen/padding, la posición ESTÁTICA sería (0,0) -- el shift visual la mueve
+    // exactamente por (left, top).
+    expect($div->rect->x)->toBe(20.0);
+    expect($div->rect->y)->toBe(10.0);
+});
+
+it('M7-T6: position:relative with bottom/right (negated) shifts up/left', function () {
+    $frag = layoutHtml(
+        '<body><div class="rel">x</div></body>',
+        '.rel { position: relative; bottom: 10px; right: 20px; background-color: #ff0000 }',
+        500.0,
+    );
+    $div = findBoxByBackground($frag, '#ff0000');
+    assert($div instanceof BoxFragment);
+    expect($div->rect->x)->toBe(-20.0);
+    expect($div->rect->y)->toBe(-10.0);
+});
+
+it('M7-T6: position:relative -- when BOTH pairs are given, top/left win over bottom/right', function () {
+    $frag = layoutHtml(
+        '<body><div class="rel">x</div></body>',
+        '.rel { position: relative; top: 5px; bottom: 100px; left: 7px; right: 200px; background-color: #ff0000 }',
+        500.0,
+    );
+    $div = findBoxByBackground($frag, '#ff0000');
+    assert($div instanceof BoxFragment);
+    expect($div->rect->x)->toBe(7.0);
+    expect($div->rect->y)->toBe(5.0);
+});
+
+it('M7-T6: position:absolute resolves against a position:relative ancestor\'s CONTENT box', function () {
+    $frag = layoutHtml(
+        '<body><div class="ancestor"><div class="abs"></div></div></body>',
+        '.ancestor { position: relative; width: 300px; padding: 10px; background-color: #eeeeee }'
+        . '.abs { position: absolute; top: 5px; left: 15px; width: 40px; min-height: 20px; background-color: #ff0000 }',
+        500.0,
+    );
+    $abs = findBoxByBackground($frag, '#ff0000');
+    assert($abs instanceof BoxFragment);
+    // Ancestro: content box en (10,10) (padding 10 en los 4 lados, sin borde). Absolute:
+    // left=15/top=5 se resuelven contra ESE content box -- (10+15, 10+5).
+    expect($abs->rect->x)->toBe(25.0);
+    expect($abs->rect->y)->toBe(15.0);
+});
+
+it('M7-T6: position:absolute resolves against the ROOT/initial containing block when no positioned ancestor exists', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="abs"></div></div></body>',
+        '.outer { background-color: #eeeeee }'
+        . '.abs { position: absolute; top: 5px; left: 15px; width: 40px; min-height: 20px; background-color: #ff0000 }',
+        500.0,
+    );
+    $abs = findBoxByBackground($frag, '#ff0000');
+    assert($abs instanceof BoxFragment);
+    // El outer div NO es positioned -- el CB sigue siendo la caja raíz (content box en (0,0)).
+    expect($abs->rect->x)->toBe(15.0);
+    expect($abs->rect->y)->toBe(5.0);
+});
+
+it('M7-T6: position:absolute does not advance the flow cursor -- siblings are unaffected', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="abs"></div><div class="sibling">sibling</div></div></body>',
+        '.abs { position: absolute; top: 100px; left: 100px; width: 40px; min-height: 20px; background-color: #ff0000 }'
+        . '.sibling { background-color: #00ff00 }',
+        500.0,
+    );
+    $sibling = findBoxByBackground($frag, '#00ff00');
+    assert($sibling instanceof BoxFragment);
+    expect($sibling->rect->y)->toBe(0.0);
+});

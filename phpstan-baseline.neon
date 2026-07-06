@@ -417,13 +417,13 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$catalog\.$#'
 			identifier: property.notFound
-			count: 17
+			count: 23
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
 			identifier: property.notFound
-			count: 21
+			count: 27
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
@@ -477,25 +477,25 @@ parameters:
 		-
 			message: '#^Cannot call method select\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
 			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 3
+			count: 5
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
 			message: '#^Parameter \#1 \$measurer of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Layout\\TextMeasurer, mixed given\.$#'
 			identifier: argument.type
-			count: 15
+			count: 19
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-
 			message: '#^Parameter \#2 \$catalog of class Pliego\\Layout\\InlineFlowContext constructor expects Pliego\\Text\\FontCatalog, mixed given\.$#'
 			identifier: argument.type
-			count: 14
+			count: 18
 			path: tests/Unit/Layout/InlineFlowContextTest.php
 
 		-

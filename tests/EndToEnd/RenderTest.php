@@ -32,8 +32,11 @@ it('splits long content across pages in streaming', function () {
     expect($report->pageCount)->toBeGreaterThan(1);
 });
 it('reports unsupported CSS as warnings without failing', function () {
+    // M7-T6: `float` gained real support (Style\FloatSide) — swapped to `writing-mode`
+    // (explicitly excluded-with-warning by the M7 milestone brief) to keep demonstrating warning
+    // discipline for a genuinely unsupported property.
     $path = sys_get_temp_dir() . '/pliego-e2e-3.pdf';
-    $report = Engine::make()->stylesheet('p { float: left; color: #f00 }')->render(sampleHtml(1))->save($path);
+    $report = Engine::make()->stylesheet('p { writing-mode: vertical-rl; color: #f00 }')->render(sampleHtml(1))->save($path);
     expect($report->warnings)->not->toBeEmpty();
     expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
 });

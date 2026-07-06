@@ -140,6 +140,26 @@ final readonly class ComputedStyle
         // coercionados a 'hidden' desde DeclarationParser (con warning) -- esta propiedad solo ve
         // 'visible'|'hidden'.
         public string $overflow,
+        // M7-T6 (CSS 2.2 §9.5.1): NO hereda -- cada elemento parte SIEMPRE de "sin float" (null)
+        // cuando no hay declaración propia, nunca de $parent->float (mismo patrón que
+        // box-sizing/overflow/opacity: cada caja decide su PROPIO float de forma independiente).
+        public ?FloatSide $float,
+        // M7-T6 (CSS 2.2 §9.5.2): NO hereda -- initial 'none' siempre que no haya declaración
+        // propia. DeclarationParser ya solo produce 'left'|'right'|'both'|'none' aquí.
+        public string $clear,
+        // M7-T6 (CSS 2.2 §9.4.3/§10, css-position-3 reducido): NO hereda -- initial Static
+        // siempre que no haya declaración propia (ver Style\Position, incluye el fallback de
+        // 'sticky'/'fixed' -> warning + Static, ya resuelto en DeclarationParser).
+        public Position $position,
+        // M7-T6: top/right/bottom/left -- NINGUNO de los 4 hereda (CSS 2.2 §9.3.1 no los lista
+        // entre las propiedades heredadas). top/bottom nunca traen componente de % (rechazado ya
+        // en DeclarationParser, mismo criterio que height -- ver LengthPercentage::px() más abajo
+        // en compute(), que los envuelve SIN posibilidad de percent real); left/right SÍ pueden
+        // traer % (resuelto contra el ancho del containing block en Layout, igual que width).
+        public ?LengthPercentage $top,
+        public ?LengthPercentage $right,
+        public ?LengthPercentage $bottom,
+        public ?LengthPercentage $left,
         // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
         // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
         // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
@@ -263,6 +283,15 @@ final readonly class ComputedStyle
             null,
             null,
             'visible',
+            // M7-T6: sin float/clear/position/offsets declarados en la raíz (initial values:
+            // sin float, 'none', Static, sin ningún offset).
+            null,
+            'none',
+            Position::Static,
+            null,
+            null,
+            null,
+            null,
         );
     }
 
@@ -652,6 +681,40 @@ final readonly class ComputedStyle
         $overflowValue = $declarations['overflow'] ?? null;
         $overflow = $overflowValue === 'hidden' ? 'hidden' : 'visible';
 
+        // M7-T6 (CSS 2.2 §9.5.1): NO hereda -- 'none' (ausencia de declaración, o el keyword
+        // literal 'none') colapsa SIEMPRE a null, nunca a $parent->float.
+        $floatValue = $declarations['float'] ?? null;
+        $float = match ($floatValue) {
+            'left' => FloatSide::Left,
+            'right' => FloatSide::Right,
+            default => null,
+        };
+        // M7-T6 (CSS 2.2 §9.5.2): NO hereda -- initial 'none' siempre que no haya declaración
+        // propia. DeclarationParser ya solo produce estos 4 literales.
+        $clearValue = $declarations['clear'] ?? null;
+        $clear = in_array($clearValue, ['left', 'right', 'both'], true) ? $clearValue : 'none';
+        // M7-T6 (CSS 2.2 §9.4.3): NO hereda -- 'sticky'/'fixed' ya nunca llegan aquí como valor
+        // reconocido (DeclarationParser los rechaza con warning, ver KEYWORD_PROPERTIES['position']),
+        // así que el default 'sin declaración reconocida' == Static cubre ese caso sin rama extra.
+        $positionValue = $declarations['position'] ?? null;
+        $position = match ($positionValue) {
+            'relative' => Position::Relative,
+            'absolute' => Position::Absolute,
+            default => Position::Static,
+        };
+        // M7-T6 (CSS 2.2 §9.4.3): top/bottom -- px-only (mismo camino que height/min-height/
+        // max-height, ver $length() arriba), envueltos en LengthPercentage::px() para compartir
+        // TIPO con left/right (ver docblock del constructor) aunque nunca lleven componente de %
+        // real. left/right -- LengthPercentage con % posible (mismo camino que width, ver
+        // $lengthPercentage()/$hasLengthPercentage()). Ninguno de los 4 hereda: ausencia de
+        // declaración = null siempre, nunca $parent->top/etc.
+        $topLength = $length('top');
+        $top = $topLength !== null ? LengthPercentage::px($topLength->px) : null;
+        $bottomLength = $length('bottom');
+        $bottom = $bottomLength !== null ? LengthPercentage::px($bottomLength->px) : null;
+        $right = $hasLengthPercentage('right') ? $lengthPercentage('right') : null;
+        $left = $hasLengthPercentage('left') ? $lengthPercentage('left') : null;
+
         // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
         // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
         // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
@@ -719,6 +782,13 @@ final readonly class ComputedStyle
             $minHeight,
             $maxHeight,
             $overflow,
+            $float,
+            $clear,
+            $position,
+            $top,
+            $right,
+            $bottom,
+            $left,
             $opacity,
             $customProperties,
         );

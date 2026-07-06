@@ -20,8 +20,14 @@ const KITCHEN_SINK_CSS = <<<'CSS'
 .hidden { display: none }
 .narrow { width: 50vh }
 p > span { color: red }
-p { float: left; line-height: 1.5 }
+p { writing-mode: vertical-rl; line-height: 1.5 }
 CSS;
+// NOTA M7-T6: `float` (usado aquí hasta M7-T5) ganó soporte real (Style\FloatSide,
+// DeclarationParser) — habría convertido los 140 <p> de este documento en floats reales,
+// cambiando por completo la geometría que este test verifica a mano más abajo. Sustituido por
+// `writing-mode`, explícitamente excluido-con-warning por el brief del milestone M7
+// (RESTRICCIONES GLOBALES), preservando el propósito original: una declaración sin NINGÚN efecto
+// de layout, solo para demostrar warning discipline.
 // NOTA M1-T6: `p { line-height: 1.5 }` ya se parseaba desde M1-T2 pero, hasta InlineFlowContext
 // (M1-T6), el layout SIEMPRE usaba la fórmula fija 1.2×font-size ignorando el valor declarado
 // (bug conocido, no documentado explícitamente hasta ahora). InlineFlowContext lo aplica de
@@ -88,16 +94,17 @@ it('renders nested backgrounds, overflows to 8 pages, warns on exactly 2 unsuppo
     // Overflow a 8 páginas (subió de 3 a 4 en M1-T6, de 4 a 8 en M7-T2 — ver notas arriba).
     expect($report->pageCount)->toBe(8);
 
-    // Exactamente 2 declaraciones CSS no soportadas: float y width:vh. "p > span" parsea Y matchea
-    // de verdad desde M6-T2 (ya no genera warning), pero no hay ningún <span> en este documento —
-    // no tiene ningún efecto observable aquí. line-height ya no genera warning: M1-T2 le da soporte
-    // (ver p { line-height: 1.5 } arriba). M2-T2: width SÍ admite % ahora (LengthPercentage); M6-T3
-    // añade em/rem/pt/cm/mm/in (CssLength) — "vh" (viewport height) sigue fuera de alcance del
-    // motor (no hay noción de viewport en un motor de paginación), así que se usa aquí para seguir
-    // demostrando el warning discipline sobre unidades no soportadas sin afectar la aritmética de
-    // paginación de este test (declaración descartada igual que antes, sin efecto en el layout).
+    // Exactamente 2 declaraciones CSS no soportadas: writing-mode y width:vh. "p > span" parsea Y
+    // matchea de verdad desde M6-T2 (ya no genera warning), pero no hay ningún <span> en este
+    // documento — no tiene ningún efecto observable aquí. line-height ya no genera warning: M1-T2
+    // le da soporte (ver p { line-height: 1.5 } arriba). M2-T2: width SÍ admite % ahora
+    // (LengthPercentage); M6-T3 añade em/rem/pt/cm/mm/in (CssLength) — "vh" (viewport height) sigue
+    // fuera de alcance del motor (no hay noción de viewport en un motor de paginación), así que se
+    // usa aquí para seguir demostrando el warning discipline sobre unidades no soportadas sin
+    // afectar la aritmética de paginación de este test (declaración descartada igual que antes,
+    // sin efecto en el layout).
     expect($report->warnings)->toHaveCount(2);
-    expect($report->warnings)->toContain('Unsupported property: float');
+    expect($report->warnings)->toContain('Unsupported property: writing-mode');
     expect($report->warnings)->toContain('Unsupported length for width: 50vh');
 
     // Fondos anidados: el gris claro de .outer y el gris oscuro de .inner aparecen.

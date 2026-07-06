@@ -30,8 +30,10 @@ it('keeps rule order for the cascade', function () {
 });
 it('warns on unsupported properties without failing', function () {
     // p > span now parses fine (M6-T1: combinators are real selector syntax, no longer rejected
-    // outright — see SelectorParserTest); float stays the unsupported bit here.
-    $result = new StylesheetParser()->parse('p { float: left; color: red }');
+    // outright — see SelectorParserTest). `float` gained real support in M7-T6 (see
+    // Style\FloatSide/DeclarationParser) — swapped to `writing-mode`, explicitly excluded-with-
+    // warning by the M7 milestone brief (RESTRICCIONES GLOBALES: "Excluidos M7 con warning").
+    $result = new StylesheetParser()->parse('p { writing-mode: vertical-rl; color: red }');
     expect($result->rules)->toHaveCount(1);
     expect($result->warnings)->not->toBeEmpty();
 });

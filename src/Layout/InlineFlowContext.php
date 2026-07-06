@@ -137,16 +137,28 @@ final class InlineFlowContext
     }
 
     /**
+     * M7-T6 (CSS 2.2 §9.5, line shortening around floats): $floatContext, cuando no es null, es
+     * el FloatContext del BFC de ESTE bloque (ver BlockFlowContext::layout(), que lo plumbea aquí
+     * SIEMPRE que llama a este método -- incluso sin ningún float presente, ver
+     * lineExtentsForY(): con un FloatContext vacío el resultado es BIT-A-BIT idéntico a pasar
+     * null, así que ningún test/caller anterior a esta tarea cambia de comportamiento). Cada línea
+     * consulta su propio hueco horizontal en su Y de inicio (lineExtentsForY()) -- una vez
+     * decidido, ese hueco NO se re-consulta a medida que la línea "crece" en altura (p.ej. por un
+     * inline-block más alto que el texto, ver el docblock de clase) -- simplificación deliberada
+     * documentada en el brief de esta tarea (un navegador real sí podría re-comprobar contra una
+     * altura de línea mayor).
+     *
      * @param list<TextRun|LineBreakRun|InlineBoxStart|InlineBoxEnd|BlockBox> $runs
      * @return list<Fragment>
      */
-    public function layout(array $runs, float $x, float $y, float $availableWidth, ComputedStyle $blockStyle): array
+    public function layout(array $runs, float $x, float $y, float $availableWidth, ComputedStyle $blockStyle, ?FloatContext $floatContext = null): array
     {
         $finder = new BreakFinder();
 
         /** @var list<Fragment> $lines */
         $lines = [];
         $cursorY = $y;
+        [$cursorY, $lineX, $lineAvailWidth] = $this->lineExtentsForY($cursorY, $x, $availableWidth, $floatContext, 0.0);
 
         /** @var list<array{kind: 'text', run: TextRun, face: FontFace, text: string, width: float}|array{kind: 'box-open', style: ComputedStyle, tag: string, width: float, paddingRight: float, paddingTop: float, paddingBottom: float}|array{kind: 'box-close', width: float}|array{kind: 'atomic', fragment: BoxFragment, width: float, height: float}> $lineEntries */
         $lineEntries = [];
@@ -167,10 +179,10 @@ final class InlineFlowContext
 
         foreach ($runs as $run) {
             if ($run instanceof LineBreakRun) {
-                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq);
+                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq, $lineX, $lineAvailWidth, $floatContext);
                 $carry = [];
                 $carryWidth = 0.0;
-                $this->closeLine($lines, $lineEntries, $lineWidth, $x, $cursorY, $availableWidth, $blockStyle, force: true, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
+                $this->closeLine($lines, $lineEntries, $lineWidth, $lineX, $cursorY, $lineAvailWidth, $blockStyle, force: true, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
                 continue;
             }
 
@@ -207,13 +219,13 @@ final class InlineFlowContext
                 // válido (simplificación documentada, ver el docblock de clase) -- se comete
                 // primero lo que hubiera pendiente como SU PROPIA palabra, luego el atómico como
                 // otra palabra independiente.
-                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq);
+                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq, $lineX, $lineAvailWidth, $floatContext);
                 $carry = [];
                 $carryWidth = 0.0;
                 $atomic = $this->layoutInlineBlockAtomic($run, $availableWidth);
                 $carry[] = ['kind' => 'atomic', 'fragment' => $atomic['fragment'], 'width' => $atomic['width'], 'height' => $atomic['height']];
                 $carryWidth += $atomic['width'];
-                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq);
+                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq, $lineX, $lineAvailWidth, $floatContext);
                 $carry = [];
                 $carryWidth = 0.0;
                 continue;
@@ -246,12 +258,12 @@ final class InlineFlowContext
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $sliceText, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
 
-                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq);
+                $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq, $lineX, $lineAvailWidth, $floatContext);
                 $carry = [];
                 $carryWidth = 0.0;
 
                 if ($opportunity->mandatory) {
-                    $this->closeLine($lines, $lineEntries, $lineWidth, $x, $cursorY, $availableWidth, $blockStyle, force: true, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
+                    $this->closeLine($lines, $lineEntries, $lineWidth, $lineX, $cursorY, $lineAvailWidth, $blockStyle, force: true, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
                 }
 
                 $segStart = $end;
@@ -265,8 +277,8 @@ final class InlineFlowContext
             }
         }
 
-        $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq);
-        $this->closeLine($lines, $lineEntries, $lineWidth, $x, $cursorY, $availableWidth, $blockStyle, force: false, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
+        $this->commitWord($carry, $carryWidth, $lines, $lineEntries, $lineWidth, $cursorY, $x, $availableWidth, $blockStyle, $openBoxStack, $boxSeq, $lineX, $lineAvailWidth, $floatContext);
+        $this->closeLine($lines, $lineEntries, $lineWidth, $lineX, $cursorY, $lineAvailWidth, $blockStyle, force: false, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
 
         return $lines;
     }
@@ -358,7 +370,17 @@ final class InlineFlowContext
      * Decide si la "palabra" (uno o más tramos, potencialmente de runs y/o cajas distintas) cabe
      * en la línea actual; si no cabe y ya hay contenido, cierra la línea primero (greedy, como M0).
      * Una línea vacía SIEMPRE acepta su primera palabra sin importar el ancho (nunca bucle
-     * infinito: una palabra más ancha que la línea simplemente desborda, ver brief).
+     * infinito: una palabra más ancha que la línea simplemente desborda, ver brief) — SALVO que
+     * haya floats activos que la estén estrechando (M7-T6): en ese caso, antes de aceptarla, se
+     * consulta lineExtentsForY() para bajar hasta la primera Y donde deje de haber un float
+     * causando el hueco angosto (ver su docblock/el brief, "must move below the lowest
+     * intersecting float band").
+     *
+     * $x/$availableWidth son el ANCHO COMPLETO (sin estrechar) de este bloque -- constantes durante
+     * toda la llamada a layout(), usadas SOLO para el chequeo de línea vacía de abajo y para
+     * clamping en lineExtentsForY(); $lineX/$lineAvailWidth (por referencia) son el hueco de LA
+     * LÍNEA ACTUAL, recalculado aquí cada vez que una línea nueva empieza (vacía) y usados por
+     * closeLine() para posicionar/alinear el contenido.
      *
      * @param list<array{kind: 'text', run: TextRun, face: FontFace, text: string, width: float}|array{kind: 'box-open', style: ComputedStyle, tag: string, width: float, paddingRight: float, paddingTop: float, paddingBottom: float}|array{kind: 'box-close', width: float}|array{kind: 'atomic', fragment: BoxFragment, width: float, height: float}> $word
      * @param list<Fragment> $lines
@@ -377,6 +399,9 @@ final class InlineFlowContext
         ComputedStyle $blockStyle,
         array &$openBoxStack,
         int &$boxSeq,
+        float &$lineX,
+        float &$lineAvailWidth,
+        ?FloatContext $floatContext,
     ): void {
         if ($word === []) {
             return;
@@ -387,14 +412,56 @@ final class InlineFlowContext
             ? $wordWidth - $this->measurer->widthOf(' ', $last['face'], $last['run']->style->fontSizePx)
             : $wordWidth;
 
-        if ($lineEntries !== [] && $lineWidth + $core > $availableWidth) {
-            $this->closeLine($lines, $lineEntries, $lineWidth, $x, $cursorY, $availableWidth, $blockStyle, force: false, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
+        if ($lineEntries !== [] && $lineWidth + $core > $lineAvailWidth) {
+            $this->closeLine($lines, $lineEntries, $lineWidth, $lineX, $cursorY, $lineAvailWidth, $blockStyle, force: false, openBoxStack: $openBoxStack, boxSeq: $boxSeq);
+        }
+
+        // M7-T6: línea vacía (recién empezada, ya sea la primera de toda la llamada o la que
+        // sigue al closeLine() de arriba) -- (re)consulta el hueco para ESTA palabra concreta.
+        if ($lineEntries === []) {
+            [$cursorY, $lineX, $lineAvailWidth] = $this->lineExtentsForY($cursorY, $x, $availableWidth, $floatContext, $core);
         }
 
         foreach ($word as $slice) {
             $this->appendEntry($lineEntries, $slice);
         }
         $lineWidth += $wordWidth;
+    }
+
+    /**
+     * M7-T6 (CSS 2.2 §9.5): hueco horizontal disponible para una línea que arranca en $startY,
+     * capaz de alojar (al menos) $minWidthNeeded -- sin floats (o con un FloatContext sin ningún
+     * float activo en ningún Y candidato), devuelve inmediatamente [$startY, $x, $availableWidth]
+     * SIN NINGÚN CÁLCULO adicional (byte-idéntico al comportamiento pre-M7-T6). Con floats
+     * activos, si el hueco en $startY es más estrecho que $minWidthNeeded Y sigue siendo más
+     * estrecho que el ancho COMPLETO (es decir, un float lo está causando de verdad, no que la
+     * palabra sea simplemente más ancha que el bloque entero), avanza a la Y justo debajo de la
+     * banda de floats más baja que sigue activa (FloatContext::nextClearY()) y repite -- termina
+     * SIEMPRE (nextClearY() avanza estrictamente mientras haya floats activos, ver su docblock).
+     *
+     * @return array{0: float, 1: float, 2: float} [y, lineLeft, lineAvailableWidth]
+     */
+    private function lineExtentsForY(float $startY, float $x, float $availableWidth, ?FloatContext $floatContext, float $minWidthNeeded): array
+    {
+        if ($floatContext === null) {
+            return [$startY, $x, $availableWidth];
+        }
+        $y = $startY;
+        while (true) {
+            [$left, $right] = $floatContext->lineExtents($y);
+            $left = max($left, $x);
+            $right = min($right, $x + $availableWidth);
+            $width = max(0.0, $right - $left);
+            if ($width >= $minWidthNeeded || $width >= $availableWidth) {
+                return [$y, $left, $width];
+            }
+            $nextY = $floatContext->nextClearY($y);
+            if ($nextY <= $y) {
+                // Guarda defensiva (ver FloatContext::nextClearY()): nunca debería alcanzarse.
+                return [$y, $left, $width];
+            }
+            $y = $nextY;
+        }
     }
 
     /**

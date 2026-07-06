@@ -15,14 +15,17 @@ use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\GeometryShift;
 use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\Text\FontFamilyResolver;
 use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
+use Pliego\Style\FloatSide;
 use Pliego\Style\FontStyle;
 use Pliego\Style\ListStyleType;
+use Pliego\Style\Position;
 use Pliego\Text\FontCatalog;
 use Pliego\Text\FontFace;
 
@@ -100,6 +103,11 @@ final class BlockFlowContext implements FormattingContext
      * (ver docblock de listMarkerFragment()), así que esta clase necesita el mismo mecanismo de
      * resolución, sin duplicar GENERIC_FAMILIES aquí (ver Layout\Text\FontFamilyResolver). */
     private readonly FontFamilyResolver $fontFamilyResolver;
+    /** M7-T6: shrink-to-fit width de un float/absolute (shrinkToFitWidth()) necesita el mismo
+     * cálculo de max-content que un item flex/inline-block -- mismo patrón de inyección perezosa
+     * que $flexContext/$tableContext (autocreada la primera vez que hace falta, ver
+     * intrinsicSizer()). */
+    private ?IntrinsicSizer $intrinsicSizer = null;
 
     public function __construct(
         private readonly TextMeasurer $measurer,
@@ -185,8 +193,26 @@ final class BlockFlowContext implements FormattingContext
      * numera como si fuera el primero. Ignorado por completo si $style->display no es
      * Display::ListItem (ver el final de este método).
      */
-    public function layout(BlockBox $box, Rect $containingBlock, ?float $usedWidthOverride = null, ?int $listItemOrdinal = null): BoxFragment
-    {
+    public function layout(
+        BlockBox $box,
+        Rect $containingBlock,
+        ?float $usedWidthOverride = null,
+        ?int $listItemOrdinal = null,
+        // M7-T6 (CSS 2.2 §9.5, floats): el FloatContext del BFC al que pertenecen los HIJOS de
+        // ESTA caja (nunca el de la propia caja -- ver el docblock de FloatContext para dónde se
+        // crea uno nuevo frente a dónde se reutiliza). null significa "nadie me dio uno" -- la
+        // llamada raíz de Engine, o cualquier llamador que YA establece su propio contexto de
+        // layout (FlexFormattingContext/TableFormattingContext/InlineFlowContext::
+        // layoutInlineBlockAtomic(), ninguno de los cuales pasa este parámetro) -- tratado
+        // exactamente igual que "esta caja establece BFC", ver $bfc más abajo.
+        ?FloatContext $floatContext = null,
+        // M7-T6 (CSS 2.2 §9.4.3/§10.3.7, position:absolute): el containing block POSITIONED más
+        // cercano (Rect del content box de un ancestro position != Static), o null cuando nadie lo
+        // pasó -- en ese caso se usa el propio $containingBlock recibido como fallback (el
+        // "initial containing block" de esta sub-jerarquía; Engine::render() pasa explícitamente
+        // el content box de LA PÁGINA en la llamada raíz, ver su docblock).
+        ?Rect $positionedCB = null,
+    ): BoxFragment {
         $style = $box->style;
         // CSS 2.2 §10.2/§10.3.3/§8.3: todo porcentaje de width/margin-*/padding-* se resuelve
         // contra el ANCHO del containing block — incluso los verticales (margin-top/bottom,
@@ -264,6 +290,31 @@ final class BlockFlowContext implements FormattingContext
         // mucho después de que $cursorY ya haya avanzado.
         $contentTop = $cursorY;
 
+        // M7-T6 (CSS 2.2 §9.4.1/§10.6.7, floats/BFC): esta caja establece su PROPIO block
+        // formatting context nuevo -- aislando los floats de sus hijos de los del padre -- cuando
+        // nadie le pasó uno ($floatContext === null: la raíz del documento, o cualquier llamador
+        // que YA establece su propio contexto de layout, ver el docblock del parámetro) O cuando
+        // ELLA MISMA tiene overflow:hidden (el "clearfix" clásico, ya wireado desde M7-T5 para el
+        // clip de pintado -- ver $clipsChildren más abajo). En cualquier otro caso (caja normal,
+        // position:static, overflow:visible, anidada dentro de un BFC ya existente) se REUTILIZA
+        // el MISMO FloatContext que el padre -- los floats de un hijo "escapan" hacia arriba hasta
+        // el BFC real que los contiene, comportamiento CSS correcto.
+        $establishesFreshBfc = $floatContext === null || $style->overflow === 'hidden';
+        $bfc = $establishesFreshBfc ? new FloatContext($contentX, $contentX + $contentWidth) : $floatContext;
+
+        // M7-T6 (CSS 2.2 §9.4.3/§10.3.7, position:absolute): containing block para descendientes
+        // -- cualquier caja con position != Static SE CONVIERTE en el CB de SUS PROPIOS hijos (su
+        // content box; altura INF porque, en este punto del método, la altura de ESTA caja
+        // todavía no se conoce -- content-driven, ver el final de este método -- documentado como
+        // gap conocido: un descendiente `position:absolute` que use `bottom` contra ESTE ancestro,
+        // sin `top`, no puede resolverse con precisión, ver layoutAbsoluteChild()). Una caja
+        // position:static normal simplemente REENVÍA el CB que recibió de su propio padre sin
+        // tocarlo (nunca se convierte ella misma en CB).
+        $positionedCB ??= new Rect($containingBlock->x, $containingBlock->y, $containingBlock->width, $containingBlock->height);
+        $childPositionedCB = $style->position !== Position::Static
+            ? new Rect($contentX, $contentTop, $contentWidth, INF)
+            : $positionedCB;
+
         $children = [];
         /**
          * M7-T4: += InlineBoxStart/InlineBoxEnd (caja inline real) y BlockBox (SOLO cuando su
@@ -278,11 +329,15 @@ final class BlockFlowContext implements FormattingContext
          *     secuencia inline contigua pendiente de layout
          */
         $pendingRuns = [];
-        $flushInline = function () use (&$pendingRuns, &$children, &$cursorY, &$contentBottom, $contentX, $contentWidth, $style): void {
+        $flushInline = function () use (&$pendingRuns, &$children, &$cursorY, &$contentBottom, $contentX, $contentWidth, $style, $bfc): void {
             if ($pendingRuns === []) {
                 return;
             }
-            foreach ($this->inline->layout($pendingRuns, $contentX, $cursorY, $contentWidth, $style) as $line) {
+            // M7-T6: $bfc SIEMPRE se pasa (nunca null) -- con un FloatContext SIN floats activos
+            // el resultado es bit-a-bit idéntico a no pasar ninguno (ver InlineFlowContext::
+            // lineExtentsForY()), así que ningún bloque sin floats de por medio cambia de
+            // comportamiento.
+            foreach ($this->inline->layout($pendingRuns, $contentX, $cursorY, $contentWidth, $style, $bfc) as $line) {
                 $children[] = $line;
                 $cursorY = $line->rect()->bottom();
             }
@@ -318,6 +373,38 @@ final class BlockFlowContext implements FormattingContext
                 continue;
             }
             $flushInline();
+
+            // M7-T6 (CSS 2.2 §9.5.2): clear -- aplica a CUALQUIER caja de bloque (incluida una
+            // que ADEMÁS sea float, si combina float+clear -- soportado por el algoritmo sin rama
+            // extra, aunque no hay ningún test explícito de esa combinación) -- se resuelve ANTES
+            // de decidir la posición Y de este hijo, ya acabe en flujo normal o sea él mismo un
+            // float.
+            if ($child->style->clear !== 'none') {
+                $cursorY = max($cursorY, $bfc->clearBottom($child->style->clear));
+            }
+
+            // M7-T6 (CSS 2.2 §9.5): float -- colocado DENTRO del BFC de esta caja ($bfc), el
+            // cursor de flujo normal NO avanza (el float se "saca" del flujo, ver
+            // layoutFloatChild()). Restringido a BlockBox|ImageBox (los únicos tipos con
+            // ComputedStyle propio en esta posición del árbol) -- un elemento display:inline con
+            // float NO pasa por aquí (BoxTreeBuilder no lo saca de la secuencia de runs, ver el
+            // docblock del parámetro $floatContext -- gap documentado, fuera del alcance reducido
+            // de esta tarea).
+            if ($child->style->float !== null && ($child instanceof BlockBox || $child instanceof ImageBox)) {
+                $children[] = $this->layoutFloatChild($child, $contentX, $contentWidth, $cursorY, $bfc, $childPositionedCB);
+                continue;
+            }
+
+            // M7-T6 (CSS 2.2 §9.4.3/§10.3.7): position:absolute -- fuera de flujo, el cursor NO
+            // avanza. Se coloca contra $childPositionedCB (el CB positioned más cercano, o ESTA
+            // misma caja si acaba de convertirse en CB, ver arriba) y se añade como hijo más de
+            // $children (adjudicación del brief: NO se burbujea hasta el ancestro CB real -- ver
+            // el docblock de layoutAbsoluteChild()).
+            if ($child->style->position === Position::Absolute && ($child instanceof BlockBox || $child instanceof ImageBox)) {
+                $children[] = $this->layoutAbsoluteChild($child, $childPositionedCB, $cursorY);
+                continue;
+            }
+
             if ($child instanceof ImageBox) {
                 $childFragment = $this->layoutImage($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
@@ -363,6 +450,8 @@ final class BlockFlowContext implements FormattingContext
                     $child,
                     new Rect($contentX, $cursorY, $contentWidth, INF),
                     listItemOrdinal: $nextListItemNumber,
+                    floatContext: $bfc,
+                    positionedCB: $childPositionedCB,
                 );
                 $nextListItemNumber++;
                 $children[] = $childFragment;
@@ -370,7 +459,15 @@ final class BlockFlowContext implements FormattingContext
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
-            $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
+            // M7-T6: $bfc/$childPositionedCB se threadean SIN CONDICIÓN a cualquier hijo bloque
+            // normal (no establece su propio BFC/CB salvo que SU PROPIO overflow/position lo
+            // decida internamente, ver el arranque de este método) -- así los floats/absolutes de
+            // un descendiente anidado varios niveles ven el MISMO FloatContext/CB que esta caja,
+            // sin necesitar ninguna traducción de coordenadas (este motor usa coordenadas
+            // ABSOLUTAS de página en TODO el árbol de fragments, nunca locales al padre -- ver
+            // Layout\Geometry\Rect / Layout\Fragment\GeometryShift -- así que pasar la MISMA
+            // instancia hacia abajo es, por construcción, correcto a cualquier profundidad).
+            $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF), floatContext: $bfc, positionedCB: $childPositionedCB);
             $children[] = $childFragment;
             // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la
             // última caja en flujo; el margin-bottom avanza el cursor para el siguiente
@@ -408,6 +505,22 @@ final class BlockFlowContext implements FormattingContext
         // borde inferior (documentado, sin clipping); overflow:hidden activa $clipsChildren más
         // abajo, que es quien realmente oculta ese exceso en el momento de pintar (Paint\Painter).
         $contentHeight = $contentBottom - $contentTop;
+
+        // M7-T6 (CSS 2.2 §10.6.7): un BFC root (overflow:hidden, o la raíz del documento -- ver
+        // $establishesFreshBfc arriba) CONTIENE la altura de sus PROPIOS floats en su propio
+        // cálculo de altura de contenido -- a diferencia de una caja normal (que NO establece su
+        // propio BFC), cuyos floats "escapan" hacia el BFC real y NUNCA cuentan para SU altura
+        // (default CSS: floats no contribuyen a la altura del contenedor que los contiene, ver el
+        // brief de esta tarea). $bfc->maxBottom() solo ve los floats registrados EN ESTE MISMO
+        // FloatContext -- cuando $establishesFreshBfc es true, ese FloatContext es uno NUEVO,
+        // aislado, así que nunca "cuenta" floats de un ancestro/descendiente ajeno.
+        if ($establishesFreshBfc) {
+            $floatsBottom = $bfc->maxBottom();
+            if ($floatsBottom !== null) {
+                $contentHeight = max($contentHeight, $floatsBottom - $contentTop);
+            }
+        }
+
         $paddingV = $paddingTop + $paddingBottom;
         $borderV = $borderTop + $borderBottom;
         $maxHeightPx = $style->maxHeight?->px;
@@ -420,7 +533,7 @@ final class BlockFlowContext implements FormattingContext
         }
         $height = $borderTop + $paddingTop + $contentHeight + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(
+        $fragment = new BoxFragment(
             new Rect($x, $y, $borderBoxWidth, $height),
             $style->backgroundColor,
             $children,
@@ -432,6 +545,222 @@ final class BlockFlowContext implements FormattingContext
             // BoxFragment::$clipsChildren.
             clipsChildren: $style->overflow === 'hidden',
         );
+
+        // M7-T6 (CSS 2.2 §9.4.3): position:relative -- shift visual PURO, aplicado DESPUÉS de que
+        // el layout normal-flow de esta caja (y de todo su subárbol) ya terminó -- los hermanos y
+        // la geometría de flujo normal de TODOS los demás no se ven afectados (ver GeometryShift,
+        // "seguro porque Y/X solo entran de forma ADITIVA"). Sin ningún top/right/bottom/left
+        // declarado, $dx===$dy===0.0 y se evita el recorrido completo del subárbol.
+        if ($style->position === Position::Relative) {
+            [$dx, $dy] = self::resolveRelativeOffset($style, $cbWidth);
+            if ($dx !== 0.0 || $dy !== 0.0) {
+                return GeometryShift::translateXY($fragment, $dx, $dy);
+            }
+        }
+        return $fragment;
+    }
+
+    /**
+     * M7-T6 (CSS 2.2 §9.4.3): resuelve el offset visual de position:relative -- left GANA sobre
+     * right (usado negado, desplaza hacia la izquierda) cuando AMBOS están declarados; igual
+     * criterio top sobre bottom en el eje vertical. $cbWidth es el ancho del containing block de
+     * ESTA caja (para resolver el % posible de left/right -- top/bottom son SIEMPRE px, ver
+     * ComputedStyle::$top/$bottom, así que $cbWidth es irrelevante para ellos).
+     *
+     * @return array{0: float, 1: float} [dx, dy]
+     */
+    private static function resolveRelativeOffset(ComputedStyle $style, float $cbWidth): array
+    {
+        $dx = match (true) {
+            $style->left !== null => $style->left->resolve($cbWidth),
+            $style->right !== null => -$style->right->resolve($cbWidth),
+            default => 0.0,
+        };
+        $dy = match (true) {
+            $style->top !== null => $style->top->resolve($cbWidth),
+            $style->bottom !== null => -$style->bottom->resolve($cbWidth),
+            default => 0.0,
+        };
+        return [$dx, $dy];
+    }
+
+    /**
+     * M7-T6 (CSS 2.2 §9.5, floats): coloca un hijo BlockBox|ImageBox flotante DENTRO del BFC de
+     * esta caja ($bfc). El hijo se layoutea PRIMERO en un origen "de trabajo" (contentX, $minY)
+     * para conocer su MARGIN BOX real -- un BlockBox usa shrink-to-fit width (declarado gana si
+     * existe, ver shrinkToFitWidth(), mismo criterio que un inline-block); un ImageBox usa su
+     * tamaño de replaced element normal (ya es "shrink-to-fit" por naturaleza, resolveReplacedSize()
+     * ya no depende del ancho disponible salvo para el clamp de min/max-width) -- y LUEGO se pide
+     * a FloatContext::place() dónde cabe DE VERDAD (bandas existentes de su lado); la diferencia
+     * entre ambas posiciones se aplica como un shift 2D (GeometryShift::translateXY) sobre el
+     * fragment YA layouteado, sin recalcular nada (mismo principio de seguridad que
+     * GeometryShift::translateY(), documentado ahí: X/Y solo entran de forma ADITIVA en este
+     * motor). El CALLER (el bucle de layout()) es quien garantiza que el cursor de flujo normal
+     * NO avanza tras esta llamada (CSS 2.2 §9.5: "a float is removed from the normal flow").
+     *
+     * Un float SIEMPRE establece su PROPIO block formatting context para sus hijos (CSS 2.2
+     * §9.4.1) -- de ahí floatContext: null en la llamada recursiva de más abajo, igual criterio
+     * que overflow:hidden/flex/table/inline-block (ver el docblock de FloatContext).
+     */
+    private function layoutFloatChild(
+        BlockBox|ImageBox $child,
+        float $contentX,
+        float $contentWidth,
+        float $minY,
+        FloatContext $bfc,
+        Rect $childPositionedCB,
+    ): BoxFragment {
+        $style = $child->style;
+        $side = $style->float ?? FloatSide::Left; // Nunca null aquí -- guard del caller.
+
+        if ($child instanceof ImageBox) {
+            $fragment = $this->layoutImage($child, new Rect($contentX, $minY, $contentWidth, INF));
+        } else {
+            $usedWidth = $this->shrinkToFitWidth($child, $contentWidth);
+            $fragment = $this->layout($child, new Rect($contentX, $minY, $contentWidth, INF), $usedWidth, floatContext: null, positionedCB: $childPositionedCB);
+        }
+
+        $marginLeft = $style->marginLeft->resolve($contentWidth);
+        $marginRight = $style->marginRight->resolve($contentWidth);
+        $marginTop = $style->marginTop->resolve($contentWidth);
+        $marginBottom = $style->marginBottom->resolve($contentWidth);
+
+        $marginBoxWidth = $marginLeft + $fragment->rect->width + $marginRight;
+        $marginBoxHeight = $marginTop + $fragment->rect->height + $marginBottom;
+
+        $placed = $bfc->place($side, $marginBoxWidth, $marginBoxHeight, $minY);
+
+        // El fragment YA fue layouteado con su margin box en ($contentX, $minY) -- ver arriba
+        // ($this->layout()/layoutImage() suman marginLeft/marginTop internamente al
+        // containingBlock->x/y recibido, que aquí es exactamente ($contentX, $minY)). El delta
+        // entre esa posición "de trabajo" y la FINAL decidida por FloatContext es lo único que
+        // hace falta desplazar.
+        $deltaX = $placed->x - $contentX;
+        $deltaY = $placed->y - $minY;
+        if ($deltaX === 0.0 && $deltaY === 0.0) {
+            return $fragment;
+        }
+        return GeometryShift::translateXY($fragment, $deltaX, $deltaY);
+    }
+
+    /**
+     * M7-T6 (CSS 2.2 §9.4.3/§10.3.7, position:absolute reducido): coloca un hijo BlockBox|ImageBox
+     * position:absolute contra $cb (el containing block positioned más cercano, o el CB inicial
+     * de página si ninguno -- ver $childPositionedCB en layout()). SIMPLIFICACIÓN DELIBERADA del
+     * brief: ancho/alto SIEMPRE shrink-to-fit cuando son auto -- NO se implementa el caso "left Y
+     * right ambos declarados resuelve el ancho" de los 10 casos completos del algoritmo real de la
+     * spec (CSS 2.2 §10.3.7 tabla completa). $flowCursorY es la Y ACTUAL del cursor de flujo del
+     * padre -- fallback de "posición estática" (CSS 2.2 §10.3.7 caso "static position") cuando NI
+     * top NI bottom están declarados: un navegador real calcularía la posición exacta que el
+     * elemento tendría en flujo normal; aquí basta con "donde está el cursor ahora mismo"
+     * (aproximación documentada).
+     *
+     * Igual que un float, la caja se layoutea PRIMERO en un origen "de trabajo" (el propio $cb) y
+     * LUEGO se desplaza (GeometryShift::translateXY) a su posición final -- mismo principio que
+     * layoutFloatChild(). El fragment resultante viaja como hijo más del $children del CALLER
+     * (nunca se burbujea hasta el ancestro CB real, aunque esté varios niveles por encima) --
+     * adjudicación EXPLÍCITA del brief: "rides along as a child fragment of its parent's
+     * BoxFragment for painting/pagination purposes" -- válida en este motor porque TODO el árbol
+     * de fragments usa coordenadas ABSOLUTAS de página (nunca locales al padre), así que el rect
+     * final es correcto sin importar en qué nivel del árbol de fragments quede colgado.
+     *
+     * Un `position:absolute` SIEMPRE establece su PROPIO BFC para sus hijos (igual que un float,
+     * flex/table/inline-block) -- floatContext: null en la llamada recursiva de más abajo.
+     *
+     * "Warns if taller than page" (brief): aproximado aquí como "excede la altura de $cb" -- solo
+     * verificable cuando $cb tiene una altura FINITA conocida (el CB raíz que Engine::render()
+     * plumbea con la altura REAL del área de contenido de página, ver su docblock); un ancestro
+     * positioned con altura todavía sin resolver (INF, ver layout()) no permite este chequeo --
+     * gap documentado, no cubierto por ningún test de esta tarea salvo el caso raíz.
+     */
+    private function layoutAbsoluteChild(BlockBox|ImageBox $child, Rect $cb, float $flowCursorY): BoxFragment
+    {
+        $style = $child->style;
+
+        if ($child instanceof ImageBox) {
+            $fragment = $this->layoutImage($child, new Rect($cb->x, $cb->y, $cb->width, INF));
+        } else {
+            $usedWidth = $this->shrinkToFitWidth($child, $cb->width);
+            $fragment = $this->layout($child, new Rect($cb->x, $cb->y, $cb->width, INF), $usedWidth, floatContext: null, positionedCB: $cb);
+        }
+
+        $marginLeft = $style->marginLeft->resolve($cb->width);
+        $marginRight = $style->marginRight->resolve($cb->width);
+        $marginTop = $style->marginTop->resolve($cb->width);
+        $marginBottom = $style->marginBottom->resolve($cb->width);
+        $marginBoxWidth = $marginLeft + $fragment->rect->width + $marginRight;
+        $marginBoxHeight = $marginTop + $fragment->rect->height + $marginBottom;
+
+        $left = $style->left?->resolve($cb->width);
+        $right = $style->right?->resolve($cb->width);
+        $top = $style->top?->resolve($cb->width);
+        $bottom = $style->bottom?->resolve($cb->width);
+
+        $desiredMarginBoxX = match (true) {
+            $left !== null => $cb->x + $left,
+            $right !== null => $cb->x + $cb->width - $right - $marginBoxWidth,
+            default => $cb->x, // Posición estática aproximada (borde izquierdo del CB).
+        };
+        $desiredMarginBoxY = match (true) {
+            $top !== null => $cb->y + $top,
+            $bottom !== null && is_finite($cb->height) => $cb->y + $cb->height - $bottom - $marginBoxHeight,
+            $bottom !== null => (function () use ($flowCursorY): float {
+                // Gap documentado (ver docblock del método): `bottom` contra un CB de altura
+                // todavía no resuelta (ancestro position:relative/absolute cuya propia altura es
+                // content-driven, ver layout()) no puede resolverse con precisión -- se avisa y se
+                // cae al fallback de posición estática.
+                $this->warnings?->addWarning(
+                    'position:absolute with "bottom" against an auto-height containing block is not supported; falling back to the static position',
+                );
+                return $flowCursorY;
+            })(),
+            default => $flowCursorY, // Posición estática aproximada (CSS 2.2 §10.3.7).
+        };
+
+        if (is_finite($cb->height) && $desiredMarginBoxY + $marginBoxHeight > $cb->y + $cb->height) {
+            $this->warnings?->addWarning(
+                'position:absolute box exceeds its containing block height; no independent pagination for absolutely positioned boxes',
+            );
+        }
+
+        $deltaX = $desiredMarginBoxX - $cb->x;
+        $deltaY = $desiredMarginBoxY - $cb->y;
+        if ($deltaX === 0.0 && $deltaY === 0.0) {
+            return $fragment;
+        }
+        return GeometryShift::translateXY($fragment, $deltaX, $deltaY);
+    }
+
+    /**
+     * M7-T6: ancho shrink-to-fit border-box para un BlockBox flotante o position:absolute --
+     * width declarado (resuelto contra $availableWidth, convertido a border-box si
+     * box-sizing:content-box) gana; si no, min(max-content, $availableWidth) -- MISMO criterio
+     * que InlineFlowContext::layoutInlineBlockAtomic() para un inline-block (duplicado aquí en vez
+     * de compartir código entre clases, mismo criterio "sin trait" ya documentado en
+     * FlexFormattingContext). min/max-width NO se clampan aquí -- BlockFlowContext::layout() ya lo
+     * hace internamente sobre el $usedWidthOverride resultante (mismo mecanismo que un item flex).
+     */
+    private function shrinkToFitWidth(BlockBox $box, float $availableWidth): float
+    {
+        $style = $box->style;
+        $declaredWidthPx = $style->width?->resolve($availableWidth);
+        if ($declaredWidthPx !== null) {
+            if ($style->boxSizing === 'border-box') {
+                return max(0.0, $declaredWidthPx);
+            }
+            $paddingLeft = $style->paddingLeft->resolve($availableWidth);
+            $paddingRight = $style->paddingRight->resolve($availableWidth);
+            $borderLeft = $style->borderLeft->widthPx;
+            $borderRight = $style->borderRight->widthPx;
+            return max(0.0, $declaredWidthPx + $paddingLeft + $paddingRight + $borderLeft + $borderRight);
+        }
+        $maxContent = $this->intrinsicSizer()->maxContentWidth($box);
+        return max(0.0, min($maxContent, $availableWidth));
+    }
+
+    private function intrinsicSizer(): IntrinsicSizer
+    {
+        return $this->intrinsicSizer ??= new IntrinsicSizer($this->measurer, $this->catalog, $this->warnings);
     }
 
     /**
@@ -629,13 +958,23 @@ final class BlockFlowContext implements FormattingContext
         // único <img>, así que ambos comparten el mismo valor.
         $imageFragment = new ImageFragment(new Rect($contentX, $contentY, $contentWidth, $contentHeight), $box->src, $style->opacity);
 
-        return new BoxFragment(
+        $fragment = new BoxFragment(
             new Rect($x, $y, $borderBoxWidth, $borderBoxHeight),
             $style->backgroundColor,
             [$imageFragment],
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
         );
+
+        // M7-T6: un <img> también puede ser position:relative -- mismo shift visual puro que un
+        // BlockBox normal, ver el docblock de layout().
+        if ($style->position === Position::Relative) {
+            [$dx, $dy] = self::resolveRelativeOffset($style, $cbWidth);
+            if ($dx !== 0.0 || $dy !== 0.0) {
+                return GeometryShift::translateXY($fragment, $dx, $dy);
+            }
+        }
+        return $fragment;
     }
 
     /**

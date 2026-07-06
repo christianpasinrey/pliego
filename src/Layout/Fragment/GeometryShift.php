@@ -79,4 +79,76 @@ final class GeometryShift
         }
         return $result;
     }
+
+    /**
+     * M7-T6 (floats/position:absolute, CSS 2.2 §9.5/§9.4.3/§10.3.7): variante 2D de translateY() —
+     * un float o una caja position:relative/absolute puede necesitar moverse HORIZONTALMENTE
+     * también (translateY()/translateChildrenY(), de M5-T5, solo cubrían el eje vertical porque
+     * sus dos únicos consumidores de entonces — align-items/justify-content de Flex,
+     * vertical-align de Table — nunca reposicionan en X). Mismo principio de seguridad que
+     * translateY() (ver docblock de clase): X e Y solo entran de forma ADITIVA en
+     * BlockFlowContext::layout()/layoutImage()/InlineFlowContext, así que desplazar un subárbol ya
+     * calculado en AMBOS ejes sigue siendo bit-a-bit idéntico a layoutear de cero en la posición
+     * final. Firma BoxFragment->BoxFragment (igual que translateY()) porque los TRES call sites
+     * (layoutFloatChild/layoutAbsoluteChild/el shift de position:relative, ver BlockFlowContext)
+     * desplazan SIEMPRE el fragment ENTERO de un BlockBox|ImageBox recién layouteado — nunca un
+     * fragment hoja suelto.
+     */
+    public static function translateXY(BoxFragment $fragment, float $deltaX, float $deltaY): BoxFragment
+    {
+        return new BoxFragment(
+            new Rect($fragment->rect->x + $deltaX, $fragment->rect->y + $deltaY, $fragment->rect->width, $fragment->rect->height),
+            $fragment->background,
+            self::translateChildrenXY($fragment->children, $deltaX, $deltaY),
+            $fragment->borders,
+            $fragment->atomic,
+            $fragment->opacity,
+            $fragment->clipsChildren,
+        );
+    }
+
+    /**
+     * A diferencia de translateChildrenY() (que NUNCA vio un InlineBoxFragment — ninguno de sus
+     * consumidores previos layoutea contenido inline directamente dentro del subárbol que
+     * desplazan), un float o una caja position:relative/absolute SÍ puede contener texto con cajas
+     * inline reales (p.ej. un `<div class="float-box"><span class="tag">...`) — de ahí que este
+     * método SÍ cubra InlineBoxFragment, a diferencia de su contraparte Y-only.
+     *
+     * @param list<Fragment> $children
+     * @return list<Fragment>
+     */
+    public static function translateChildrenXY(array $children, float $deltaX, float $deltaY): array
+    {
+        $result = [];
+        foreach ($children as $child) {
+            $result[] = match (true) {
+                $child instanceof BoxFragment => self::translateXY($child, $deltaX, $deltaY),
+                $child instanceof TextFragment => new TextFragment(
+                    new Rect($child->rect->x + $deltaX, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
+                    $child->text,
+                    $child->baselineY + $deltaY,
+                    $child->fontSizePx,
+                    $child->color,
+                    $child->faceKey,
+                    $child->underline,
+                    $child->opacity,
+                ),
+                $child instanceof ImageFragment => new ImageFragment(
+                    new Rect($child->rect->x + $deltaX, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
+                    $child->imageKey,
+                    $child->opacity,
+                ),
+                $child instanceof InlineBoxFragment => new InlineBoxFragment(
+                    new Rect($child->rect->x + $deltaX, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
+                    $child->background,
+                    $child->borders,
+                    $child->opacity,
+                    $child->isFirstSlice,
+                    $child->isLastSlice,
+                ),
+                default => throw new \LogicException('Unknown fragment leaf: ' . $child::class),
+            };
+        }
+        return $result;
+    }
 }

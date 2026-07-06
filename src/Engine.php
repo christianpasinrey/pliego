@@ -144,8 +144,19 @@ final class Engine
 
             $contentWidth = $this->paper->widthPx() - $marginLeft - $marginRight;
             $contentHeight = $this->paper->heightPx() - $marginTop - $marginBottom;
+            // M7-T6 (CSS 2.2 §9.4.3/§10.3.7, position:absolute): el "initial containing block" de
+            // la página -- a diferencia del $containingBlock de layout() (altura INF, el
+            // contenido puede desbordar y paginar libremente), este Rect SÍ lleva la altura REAL
+            // del área de contenido de página, para que un `position:absolute` directamente bajo
+            // la raíz (sin ningún ancestro position!=static) pueda resolver `bottom` con precisión
+            // y para que el chequeo de "taller than page" (BlockFlowContext::layoutAbsoluteChild())
+            // tenga una referencia real contra la que comparar.
             $rootFragment = (new BlockFlowContext($measurer, $catalog, $layoutWarnings))
-                ->layout($boxTree, new Rect(0.0, 0.0, $contentWidth, INF));
+                ->layout(
+                    $boxTree,
+                    new Rect(0.0, 0.0, $contentWidth, INF),
+                    positionedCB: new Rect(0.0, 0.0, $contentWidth, $contentHeight),
+                );
 
             $writer = new PdfWriter($stream);
             $writer->begin();

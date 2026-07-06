@@ -23,18 +23,30 @@ final class DeclarationParser
     /** M7-T5: min-height/max-height se unen aquí (igual criterio que height, ver su docblock: sin
      * containing height rastreada, % no tiene interpretación válida — parseLength() ya lo rechaza
      * de forma natural, produciendo el warning genérico "Unsupported length for min-height/
-     * max-height: 50%" documentado en el brief). */
-    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap', 'min-height', 'max-height'];
+     * max-height: 50%" documentado en el brief). M7-T6: top/bottom TAMBIÉN se unen aquí (CSS 2.2
+     * §9.4.3) — mismo motivo de fondo (la altura del containing block es, en general,
+     * indeterminada en este motor, ver ComputedStyle::$height), así que un % en top/bottom cae al
+     * mismo warning genérico + valor descartado que height. A diferencia de los otros 4 miembros,
+     * top/bottom SÍ admiten negativo (ver el chequeo de signo condicionado a
+     * NON_NEGATIVE_PROPERTIES más abajo, en vez de incondicional). */
+    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap', 'min-height', 'max-height', 'top', 'bottom'];
     /** CSS 2.2 §10: width, margin-{side} y padding-{side} sí admiten %, resuelto en used-value (T4).
      * M7-T5 (CSS 2.2 §10.4): min-width/max-width comparten el MISMO tratamiento que width — %
      * resuelto contra el ancho del containing block en Layout (ComputedStyle::compute() los deja
      * en LengthPercentage sin resolver, igual que width/margin/padding). min-height/max-height NO
      * están aquí (ver LENGTH_PROPERTIES, px-only — el motor no rastrea la altura del containing
      * block, ver el docblock de ComputedStyle::$height/$minHeight/$maxHeight). */
+    /** M7-T6 (CSS 2.2 §9.4.3): left/right se UNEN aquí — a diferencia de top/bottom (arriba, en
+     * LENGTH_PROPERTIES, px-only), un % en left/right SÍ tiene interpretación clara (siempre se
+     * resuelve contra el ANCHO del containing block, que este motor SIEMPRE conoce, ver el brief
+     * de esta tarea) — igual tratamiento que width/margin-*. Tampoco están en
+     * NON_NEGATIVE_PROPERTIES (un offset de posicionamiento admite negativo, CSS 2.2 §9.4.3), así
+     * que el chequeo de signo de la rama de abajo los deja pasar sin más. */
     private const array LENGTH_PERCENTAGE_PROPERTIES = [
         'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
         'width', 'min-width', 'max-width',
+        'left', 'right',
     ];
     /**
      * CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos en LENGTH_PERCENTAGE_PROPERTIES;
@@ -110,6 +122,21 @@ final class DeclarationParser
         // list-style-position: inside"), cumpliendo la disciplina de warnings del milestone
         // (TODO lo excluido avisa) sin necesitar una rama dedicada.
         'list-style-position' => ['outside'],
+        // M7-T6 (CSS 2.2 §9.5.1): 'none' (initial, el caso común) colapsa a
+        // ComputedStyle::$float === null -- ver Style\FloatSide, "shape-outside"/float con
+        // recorte no rectangular quedan fuera de alcance (RESTRICCIONES GLOBALES).
+        'float' => ['left', 'right', 'none'],
+        // M7-T6 (CSS 2.2 §9.5.2): los 4 valores completos del spec -- ninguno queda fuera de
+        // alcance, a diferencia de 'position' justo abajo.
+        'clear' => ['left', 'right', 'both', 'none'],
+        // M7-T6 (CSS 2.2 §9.4.3 / css-position-3): 'sticky' y 'fixed' NO están en esta lista
+        // deliberadamente -- caen al warning genérico de "Unsupported keyword for position" de
+        // más abajo (mismo mecanismo que cualquier otro keyword no soportado de este mapa) y la
+        // propiedad simplemente no se establece, colapsando a Position::Static en
+        // ComputedStyle::compute() (el initial value real, ver Style\Position) -- exactamente el
+        // fallback documentado en el brief del milestone para 'sticky' ("warning, treated as
+        // static") y para 'fixed' (fuera de alcance M7, M8+).
+        'position' => ['static', 'relative', 'absolute'],
     ];
 
     /** css-flexbox-1 §7.1.1: N sin unidad en la forma "flex: N ..." nunca admite signo (grow y
@@ -183,8 +210,14 @@ final class DeclarationParser
             if ($length === null) {
                 return $this->warn("Unsupported length for $property: $value");
             }
-            // height/row-gap/column-gap (únicos miembros de LENGTH_PROPERTIES) son siempre no-negativos.
-            if (self::rawValueOf($length) < 0.0) {
+            // height/row-gap/column-gap/min-height/max-height son siempre no-negativos (los 5
+            // están en NON_NEGATIVE_PROPERTIES). M7-T6: top/bottom se UNIERON a LENGTH_PROPERTIES
+            // (arriba) pero NO a NON_NEGATIVE_PROPERTIES -- un offset de posicionamiento SÍ admite
+            // negativo (CSS 2.2 §9.4.3, p.ej. `top: -10px` para desplazar hacia arriba) -- de ahí
+            // que este chequeo, antes incondicional, ahora consulte la misma lista que ya usa la
+            // rama LENGTH_PERCENTAGE_PROPERTIES de más arriba, sin cambiar el resultado para
+            // ninguno de los 5 miembros preexistentes.
+            if (self::rawValueOf($length) < 0.0 && in_array($property, self::NON_NEGATIVE_PROPERTIES, true)) {
                 return $this->warn("Negative value not allowed for $property: $value");
             }
             return [$property => $length];

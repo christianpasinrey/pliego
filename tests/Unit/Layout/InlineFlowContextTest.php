@@ -5,11 +5,13 @@ declare(strict_types=1);
 
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
+use Pliego\Layout\FloatContext;
 use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\InlineFlowContext;
 use Pliego\Layout\TextMeasurer;
 use Pliego\Style\ComputedStyle;
+use Pliego\Style\FloatSide;
 use Pliego\Text\FontCatalog;
 
 /** @param array<string, mixed> $declarations */
@@ -280,4 +282,80 @@ it('falls back to the default family, with a warning, when every name in the lis
     expect($warnings->drain())->toContain(
         "Generic font family 'monospace' has no registered face; falling back to 'default'",
     );
+});
+
+// M7-T6 (CSS 2.2 §9.5, line shortening around floats): InlineFlowContext::layout() recibe un
+// FloatContext opcional (último parámetro) -- ver BlockFlowContext, que lo plumbea desde su propio
+// FloatContext de BFC. Sin él (como en todos los tests de arriba), el comportamiento es
+// BIT-A-BIT idéntico al de antes de esta tarea.
+
+it('M7-T6: shortens the first line to start past a LEFT float band', function () {
+    $style = inlineStyle();
+    $floats = new FloatContext(0.0, 200.0);
+    // Float ocupa x[0,50) y[0,30) -- la línea, empezando en y=0, debe arrancar en x=50 (no 0).
+    $floats->place(FloatSide::Left, 50.0, 30.0, 0.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $style)], 0.0, 0.0, 200.0, $style, $floats));
+
+    expect($fragments[0]->rect->x)->toBe(50.0);
+});
+
+it('M7-T6: shortens the first line to end before a RIGHT float band', function () {
+    $style = inlineStyle();
+    $face = $this->catalog->select('default', 400, false);
+    $floats = new FloatContext(0.0, 200.0);
+    // Float ocupa x[150,200) y[0,30) -- deja un hueco de 150px a la izquierda.
+    $floats->place(FloatSide::Right, 50.0, 30.0, 0.0);
+
+    // 'uno dos tres cuatro' mide más que 150px (el hueco junto al float) pero menos que 200 (el
+    // ancho completo del bloque) -- SIN el float cabría en una sola línea; CON el float, la
+    // última palabra debe desbordar el hueco de 150px y envolver a una segunda línea.
+    $text = 'uno dos tres cuatro';
+    $fullWidth = $this->measurer->widthOf($text, $face, 16.0);
+    expect($fullWidth)->toBeGreaterThan(150.0)->toBeLessThan(200.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun($text, $style)], 0.0, 0.0, 200.0, $style, $floats));
+
+    expect(count($fragments))->toBeGreaterThan(1);
+    // Primera línea: arranca en x=0 (float a la DERECHA no mueve el borde izquierdo) y cabe
+    // dentro del hueco de 150px.
+    expect($fragments[0]->rect->x)->toBe(0.0);
+    expect($fragments[0]->rect->width)->toBeLessThanOrEqual(150.0);
+});
+
+it('M7-T6: a line returns to the FULL width once past the float\'s bottom edge', function () {
+    $style = inlineStyle();
+    $floats = new FloatContext(0.0, 200.0);
+    // Float bajo (altura 15) -- la PRIMERA línea (y=0) queda dentro de su banda; la SEGUNDA línea
+    // (y=19.2, la lineHeight normal de 16px) ya queda POR DEBAJO (15 < 19.2) -- ancho completo.
+    $floats->place(FloatSide::Left, 50.0, 15.0, 0.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $style), new LineBreakRun(), new TextRun('Mundo', $style)], 0.0, 0.0, 200.0, $style, $floats));
+
+    expect($fragments)->toHaveCount(2);
+    expect($fragments[0]->rect->x)->toBe(50.0);
+    expect($fragments[1]->rect->x)->toBe(0.0);
+});
+
+it('M7-T6: an empty line that cannot fit even its first word next to a float drops below the float\'s band', function () {
+    $style = inlineStyle();
+    $face = $this->catalog->select('default', 400, false);
+    $wordWidth = $this->measurer->widthOf('Hola', $face, 16.0);
+
+    $floats = new FloatContext(0.0, 100.0);
+    // Deja solo 5px libres (100 - 95), menos que 'Hola' -- ningún hueco posible junto al float.
+    $floats->place(FloatSide::Left, 95.0, 20.0, 0.0);
+    expect($wordWidth)->toBeGreaterThan(5.0);
+
+    $fragments = textFragmentsOf(new InlineFlowContext($this->measurer, $this->catalog)
+        ->layout([new TextRun('Hola', $style)], 0.0, 0.0, 100.0, $style, $floats));
+
+    expect($fragments)->toHaveCount(1);
+    // Empujada por debajo del borde inferior del float (y=20) -- ahí ya no hay ningún float
+    // activo, así que también recupera el ancho completo (x=0).
+    expect($fragments[0]->rect->y)->toBe(20.0);
+    expect($fragments[0]->rect->x)->toBe(0.0);
 });
