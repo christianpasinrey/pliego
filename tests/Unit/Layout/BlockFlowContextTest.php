@@ -1361,3 +1361,120 @@ it('M7-T6: position:absolute does not advance the flow cursor -- siblings are un
     assert($sibling instanceof BoxFragment);
     expect($sibling->rect->y)->toBe(0.0);
 });
+
+// --- Critical review fix (task M7-T6, reviewer-reproduced): position:relative offsets were
+// leaking into normal flow -- CSS 2.2 §9.4.3 says the top/left/bottom/right offset is a PURELY
+// visual/paint shift; it must NEVER move where the NEXT sibling starts, nor grow/shrink the
+// container's own content-driven auto-height. Before this fix, every sibling-advance site in
+// BlockFlowContext::layout()'s loop read `$childFragment->rect->bottom()` -- but $childFragment
+// was already the POST-shift fragment (GeometryShift::translateXY() is applied at the very end
+// of layout()/layoutImage(), see their position:relative branch), so a `top`/`left` offset bled
+// straight into the cursor/height math. Fixed by deriving flow geometry from PRE-shift numbers
+// (see BlockFlowContext::flowBottom()) at all five sibling-advance sites (generic block, image,
+// table, flex, list-item).
+
+it('M7-T6 fix: position:relative top+left offsets do not leak into sibling advance, container auto-height, or the horizontal axis (reviewer repro)', function () {
+    $frag = layoutHtml(
+        '<body><div class="rel">x</div><div class="sib">sibling</div></body>',
+        '.rel { position: relative; top: 50px; left: 30px; min-height: 20px; background-color: #ff0000 }'
+        . '.sib { background-color: #00ff00 }',
+        500.0,
+    );
+    $rel = findBoxByBackground($frag, '#ff0000');
+    $sib = findBoxByBackground($frag, '#00ff00');
+    assert($rel instanceof BoxFragment);
+    assert($sib instanceof BoxFragment);
+
+    // Flow math (vertical): the sibling starts exactly where .rel's UNSHIFTED border-box would
+    // have ended (min-height:20, no margin) -- NOT at 20+50=70.
+    expect($sib->rect->y)->toBe(20.0);
+    // Flow math (horizontal): a child never derives its sibling's X from anything but contentX in
+    // this engine (block children always span the same start X) -- left:30px must not move it.
+    expect($sib->rect->x)->toBe(0.0);
+    // Container (body) auto-height is content-driven from PRE-shift geometry too: 20 (.rel,
+    // min-height-driven) + 19.2 (.sib's single line of text, default line-height 1.2 * 16px
+    // font-size) = 39.2 -- NOT 20+50+19.2=89.2 (the bug's reported height).
+    expect($frag->rect->height)->toBe(39.2);
+    // Container width is containing-block-driven in this engine (never content-driven for a
+    // plain block), so it was never at risk -- asserted anyway for completeness.
+    expect($frag->rect->width)->toBe(500.0);
+
+    // The relative child's OWN painted position DOES move by (+30, +50) -- existing/preserved
+    // behavior; this fix only changes what FLOW math reads, never what gets PAINTED.
+    expect($rel->rect->x)->toBe(30.0);
+    expect($rel->rect->y)->toBe(50.0);
+});
+
+it('M7-T6 fix: a container with ONLY a position:relative child gets its auto-height from PRE-shift geometry', function () {
+    $frag = layoutHtml(
+        '<body><div class="outer"><div class="rel"></div></div></body>',
+        '.outer { background-color: #eeeeee }'
+        . '.rel { position: relative; top: 50px; min-height: 20px; background-color: #ff0000 }',
+        500.0,
+    );
+    $outer = findBoxByBackground($frag, '#eeeeee');
+    $rel = findBoxByBackground($frag, '#ff0000');
+    assert($outer instanceof BoxFragment);
+    assert($rel instanceof BoxFragment);
+
+    // No sibling below to mask the bug -- the container's OWN auto-height must still be 20
+    // (min-height, pre-shift), not 70 (20+50, the shifted bottom).
+    expect($outer->rect->height)->toBe(20.0);
+    // The child itself is still painted shifted -- (0,50) instead of the static (0,0).
+    expect($rel->rect->y)->toBe(50.0);
+});
+
+it('M7-T6 fix: position:relative margin-bottom still advances the cursor correctly ON TOP OF the (unshifted) flow bottom', function () {
+    $frag = layoutHtml(
+        '<body><div class="rel">x</div><div class="sib">sibling</div></body>',
+        '.rel { position: relative; top: 50px; min-height: 20px; margin-bottom: 15px; background-color: #ff0000 }'
+        . '.sib { background-color: #00ff00 }',
+        500.0,
+    );
+    $sib = findBoxByBackground($frag, '#00ff00');
+    assert($sib instanceof BoxFragment);
+    // Pre-shift flow bottom (20) + margin-bottom (15) = 35 -- the 50px top offset must not appear
+    // anywhere in this sum.
+    expect($sib->rect->y)->toBe(35.0);
+});
+
+it('M7-T6 fix: position:relative on an <img> (ImageBox branch) does not leak its offset into the next sibling', function () {
+    $frag = layoutImageHtml(
+        '<body><img class="rel" src="tiny.jpg"><div class="sib">sibling</div></body>',
+        '.rel { position: relative; top: 50px; width: 40px; height: 20px; display: block; background-color: #ff0000 }'
+        . '.sib { background-color: #00ff00 }',
+        500.0,
+    );
+    $img = findBoxByBackground($frag, '#ff0000');
+    $sib = findBoxByBackground($frag, '#00ff00');
+    assert($img instanceof BoxFragment);
+    assert($sib instanceof BoxFragment);
+
+    // Same invariant as the generic block branch: the sibling reads the UNSHIFTED bottom (20),
+    // never 20+50=70.
+    expect($sib->rect->y)->toBe(20.0);
+    // The image's own painted position DOES still move (+50) -- preserved behavior.
+    expect($img->rect->y)->toBe(50.0);
+});
+
+it('M7-T6 fix: position:relative on a list-item (ListItem branch) does not leak its offset into the next sibling <li>', function () {
+    $frag = layoutHtml(
+        '<body><ul><li class="rel">x</li><li class="sib">sibling</li></ul></body>',
+        // ul's UA default (`margin: 1em 0`, see UserAgentStylesheet) is zeroed out so the expected
+        // numbers below isolate ONLY the relative-offset-leak math, same as every other test here.
+        'ul { margin: 0 }'
+        . '.rel { position: relative; top: 50px; min-height: 20px; background-color: #ff0000 }'
+        . '.sib { background-color: #00ff00 }',
+        500.0,
+    );
+    $rel = findBoxByBackground($frag, '#ff0000');
+    $sib = findBoxByBackground($frag, '#00ff00');
+    assert($rel instanceof BoxFragment);
+    assert($sib instanceof BoxFragment);
+
+    // Same invariant as the generic block branch, via the ListItem recursive layout() call:
+    // sibling <li> reads the UNSHIFTED bottom of the first <li> (20), never 20+50=70.
+    expect($sib->rect->y)->toBe(20.0);
+    // The relatively-positioned <li>'s OWN painted position DOES still move (+50) -- preserved.
+    expect($rel->rect->y)->toBe(50.0);
+});

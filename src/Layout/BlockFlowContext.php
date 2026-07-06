@@ -408,7 +408,7 @@ final class BlockFlowContext implements FormattingContext
             if ($child instanceof ImageBox) {
                 $childFragment = $this->layoutImage($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
-                $contentBottom = $childFragment->rect->bottom();
+                $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
@@ -420,7 +420,7 @@ final class BlockFlowContext implements FormattingContext
             if ($child instanceof TableBox) {
                 $childFragment = $this->tableContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
-                $contentBottom = $childFragment->rect->bottom();
+                $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
@@ -434,7 +434,7 @@ final class BlockFlowContext implements FormattingContext
             if ($child->style->display === Display::Flex) {
                 $childFragment = $this->flexContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
-                $contentBottom = $childFragment->rect->bottom();
+                $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
@@ -455,7 +455,7 @@ final class BlockFlowContext implements FormattingContext
                 );
                 $nextListItemNumber++;
                 $children[] = $childFragment;
-                $contentBottom = $childFragment->rect->bottom();
+                $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
@@ -472,7 +472,12 @@ final class BlockFlowContext implements FormattingContext
             // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la
             // última caja en flujo; el margin-bottom avanza el cursor para el siguiente
             // hermano pero no forma parte de la altura del padre.
-            $contentBottom = $childFragment->rect->bottom();
+            //
+            // Bugfix (critical review, M7-T6): $contentBottom NO puede leerse de
+            // $childFragment->rect->bottom() a secas -- ver flowBottom() de más abajo para el
+            // porqué (position:relative del hijo ya viene aplicada DENTRO de $childFragment en
+            // este punto, y su offset NUNCA debe alcanzar el cursor de flujo, CSS 2.2 §9.4.3).
+            $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
             // margin-bottom del hijo se resuelve contra el ancho de SU containing block, que es
             // el content width de este padre (el mismo que se le pasó arriba como containingBlock->width).
             $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
@@ -582,6 +587,57 @@ final class BlockFlowContext implements FormattingContext
             default => 0.0,
         };
         return [$dx, $dy];
+    }
+
+    /**
+     * Bugfix (critical review, M7-T6, CSS 2.2 §9.4.3): "relative positioning [...] does not
+     * affect the position of any other box" — top/left/bottom/right on a position:relative box is
+     * a PAINT-ONLY shift; the box's contribution to normal flow (where the NEXT sibling starts,
+     * and the parent's own content-driven auto-height) must be computed as if the shift never
+     * happened. Before this fix, EVERY sibling-advance site in the loop above (block/image/table/
+     * flex/list-item — all five child kinds this context can produce) read
+     * `$childFragment->rect->bottom()` directly — but $childFragment, by the time it's returned
+     * from layout()/layoutImage()/tableContext()->layout()/flexContext()->layout(), may ALREADY
+     * be the POST-shift fragment (see the position:relative branch at the end of layout()/
+     * layoutImage(): GeometryShift::translateXY() is applied there, before returning) — so a
+     * `top`/`left` offset leaked straight into the flow math (reviewer repro: `.rel{position:
+     * relative;top:50px;min-height:20px}` followed by a sibling put the sibling at y=70 instead
+     * of y=20, and grew the container's auto-height by the same 50px).
+     *
+     * This computes the PRE-shift border-box bottom WITHOUT needing to know dx/dy at all, by
+     * exploiting the one invariant every producer of $childFragment shares (verified against
+     * layout()/layoutImage()/TableFormattingContext::layout()/FlexFormattingContext::layout(), all
+     * four resolve their own box the same way, see the top of each): the box's border-box top is
+     * ALWAYS placed at exactly `$containingBlock->y + marginTop` BEFORE any relative shift, and
+     * GeometryShift::translateXY() only ever adds dx/dy to x/y — it NEVER touches width/height
+     * (see its docblock: "seguro porque X/Y solo entran de forma ADITIVA"). So:
+     *
+     *   pre-shift bottom = (containingBlock->y BEFORE this child's layout call) + own margin-top
+     *                       + $childFragment->rect->height
+     *
+     * $precedingCursorY is that containingBlock->y — the flow cursor exactly as it stood right
+     * before the layout()/layoutImage()/tableContext()->layout()/flexContext()->layout() call that
+     * produced $childFragment (every call site above passes `new Rect($contentX, $cursorY, ...)`
+     * as that containing block, and reads $childFragment before mutating $cursorY, so the caller
+     * always has this value on hand for free — no extra state to thread through).
+     *
+     * For a child WITHOUT position:relative (the overwhelming common case, and the ONLY case for
+     * TableBox/display:flex containers today — see the docblock note below) this is bit-for-bit
+     * identical to the old `$childFragment->rect->bottom()`, since dy=0 means nothing shifted in
+     * the first place.
+     *
+     * NOTE on TableBox/display:flex: TableFormattingContext/FlexFormattingContext do NOT implement
+     * a position:relative shift for their OWN container box today (only BlockFlowContext::layout()
+     * and layoutImage() do) — so those two branches can never actually exhibit this bug yet. They
+     * are routed through this SAME helper anyway (rather than left on the old direct
+     * `->rect->bottom()` read) so all five sibling-advance sites share one invariant and one
+     * implementation, and so this fix keeps holding automatically if either context ever grows its
+     * own position:relative handling.
+     */
+    private static function flowBottom(BoxFragment $childFragment, float $precedingCursorY, ComputedStyle $childStyle, float $contentWidth): float
+    {
+        $marginTop = $childStyle->marginTop->resolve($contentWidth);
+        return $precedingCursorY + $marginTop + $childFragment->rect->height;
     }
 
     /**
