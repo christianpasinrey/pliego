@@ -106,7 +106,19 @@ final readonly class StyleResolver
             $this->allRules(),
             static fn(StyleRule $rule): bool => $rule->selector->matches($element),
         ));
+        // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2): el tier !important es la clave de
+        // ordenación PRIMARIA — un StyleRule marcado important siempre se procesa DESPUÉS de
+        // cualquiera normal (bool false < true en PHP, así que el <=> ya deja lo normal primero),
+        // sin importar especificidad, porque el bucle de más abajo va aplicando "última
+        // declaración gana" sobre $matching en este mismo orden. Especificidad y $order siguen
+        // siendo el desempate de siempre, pero SOLO dentro del mismo tier (nunca comparados entre
+        // tiers distintos, ver StyleRule). No hay tier user/UA important en este motor (solo
+        // author), así que dos niveles (normal, important) bastan.
         usort($matching, static function (StyleRule $a, StyleRule $b): int {
+            $byImportant = $a->important <=> $b->important;
+            if ($byImportant !== 0) {
+                return $byImportant;
+            }
             $bySpecificity = $a->selector->specificity()->compareTo($b->selector->specificity());
             return $bySpecificity !== 0 ? $bySpecificity : $a->order <=> $b->order;
         });

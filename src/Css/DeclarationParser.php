@@ -348,10 +348,20 @@ final class DeclarationParser
     {
         if ($this->looksLikeCalc($value)) {
             $calc = $this->tryParseCalc($value);
-            // El signo de un calc() no se conoce hasta ComputedStyle::compute (depende del
-            // font-size del padre) — el rechazo de negativos para font-size en calc() queda
-            // fuera de alcance de esta tarea (ningún test del brief lo ejercita).
-            return $calc === null ? [] : ['font-size' => $calc];
+            if ($calc === null) {
+                return [];
+            }
+            // M6 final-review fix (Finding 2): a calc() with no em/rem/% is a definite px value
+            // already knowable at parse time (see CalcExpr::isDefinite(), same fold already
+            // applied to padding/width/etc. in DeclarationParser::rawValueOf() since M6-T4) —
+            // font-size/line-height were left out of that fix (see the removed comment above);
+            // this closes the gap: calc(-5px) is rejected exactly like the literal "-5px" would
+            // be. A calc() WITH em/rem/% still has no knowable sign until ComputedStyle::compute
+            // (depends on the parent's own font-size) — left untouched, same as before.
+            if ($calc->isDefinite() && $calc->pxOffset < 0.0) {
+                return $this->warn("Negative value not allowed for font-size: $value");
+            }
+            return ['font-size' => $calc];
         }
         $css = CssLength::fromCss($value);
         if ($css === null) {
@@ -541,8 +551,15 @@ final class DeclarationParser
         }
         if ($this->looksLikeCalc($value)) {
             $calc = $this->tryParseCalc($value);
-            // Igual que font-size: el signo de un calc() no se conoce hasta compute-time.
-            return $calc === null ? [] : ['line-height' => $calc];
+            if ($calc === null) {
+                return [];
+            }
+            // M6 final-review fix (Finding 2): same definite-negative fold as parseFontSize()
+            // above — a calc() with em/rem/% still has no knowable sign until compute-time.
+            if ($calc->isDefinite() && $calc->pxOffset < 0.0) {
+                return $this->warn("Negative value not allowed for line-height: $value");
+            }
+            return ['line-height' => $calc];
         }
         $css = CssLength::fromCss($value);
         if ($css !== null) {

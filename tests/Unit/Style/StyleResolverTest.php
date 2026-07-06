@@ -794,3 +794,52 @@ it('accepts a %-bearing calc() for a non-negative property end to end without a 
     expect($paddingLeft->resolve(400.0))->toBe(-959.0);
     expect($warnings)->toBeEmpty();
 });
+
+// --- M6 final-review fix, finding 1: !important wins the cascade (CSS 2.2 §6.4.2) ---------
+
+it('THE probe: an !important declaration of lower specificity beats a normal declaration of higher specificity', function () {
+    [$doc, $map] = resolveDoc(
+        '.b { color: red !important } #x { color: blue }',
+        '<body><div id="x" class="b">y</div></body>',
+    );
+    $div = $doc->querySelector('#x');
+    assert($div !== null);
+    expect($map->get($div)->color)->toEqual(new Color(255, 0, 0));
+});
+
+it('lets specificity decide between two !important declarations (both important, higher specificity wins)', function () {
+    [$doc, $map] = resolveDoc(
+        '.b { color: red !important } #x { color: blue !important }',
+        '<body><div id="x" class="b">y</div></body>',
+    );
+    $div = $doc->querySelector('#x');
+    assert($div !== null);
+    expect($map->get($div)->color)->toEqual(new Color(0, 0, 255));
+});
+
+it('lets a normal declaration with no !important keep losing to specificity (no regression when nothing is important)', function () {
+    [$doc, $map] = resolveDoc(
+        '.b { color: red } #x { color: blue }',
+        '<body><div id="x" class="b">y</div></body>',
+    );
+    $div = $doc->querySelector('#x');
+    assert($div !== null);
+    expect($map->get($div)->color)->toEqual(new Color(0, 0, 255));
+});
+
+it('lets an !important declaration win over a LATER normal declaration of the same specificity (tier beats source order too)', function () {
+    [$doc, $map] = resolveDoc('p { color: red !important } p { color: blue }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+});
+
+it('lets an !important var() declaration beat a later, more specific normal declaration', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --c: #ff0000; } p { color: var(--c) !important; } p.override { color: #0000ff; }',
+        '<body><p class="override">x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+});

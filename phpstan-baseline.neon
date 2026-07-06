@@ -1011,7 +1011,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$color on mixed\.$#'
 			identifier: property.nonObject
-			count: 15
+			count: 20
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1203,13 +1203,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 96
+			count: 101
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 87
+			count: 92
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

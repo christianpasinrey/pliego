@@ -633,6 +633,44 @@ it('accepts a %-bearing calc() regardless of apparent sign at parse time (docume
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
+// --- M6 final-review fix, finding 2: font-size/line-height calc() gets the SAME definite-negative
+// check padding/width/etc. already got in M6-T4 — closes the one property family left out there. --
+
+it('rejects a definite negative calc() font-size at parse time: font-size:calc(-5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(-5px)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts a definite positive calc() font-size at parse time: font-size:calc(5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(5px)');
+    expect($result)->toEqual(['font-size' => CalcExpr::of(0.0, 0.0, 0.0, 5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still accepts a calc() with % or em on font-size (sign not knowable until compute-time, unchanged)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('font-size', 'calc(1em - 999px)');
+    expect($result)->toEqual(['font-size' => CalcExpr::of(0.0, 1.0, 0.0, -999.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a definite negative calc() line-height at parse time: line-height:calc(-5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(-5px)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts a definite positive calc() line-height at parse time: line-height:calc(5px)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(5px)');
+    expect($result)->toEqual(['line-height' => CalcExpr::of(0.0, 0.0, 0.0, 5.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
 // --- M6-T5: full color syntax reaches color/background-color/border-*-color via the SAME
 // Color::fromCss() call already exercised above for hex/keywords — these just prove rgb()/hsl()/
 // currentColor flow through the property dispatcher unchanged. -------------------------------

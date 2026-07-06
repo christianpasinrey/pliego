@@ -149,3 +149,73 @@ it('keeps typing declarations without var() at parse time (fast path unaffected)
     expect($d['color'])->toEqual(new Color(255, 0, 0));
     expect($d['margin-top'])->toEqual(LengthPercentage::px(8.0));
 });
+
+// --- M6 final-review fix, finding 1: !important cascade tier (CSS 2.2 §6.4.2) -------------
+
+it('keeps a rule with no !important declarations as a single normal StyleRule (no regression)', function () {
+    $result = new StylesheetParser()->parse('p { color: red; margin: 8px }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->important)->toBeFalse();
+});
+
+it('splits a block with a mix of !important and normal declarations into two StyleRule entries', function () {
+    $result = new StylesheetParser()->parse('p { color: red !important; margin: 8px }');
+    expect($result->rules)->toHaveCount(2);
+    $important = array_values(array_filter($result->rules, static fn($r) => $r->important));
+    $normal = array_values(array_filter($result->rules, static fn($r) => !$r->important));
+    expect($important)->toHaveCount(1);
+    expect($normal)->toHaveCount(1);
+    expect($important[0]->declarations)->toHaveKey('color');
+    expect($important[0]->declarations)->not->toHaveKey('margin-top');
+    expect($normal[0]->declarations)->toHaveKey('margin-top');
+    expect($normal[0]->declarations)->not->toHaveKey('color');
+    // Same selector/specificity for both halves — only the tier differs.
+    expect($important[0]->selector)->toEqual($normal[0]->selector);
+});
+
+it('marks the whole StyleRule important when every declaration in the block uses it', function () {
+    $result = new StylesheetParser()->parse('p { color: red !important; background-color: blue !important }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->important)->toBeTrue();
+});
+
+it('splits !important on a custom property the same way as any other declaration', function () {
+    $result = new StylesheetParser()->parse(':root { --sp: 6px !important; --other: 1px }');
+    $important = array_values(array_filter($result->rules, static fn($r) => $r->important));
+    $normal = array_values(array_filter($result->rules, static fn($r) => !$r->important));
+    expect($important)->toHaveCount(1);
+    expect($normal)->toHaveCount(1);
+    expect($important[0]->declarations)->toBe(['--sp' => '6px']);
+    expect($normal[0]->declarations)->toBe(['--other' => '1px']);
+});
+
+// --- M6 final-review fix, finding 3: @page accepts cm/mm/in/pt (Length::fromCss, shared with
+// CssLength's exact factors — see LengthTest). em/rem/% still warn: no font context at @page. ----
+
+it('accepts cm/mm/in/pt units on the @page margin-{side} longhands, folded to the same px factors as element margins', function () {
+    $result = new StylesheetParser()->parse(
+        '@page { margin-top: 1cm; margin-right: 1mm; margin-bottom: 1in; margin-left: 1pt }',
+    );
+    expect($result->pageRule?->margins)->toEqual([
+        'top' => Length::px(96.0 / 2.54),
+        'right' => Length::px(9.6 / 2.54),
+        'bottom' => Length::px(96.0),
+        'left' => Length::px(96.0 / 72.0),
+    ]);
+    expect($result->warnings)->toBeEmpty();
+});
+
+it('accepts cm units in the @page margin shorthand', function () {
+    $result = new StylesheetParser()->parse('@page { margin: 2cm }');
+    $expected = Length::px(2.0 * (96.0 / 2.54));
+    expect($result->pageRule?->margins)->toEqual([
+        'top' => $expected, 'right' => $expected, 'bottom' => $expected, 'left' => $expected,
+    ]);
+    expect($result->warnings)->toBeEmpty();
+});
+
+it('warns and declares no override for rem in @page margin (no font context at page level, documented)', function () {
+    $result = new StylesheetParser()->parse('@page { margin: 1.5rem }');
+    expect($result->pageRule?->margins)->toBe([]);
+    expect($result->warnings)->not->toBeEmpty();
+});
