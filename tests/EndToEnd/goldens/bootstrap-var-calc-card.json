@@ -1,0 +1,58 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        37.2
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                300.0,
+                37.2
+            ],
+            "background": "#0d6efd",
+            "borders": {
+                "top": {
+                    "widthPx": 1.0,
+                    "color": "#dee2e6"
+                },
+                "right": {
+                    "widthPx": 1.0,
+                    "color": "#dee2e6"
+                },
+                "bottom": {
+                    "widthPx": 1.0,
+                    "color": "#dee2e6"
+                },
+                "left": {
+                    "widthPx": 1.0,
+                    "color": "#dee2e6"
+                }
+            },
+            "atomic": false,
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        9.0,
+                        9.0,
+                        82.37,
+                        19.2
+                    ],
+                    "text": "Card body",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 25.45
+                }
+            ]
+        }
+    ]
+}

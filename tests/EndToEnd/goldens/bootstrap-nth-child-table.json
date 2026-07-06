@@ -1,0 +1,192 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        76.8
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                43.16,
+                76.8
+            ],
+            "background": null,
+            "borders": null,
+            "atomic": false,
+            "children": [
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        0.0,
+                        43.16,
+                        19.2
+                    ],
+                    "background": "#000000",
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                0.0,
+                                0.0,
+                                43.16,
+                                19.2
+                            ],
+                            "background": null,
+                            "borders": null,
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        0.0,
+                                        0.0,
+                                        43.16,
+                                        19.2
+                                    ],
+                                    "text": "Fila 1",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 16.45
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        19.2,
+                        43.16,
+                        19.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                0.0,
+                                19.2,
+                                43.16,
+                                19.2
+                            ],
+                            "background": null,
+                            "borders": null,
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        0.0,
+                                        19.2,
+                                        43.16,
+                                        19.2
+                                    ],
+                                    "text": "Fila 2",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 35.65
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        38.4,
+                        43.16,
+                        19.2
+                    ],
+                    "background": "#000000",
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                0.0,
+                                38.4,
+                                43.16,
+                                19.2
+                            ],
+                            "background": null,
+                            "borders": null,
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        0.0,
+                                        38.4,
+                                        43.16,
+                                        19.2
+                                    ],
+                                    "text": "Fila 3",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 54.85
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        57.6,
+                        43.16,
+                        19.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                0.0,
+                                57.6,
+                                43.16,
+                                19.2
+                            ],
+                            "background": null,
+                            "borders": null,
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        0.0,
+                                        57.6,
+                                        43.16,
+                                        19.2
+                                    ],
+                                    "text": "Fila 4",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 74.05
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

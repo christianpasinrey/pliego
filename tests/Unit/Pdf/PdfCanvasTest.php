@@ -306,3 +306,24 @@ it('paints NOTHING for a drawImage with opacity 0 — no XObject registered, no 
     expect($pdf)->not->toContain('/Subtype /Image');
     expect($pdf)->not->toContain('Do');
 });
+
+// M6-T6 (controller addition, T5 review): byte-level proof of the q/Q scoping guarantee
+// documented on emitWithAlpha() — an alpha'd op's `gs` is scoped to its OWN q/Q pair and must
+// never leak onto whatever paints right after it.
+
+it('leaves NO residual gs state after an alpha\'d op: the very next opaque op starts right at "Q\\n", byte for byte', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRect(new Rect(0, 0, 10, 10), new Color(255, 0, 0, 0.5)); // alpha'd: q/gs/rg/Q
+        $canvas->fillRect(new Rect(20, 20, 10, 10), new Color(0, 0, 255));    // opaque: rg only, unwrapped
+    });
+    // The opaque fillRect's own body (its "rg" line) is untouched by emitWithAlpha() and is
+    // appended immediately after the alpha'd op's closing "Q\n" — a literal substring match
+    // proves there is no dangling "gs"/stray "q" between the two ops, at the byte level.
+    expect($pdf)->toContain("Q\n0.000 0.000 1.000 rg");
+    // Sanity: exactly one q/Q scope opened total (the alpha'd op's own) — the opaque op that
+    // follows adds neither a new q/Q pair nor a second "gs" (the /GS1 name also appears once
+    // more in the page's /Resources /ExtGState dict, unrelated to the content stream itself).
+    expect(substr_count($pdf, "q\n"))->toBe(1);
+    expect(substr_count($pdf, "Q\n"))->toBe(1);
+    expect(substr_count($pdf, '/GS1 gs'))->toBe(1);
+});

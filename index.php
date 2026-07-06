@@ -82,6 +82,18 @@ $sampleHtml = <<<'HTML'
 
   <div class="band">Itinerario</div>
 
+  <table class="summary">
+    <thead>
+      <tr><th class="dt-cell">Giorno</th><th class="dt-cell">Tappa</th><th class="dt-cell">Km</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="dt-cell">1</td><td class="dt-cell">Sarria &rarr; Portomarín</td><td class="dt-cell">22,2</td></tr>
+      <tr><td class="dt-cell">2</td><td class="dt-cell">Portomarín &rarr; Palas de Rei</td><td class="dt-cell">24,8</td></tr>
+      <tr><td class="dt-cell">3</td><td class="dt-cell">Palas de Rei &rarr; Arzúa</td><td class="dt-cell">28,5</td></tr>
+      <tr><td class="dt-cell">4</td><td class="dt-cell">Arzúa &rarr; Santiago</td><td class="dt-cell">39,3</td></tr>
+    </tbody>
+  </table>
+
   <div class="card photo-card">
     <img src="playground-assets/sample-photo.jpg" width="120">
     <div class="info">
@@ -117,18 +129,28 @@ $sampleHtml = <<<'HTML'
 HTML;
 
 $sampleCss = <<<'CSS'
+/* M6: :root custom properties — reused via var() below, resolved at compute time. */
+:root {
+  --brand: #163a6b;
+  --accent: #ffd500;
+  --stripe: rgba(22, 58, 107, .06);
+  --gap: 1rem;
+}
 body { font-size: 14px; color: #222222 }
-.header { background-color: #163a6b; color: white; padding: 12px; font-size: 16px }
+.header { background-color: var(--brand); color: white; padding: calc(var(--gap) * .75); font-size: 16px }
 h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .meta { color: #666666; margin: 0 0 12px 0 }
-.price { background-color: #ffd500; padding: 14px; font-size: 20px; margin: 0 0 14px 0 }
-.band { background-color: #ffd500; padding: 10px; font-size: 18px; margin: 0 0 10px 0 }
+.price { background-color: var(--accent); padding: 14px; font-size: 20px; margin: 0 0 14px 0 }
+.band { background-color: var(--accent); padding: 10px; font-size: 18px; margin: 0 0 10px 0 }
 .card { background-color: #f4f4f4; padding: 12px; margin: 0 0 10px 0 }
 .photo-card { display: flex; gap: 12px }
 .info { flex: 1 }
 .day { margin: 0 0 4px 0; font-size: 16px }
 .data-table { border: 1px solid #999999; border-spacing: 2px; margin: 0 0 6px 0; font-size: 12px; color: #555555 }
 .dt-cell { border: 1px solid #cccccc; padding: 3px 6px }
+/* M6: a striped table — nth-child(odd) painting an rgba() accent behind alternating rows. */
+.summary { border: 1px solid #999999; border-spacing: 2px; margin: 0 0 14px 0; font-size: 12px; color: #555555; width: 100% }
+.summary tbody tr:nth-child(odd) { background-color: var(--stripe) }
 .price { text-align: right }
 p { line-height: 1.45 }
 @page {
