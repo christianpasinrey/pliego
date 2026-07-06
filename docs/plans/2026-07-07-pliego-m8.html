@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M8 — pliego: visual</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M8 «visual»</h1>
+<p class="meta">2026-07-07 · Previos: M0-M7 ✅ (main, CI verde, 916 tests; componentes Bootstrap renderizan) · Ejecución: subagent-driven · Objetivo: que se VEA como el navegador — radius, sombras, gradientes, dash, tipografía fina, background-image, @font-face.</p>
+
+<div class="task">
+  <strong>Goal:</strong> el acabado visual: (1) <code>border-radius</code> con paths de Bézier (k=0.5522847498) en fondos/bordes y clip redondeado cuando overflow:hidden; (2) <code>linear-gradient</code>/<code>radial-gradient</code> como shadings NATIVOS de PDF (axial /ShadingType 2, radial /ShadingType 3 — sin rasterizar); (3) <code>box-shadow</code> aproximada (offset+alpha; blur como capas concéntricas de alpha decreciente, N=4, documentado — PDF no tiene blur); (4) bordes <code>dashed/dotted</code> (patrones d de PDF); (5) tipografía fina: <code>letter-spacing</code>/<code>word-spacing</code> (afectan MEDICIÓN y render — Tc/Tw del PDF o advances por glifo), <code>text-transform</code> (upper/lower/capitalize en el box tree, antes de medir); (6) <code>background-image</code> url() con <code>background-size</code> cover/contain/auto y <code>no-repeat</code>/repeat básico; (7) <code>@font-face</code> (src local file → FontCatalog, font-weight/style descriptors).<br>
+  <strong>Riesgos:</strong> radius toca la geometría de pintado entera (bg, 4 bordes, clip) — T2 es la tarea grande; letter-spacing toca la MEDICIÓN (TextMeasurer + BreakFinder interacción) — cuidado con goldens.
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M7 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, trailer, TDD 4-gates, baselines tests-only, specs: css-backgrounds-3 §4/§5/§6, css-images-3 §3.1, css-text-3 §8, css-fonts-4 §4).</li>
+  <li>Lecciones del ledger completas. TODO lo excluido avisa.</li>
+  <li>916 tests + goldens M1-M7 intactos salvo actualizaciones autorizadas por tarea.</li>
+  <li>Excluidos M8 con warning: border-image, inset shadows (→warning, no silencio), conic-gradient, multiple backgrounds (primera capa se usa + warning), background-attachment, text-shadow (M9 quizá), font-variant, unicode-range en @font-face (cargar entera + warning).</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Css values
+final readonly class BorderRadius { LengthPercentage $tl,$tr,$br,$bl; }  // 1 radio por esquina M8 (elípticos '/'→warning)
+final readonly class Gradient { GradientKind $kind; float $angleDeg|center; /** @var list&lt;GradientStop&gt; */ array $stops; }
+final readonly class GradientStop { Color $color; ?float $positionPct; }
+final readonly class BoxShadow { float $offsetX,$offsetY,$blurRadius; Color $color; }  // spread→warning M8
+final readonly class FontFaceRule { string $family; string $srcPath; int $weight; bool $italic; }
+// ComputedStyle += BorderRadius $borderRadius; ?Gradient $backgroundGradient; ?BoxShadow $boxShadow;
+//   float $letterSpacingPx; float $wordSpacingPx; TextTransform $textTransform (hereda);
+//   ?string $backgroundImage (ruta resuelta); BackgroundSize $backgroundSize; bool $backgroundRepeat
+
+// Paint/Pdf
+// BoxFragment += BorderRadius (VO fluye); Canvas += fillRoundedRect/strokePath/fillGradient(rect, Gradient)/
+//   setDash(pattern)/drawImageTiled; PdfCanvas: paths Bézier, /Pattern+/Shading resources, d patterns.
+// TextMeasurer/BreakFinder: letter/word-spacing entran en widthOf (por run style) — goldens sin spacing INTACTOS.
+// FontCatalog: register desde FontFaceRule (Engine wirea las @font-face parseadas; basePath para src relativos).</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M7"] --> T2["T2 border-radius:<br/>paths + clip redondeado"]
+  T1 --> T3["T3 gradientes nativos<br/>PDF shadings"]
+  T2 --> T4["T4 box-shadow aprox<br/>+ dashed/dotted"]
+  T3 --> T5["T5 letter/word-spacing<br/>+ text-transform"]
+  T5 --> T6["T6 background-image<br/>size/repeat"]
+  T2 --> T7["T7 @font-face"]
+  T4 --> T8["T8 E2E Bootstrap look final<br/>+ goldens + README + playground"]
+  T6 --> T8
+  T7 --> T8
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M8-T1 — Housekeeping M7</h3>
+<p>(1) Warnings restantes clase-D: float/absolute sobre inline-block; position sobre table (addWarningOnce). (2) FragmentDumper += clipsChildren (aditivo, goldens regenerados solo-adiciones). (3) Nota tabla-junto-a-float en README (overlap documentado). (4) Comentario stale LENGTH_PROPERTIES + anotación border-radius↔clip en el clip actual (preparando T2). (5) Perf: bucketing de allRules por tag del compound derecho (UA 24 reglas/elemento medido +35% — objetivo recuperar la mitad; bench antes/después honesto). Commit: <code>chore: apply M7 final-review housekeeping</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T2 — border-radius: paths Bézier y clip redondeado</h3>
+<p>css-backgrounds-3 §5 reducido: shorthand border-radius 1-4 valores (por esquina; elípticos con '/' → warning), % contra el LADO correspondiente... adjudicado M8: % → contra width del border box (documented). Clamp de solapes (§5.5: si suma de radios > lado, escalar proporcionalmente). Pintado: fondo como path redondeado (4 líneas + 4 curvas Bézier k=0.5522847498) con f; bordes: path anular (outer redondeado − inner redondeado con radios reducidos por el ancho de borde) con f* (even-odd) para bordes uniformes; bordes de anchos DISTINTOS con radius → aproximación de 4 segmentos con solapes actuales + warning "mixed border widths with radius approximated" (documented). Clip de overflow:hidden con radius → path redondeado W n. Canvas += fillRoundedRect(rect, radii, color)/clipRoundedRect; PdfCanvas: operadores c (curvas). InlineBoxFragment también gana radius (los .btn lo llevan — slices: esquinas solo en first/last slice, misma lógica que bordes laterales). Tests: bytes de curvas (4 ops c por esquina redondeada), clamp proporcional hand-computed, radius+clip, .btn con radius en slices. Ghostscript E2E. Commit: <code>feat(paint): border-radius with bezier paths and rounded clipping</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T3 — Gradientes nativos PDF</h3>
+<p>css-images-3 §3.1 reducido: linear-gradient(ángulo|to side, stops con % o sin posición → distribuidos uniformes) y radial-gradient(circle at center, stops) — formas complejas (ellipse sized, at posición) → warning + primera aproximación circle-center. PDF: /ShadingType 2 (axial: coords del vector según ángulo dentro del rect del fondo) y 3 (radial), función /FunctionType 2 (exponencial entre 2 stops) o /FunctionType 3 (stitching para N stops); pintado con sh dentro de q/clip-rect/Q (el shading llena el clip). Registro en pageResources /Shading, dedup por firma. background: linear-gradient(...) entra por DeclarationParser (background shorthand: color O gradiente O imagen — detectar). Alpha en stops → warning M8 (shadings con alpha requieren soft masks — M9). Tests: bytes (sh op, /ShadingType, /Coords según ángulo hand-computed para 0/90/45deg, /Function stops), dedup, Ghostscript. Commit: <code>feat(paint): native pdf gradient shadings</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T4 — box-shadow aproximada + bordes dashed/dotted</h3>
+<p><strong>box-shadow</strong> (sin inset M8 → warning): offset-x/y, blur, color. Render ANTES del fondo del elemento (debajo): blur=0 → un rect (redondeado si radius) con el color+alpha; blur>0 → 4 capas concéntricas expandidas blur/4 cada una con alpha total/4 (aproximación documentada RUIDOSAMENTE — no es blur gaussiano; visualmente aceptable a blurs típicos ≤10px). spread → warning. <strong>dashed/dotted</strong>: BorderStyle += Dashed, Dotted; pintado de bordes con STROKE (no fill): línea central del borde con w=width y patrón d [3w w] dashed / [0 2w] dotted con caps redondos (J 1) para dotted; esquinas: segmentos rectos M8 (radius+dash → warning combinación). Tests: bytes (capas de sombra con alphas correctos, d patterns exactos, J 1 en dotted), orden sombra→fondo, Ghostscript. Commit: <code>feat(paint): approximated box shadows and dashed borders</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T5 — letter/word-spacing + text-transform</h3>
+<p>css-text-3 §8: letter-spacing px (normal=0; heredan ambas), word-spacing px (aditivo al espacio). MEDICIÓN: TextMeasurer::widthOf += spacing del estilo del run (letterSpacing×(chars−1)... spec: tras CADA char incluido el último? navegadores: tras cada char — seguir navegadores, documented) — CUIDADO: BreakFinder no cambia (offsets de byte), pero los anchos de segmento sí; goldens sin spacing DEBEN quedar byte-idénticos (spacing=0 → fast path aritmético). RENDER: PDF Tc (char spacing) y Tw (word spacing — solo aplica al byte 32 en fuentes simples; con CID/Identity-H Tw NO funciona sobre <hex> — adjudicado: implementar spacing por AJUSTE DE ADVANCES en el array TJ [(glyph) adj (glyph) adj] — más control y funciona con CID; PdfCanvas emite TJ con ajustes en milésimas). <strong>text-transform</strong> (hereda): uppercase/lowercase/capitalize aplicado al TEXTO de los runs en BoxTreeBuilder (antes de medir; mb_convert_case; capitalize = primera letra de cada palabra). Tests: anchos hand-computed con spacing; TJ bytes con ajustes exactos; transform con acentos (Á); goldens intactos sin spacing. Commit: <code>feat(text): letter and word spacing with text transforms</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T6 — background-image</h3>
+<p>css-backgrounds-3 §4 reducido: background-image:url(...) (ruta vía basePath como <img>, fallos suaves con warning), background-size auto|cover|contain (dimensiones concretas → warning M8), background-repeat no-repeat|repeat (repeat = tiling con drawImage múltiple dentro del clip del border box; repeat-x/y → warning), background-position center|top-left default top-left (resto → warning). background shorthand: detectar color/gradiente/url. Pintado: dentro de clip del border box (radius-aware si T2), tras el color y bajo el borde. cover/contain: aritmética de ratios hand-computed. Tests: cover recorta correcto (clip + escala), contain letterboxea, tiling n×m, bytes. Commit: <code>feat(paint): background images with cover, contain and tiling</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T7 — @font-face</h3>
+<p>css-fonts-4 §4 reducido: @font-face { font-family; src: url(...ttf) — solo TTF/OTF local M8 (woff/woff2 → warning "convert to ttf"; remote → warning); font-weight (400/700/rangos→primer valor+warning); font-style }. Parse en StylesheetParser (bloque at-rule como @page — reutilizar el extractor); ParseResult += list<FontFaceRule>; Engine registra en FontCatalog (basePath para rutas relativas; fichero ausente → warning + familia no registrada → fallback normal). El fallback list de familias (M7) resuelve la familia custom. Tests: @font-face con DejaVuSerif como "MiSerif" → face servida; weight/style variants; missing file warning; woff warning. Commit: <code>feat(fonts): font-face rules loading local truetype files</code></p>
+</div>
+
+<div class="task">
+<h3>M8-T8 — E2E Bootstrap look final, goldens, README, playground</h3>
+<p>E2E "bootstrap look": .card con radius+shadow, .btn con radius+gradiente, badge redondeado, tabla con bordes dashed en un caso, texto con letter-spacing en headings (patrón Bootstrap .display-*), background-image cover en un hero, @font-face custom → 0 warnings (o los exactos por diseño), Ghostscript, FragmentDumper. Goldens: radius, gradiente (bytes de shading firmados... goldens son de fragments — el gradiente va en golden de PDF-bytes específico), sombra. README M8 (todo + aproximaciones RUIDOSAS: blur por capas, radius+mixed-widths, radial simplificado). Playground: el .btn gana radius+sombra y el header un gradiente — el look final. Commit: <code>test: bootstrap look e2e; README and playground for M8</code></p>
+</div>
+
+</body>
+</html>
