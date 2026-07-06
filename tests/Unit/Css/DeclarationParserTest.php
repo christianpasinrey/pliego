@@ -864,3 +864,69 @@ it('warns and drops the whole list-style shorthand on a list-style-image value (
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M7-T5 (CSS 2.2 §10.4/§10.7): min-width/max-width/min-height/max-height + overflow ---------
+
+it('parses min-width/max-width as length-percentage, same as width', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('min-width', '50px'))->toEqual(['min-width' => LengthPercentage::px(50.0)]);
+    expect($parser->parse('max-width', '80%'))->toEqual(['max-width' => LengthPercentage::percent(80.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses min-height/max-height as PX-ONLY lengths (no percentage, unlike min/max-width)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('min-height', '30px'))->toEqual(['min-height' => Length::px(30.0)]);
+    expect($parser->parse('max-height', '200px'))->toEqual(['max-height' => Length::px(200.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a percentage min-height/max-height with a warning (containing height not tracked)', function () {
+    foreach (['min-height', 'max-height'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '50%');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects negative min-width/max-width/min-height/max-height with a warning', function () {
+    foreach (['min-width', 'max-width', 'min-height', 'max-height'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '-5px');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('silently drops "min-width/min-height: auto" and "max-width/max-height: none" (both collapse to the initial no-constraint value)', function () {
+    foreach (['min-width' => 'auto', 'min-height' => 'auto', 'max-width' => 'none', 'max-height' => 'none'] as $property => $keyword) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, $keyword);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->toBeEmpty();
+    }
+});
+
+it('parses overflow: visible/hidden as-is', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('overflow', 'visible'))->toBe(['overflow' => 'visible']);
+    expect($parser->parse('overflow', 'hidden'))->toBe(['overflow' => 'hidden']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('coerces overflow: scroll/auto to hidden with a warning (no real scrolling in a print engine)', function () {
+    foreach (['scroll', 'auto'] as $keyword) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('overflow', $keyword);
+        expect($result)->toBe(['overflow' => 'hidden']);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects an unsupported overflow keyword with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('overflow', 'clip');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

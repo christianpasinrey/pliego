@@ -20,12 +20,21 @@ final class DeclarationParser
      * parseLength() ya rechaza % de forma natural, generando el warning). font-size vive aparte
      * (ver parseFontSize, M6-T3): SÍ admite % (contra el font-size del padre), así que no puede
      * compartir esta lista de "solo longitud pura, nunca %". */
-    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap'];
-    /** CSS 2.2 §10: width, margin-{side} y padding-{side} sí admiten %, resuelto en used-value (T4). */
+    /** M7-T5: min-height/max-height se unen aquí (igual criterio que height, ver su docblock: sin
+     * containing height rastreada, % no tiene interpretación válida — parseLength() ya lo rechaza
+     * de forma natural, produciendo el warning genérico "Unsupported length for min-height/
+     * max-height: 50%" documentado en el brief). */
+    private const array LENGTH_PROPERTIES = ['height', 'row-gap', 'column-gap', 'min-height', 'max-height'];
+    /** CSS 2.2 §10: width, margin-{side} y padding-{side} sí admiten %, resuelto en used-value (T4).
+     * M7-T5 (CSS 2.2 §10.4): min-width/max-width comparten el MISMO tratamiento que width — %
+     * resuelto contra el ancho del containing block en Layout (ComputedStyle::compute() los deja
+     * en LengthPercentage sin resolver, igual que width/margin/padding). min-height/max-height NO
+     * están aquí (ver LENGTH_PROPERTIES, px-only — el motor no rastrea la altura del containing
+     * block, ver el docblock de ComputedStyle::$height/$minHeight/$maxHeight). */
     private const array LENGTH_PERCENTAGE_PROPERTIES = [
         'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
-        'width',
+        'width', 'min-width', 'max-width',
     ];
     /**
      * CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos en LENGTH_PERCENTAGE_PROPERTIES;
@@ -49,6 +58,9 @@ final class DeclarationParser
         'height', 'row-gap', 'column-gap',
         'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
         'border-spacing', 'flex-basis',
+        // M7-T5 (CSS 2.2 §10.4/§10.7): negativo no tiene interpretación válida para ninguna de las
+        // 4 -- mismo criterio de signo que width/height, reutilizando la guarda existente.
+        'min-width', 'max-width', 'min-height', 'max-height',
     ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
@@ -115,6 +127,19 @@ final class DeclarationParser
     {
         $property = strtolower(trim($property));
         $value = trim($value);
+        // M7-T5 (CSS 2.2 §10.4): 'auto' es el initial value real de min-width/min-height ("sin
+        // mínimo"), 'none' el de max-width/max-height ("sin máximo") -- ambos colapsan al MISMO
+        // null que "propiedad no declarada en absoluto" en ComputedStyle::compute() (ver
+        // $lengthPercentage()/$length() ahí: ausencia de clave => null), así que aceptarlos aquí
+        // como "sin declaración" (array vacío, sin warning) es observacionalmente idéntico a
+        // rechazarlos con éxito -- pero SIN el warning espurio que produciría intentar parsearlos
+        // como longitud (spec keywords válidos, no un error de autor).
+        if (($property === 'min-width' || $property === 'min-height') && strtolower(trim($value)) === 'auto') {
+            return [];
+        }
+        if (($property === 'max-width' || $property === 'max-height') && strtolower(trim($value)) === 'none') {
+            return [];
+        }
         if ($property === 'margin' || $property === 'padding') {
             return $this->expandBoxShorthand($property, $value);
         }
@@ -218,6 +243,9 @@ final class DeclarationParser
         }
         if ($property === 'opacity') {
             return $this->parseOpacity($value);
+        }
+        if ($property === 'overflow') {
+            return $this->parseOverflow($value);
         }
         return $this->warn("Unsupported property: $property");
     }
@@ -810,6 +838,30 @@ final class DeclarationParser
             return $this->warn("Unsupported opacity: $value");
         }
         return ['opacity' => max(0.0, min(1.0, (float) $trimmed))];
+    }
+
+    /**
+     * M7-T5 (css-overflow-3, reducido a visible|hidden): 'visible' (initial) y 'hidden' se aceptan
+     * tal cual. 'scroll'/'auto' no tienen un análogo real en un motor de impresión sin scrollbars
+     * interactivas -- se COERCIONAN a 'hidden' (el comportamiento observable más cercano: el
+     * contenido que desborda deja de pintarse, aunque un navegador SÍ ofrecería una barra de
+     * desplazamiento) con un warning explícito, siguiendo la disciplina "todo lo excluido avisa"
+     * del milestone. Cualquier otro valor (p.ej. 'clip', fuera de alcance) cae al warning genérico
+     * + valor descartado (initial 'visible' en ComputedStyle::compute()).
+     *
+     * @return array<string, mixed>
+     */
+    private function parseOverflow(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        if ($keyword === 'visible' || $keyword === 'hidden') {
+            return ['overflow' => $keyword];
+        }
+        if ($keyword === 'scroll' || $keyword === 'auto') {
+            $this->warnings[] = "Unsupported overflow (approximated as hidden, no real scrolling in a print engine): $value";
+            return ['overflow' => 'hidden'];
+        }
+        return $this->warn("Unsupported overflow: $value");
     }
 
     /** @return array<string, mixed> */

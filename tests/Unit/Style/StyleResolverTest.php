@@ -1096,3 +1096,61 @@ it('defaults the root (documentElement) list-style-type to the spec initial valu
     assert($p !== null);
     expect($map->get($p)->listStyleType)->toBe(ListStyleType::Disc);
 });
+
+// --- M7-T5 (CSS 2.2 §10.4/§10.7): min/max-width/height + overflow ------------------------------
+
+it('defaults minWidth/maxWidth/minHeight/maxHeight to null and overflow to visible when undeclared', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->minWidth)->toBeNull();
+    expect($style->maxWidth)->toBeNull();
+    expect($style->minHeight)->toBeNull();
+    expect($style->maxHeight)->toBeNull();
+    expect($style->overflow)->toBe('visible');
+});
+
+it('computes minWidth/maxWidth as LengthPercentage and minHeight/maxHeight as px-only Length', function () {
+    [$doc, $map] = resolveDoc(
+        'p { min-width: 50px; max-width: 80%; min-height: 30px; max-height: 200px }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->minWidth?->resolve(400.0))->toBe(50.0);
+    expect($style->maxWidth?->resolve(400.0))->toBe(320.0); // 80% of 400
+    expect($style->minHeight?->px)->toBe(30.0);
+    expect($style->maxHeight?->px)->toBe(200.0);
+});
+
+it('does not inherit minWidth/maxWidth/minHeight/maxHeight/overflow down the tree', function () {
+    [$doc, $map] = resolveDoc(
+        'div { min-width: 50px; max-width: 200px; min-height: 10px; max-height: 300px; overflow: hidden }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->minWidth)->toBeNull();
+    expect($style->maxWidth)->toBeNull();
+    expect($style->minHeight)->toBeNull();
+    expect($style->maxHeight)->toBeNull();
+    expect($style->overflow)->toBe('visible');
+});
+
+it('computes overflow: hidden', function () {
+    [$doc, $map] = resolveDoc('div { overflow: hidden }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->overflow)->toBe('hidden');
+});
+
+it('coerces overflow: scroll/auto to hidden end to end, with a warning surfaced through the WarningCollector', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('div { overflow: scroll }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->overflow)->toBe('hidden');
+    expect($warnings)->not->toBeEmpty();
+});

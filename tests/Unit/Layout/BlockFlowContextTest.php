@@ -381,6 +381,44 @@ it('a CSS % height is unsupported (rejected by the parser) and falls back to aut
     expect($content->rect->height)->toBe(30.0); // derived from width via ratio, height:50% ignored
 });
 
+// --- M7-T5 (CSS 2.2 §10.4 table, simplified): min/max-width on a replaced element (<img>) -------
+
+it('min-width beats a smaller declared width on an image, rederiving height by the intrinsic ratio (height was auto)', function () {
+    // tiny.jpg is 4x3 intrinsic (ratio height/width = 0.75) -- width clamped 40 -> 100 (min-width
+    // wins), height was never declared (auto) so it re-derives from the CLAMPED width: 100*0.75=75.
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', 'img { width: 40px; min-width: 100px }', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(100.0);
+    expect($content->rect->height)->toBe(75.0);
+});
+
+it('max-width clamps a larger declared width on an image, rederiving height by the intrinsic ratio', function () {
+    $frag = layoutImageHtml('<body><img src="tiny.jpg"></body>', 'img { width: 500px; max-width: 100px }', 500.0);
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(100.0);
+    expect($content->rect->height)->toBe(75.0);
+});
+
+it('does NOT rederive height when height was explicitly declared (only auto height re-derives, per the simplified table)', function () {
+    $frag = layoutImageHtml(
+        '<body><img src="tiny.jpg"></body>',
+        'img { width: 40px; height: 50px; min-width: 100px }',
+        500.0,
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->width)->toBe(100.0); // clamped
+    expect($content->rect->height)->toBe(50.0); // untouched: height was explicit, not auto
+});
+
 it('applies margin/border/padding to the image using the normal box model', function () {
     $frag = layoutImageHtml(
         '<body><img src="tiny.jpg" width="40" height="30"></body>',
@@ -1036,4 +1074,120 @@ it('M7-T4 fix: an empty inline box ALONE on a line (no other text/atomic content
     // font-size (1.2x convention, ver TextMeasurer::lineHeight()) is the ONLY thing giving this
     // line a height (documented fallback, ver InlineFlowContext::closeLine()).
     expect($box->rect->height)->toEqualWithDelta(48.0, 0.001);
+});
+
+// --- M7-T5 (CSS 2.2 §10.4): min/max-width/height clamp on a normal block -----------------------
+
+it('min-width beats a smaller declared width', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 100px; min-width: 200px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(200.0);
+});
+
+it('max-width clamps an auto (fill-available) width', function () {
+    // containingWidth 500 (layoutHtml default) -- width:auto would otherwise fill it entirely.
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { max-width: 150px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(150.0);
+});
+
+it('min-width wins over max-width when min > max (per the CSS 2.2 §10.4 algorithm text)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { min-width: 300px; max-width: 100px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(300.0);
+});
+
+it('resolves a percentage max-width against the containing block width', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { max-width: 50% }', 400.0);
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(200.0);
+});
+
+it('min-width in border-box sizing subtracts the box\'s own padding+border before comparing to content width', function () {
+    // box-sizing:border-box: width declared 60px -> content 40 (minus 2x10 padding); min-width
+    // 100px -> content-space equivalent 80 (minus 2x10 padding) -- content clamped up to 80,
+    // final border-box = 80+20 = 100.
+    $frag = layoutHtml(
+        '<body><div>x</div></body>',
+        'div { width: 60px; min-width: 100px; padding: 0 10px; box-sizing: border-box }',
+    );
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->width)->toBe(100.0);
+});
+
+it('min-height grows the box past its natural content height (content stays anchored at the top, background covers the extra space)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { min-height: 100px; background-color: #ff0000 }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(100.0);
+    expect($div->background)->not->toBeNull();
+    // Content (the single text line) stays at the natural top position -- unaffected by the
+    // box growing underneath it.
+    $line = textFragments($div)[0];
+    expect($line->rect->y)->toBe($div->rect->y);
+});
+
+it('max-height with overflow:visible (default) clamps the BOX height but leaves the overflowing content fragment untouched (no clip)', function () {
+    $frag = layoutHtml(
+        '<body><div>uno dos tres cuatro cinco seis siete ocho nueve diez</div></body>',
+        'div { max-height: 10px; width: 60px }',
+    );
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(10.0);
+    expect($div->clipsChildren)->toBeFalse();
+    // Natural content (several wrapped lines) is taller than the clamped box -- overflow visible,
+    // documented: the lines are still there, just extending past the box's own bottom edge.
+    $lines = textFragments($div);
+    expect(count($lines))->toBeGreaterThan(1);
+    expect($lines[count($lines) - 1]->rect->bottom())->toBeGreaterThan($div->rect->bottom());
+});
+
+it('overflow:hidden sets clipsChildren on the BoxFragment regardless of max-height', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { overflow: hidden }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->clipsChildren)->toBeTrue();
+});
+
+// --- M7-T5: min/max-width integrated into inline-block shrink-to-fit --------------------------
+
+it('min-width floors an inline-block\'s shrink-to-fit width (min(max(minW, fit), maxW))', function () {
+    $frag = layoutHtml(
+        '<body><p><a class="tag">x</a></p></body>',
+        '.tag { display: inline-block; min-width: 150px; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+    $tag = null;
+    foreach ($p->children as $child) {
+        if ($child instanceof BoxFragment) {
+            $tag = $child;
+        }
+    }
+    assert($tag instanceof BoxFragment);
+    // Shrink-to-fit (a single "x" glyph) would be far narrower than 150px -- min-width floors it.
+    expect($tag->rect->width)->toBe(150.0);
+});
+
+it('max-width caps an inline-block\'s declared width', function () {
+    $frag = layoutHtml(
+        '<body><p><a class="tag">x</a></p></body>',
+        '.tag { display: inline-block; width: 300px; max-width: 100px; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+    $tag = null;
+    foreach ($p->children as $child) {
+        if ($child instanceof BoxFragment) {
+            $tag = $child;
+        }
+    }
+    assert($tag instanceof BoxFragment);
+    expect($tag->rect->width)->toBe(100.0);
 });

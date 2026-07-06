@@ -121,6 +121,25 @@ final readonly class ComputedStyle
         // arriba, y de la mayoría de propiedades de este constructor) — ver ListStyleType para el
         // razonamiento completo y el initial value real ('disc').
         public ListStyleType $listStyleType,
+        // M7-T5 (CSS 2.2 §10.4): min-width/max-width comparten el mismo tipo y la misma
+        // resolución diferida a Layout que width (% contra el ancho del containing block, ver
+        // BlockFlowContext::layout()) -- ninguna de las 2 hereda (igual que width). null = "sin
+        // mínimo/máximo" (initial value real: 'auto'/'none' respectivamente, ver
+        // DeclarationParser -- ambos colapsan al mismo null que "propiedad no declarada").
+        public ?LengthPercentage $minWidth,
+        public ?LengthPercentage $maxWidth,
+        // M7-T5 (CSS 2.2 §10.7): a diferencia de min/max-width, min-height/max-height son PX-ONLY
+        // -- este motor no rastrea la altura del containing block (mismo gap documentado que
+        // $height arriba), así que un % en estas 2 propiedades se rechaza YA en
+        // DeclarationParser (warning + valor descartado) y nunca llega aquí. NO heredan.
+        public ?Length $minHeight,
+        public ?Length $maxHeight,
+        // M7-T5 (css-overflow-3, reducido a visible|hidden): NO hereda -- cada elemento parte
+        // SIEMPRE del initial value 'visible' cuando no hay declaración propia, nunca de
+        // $parent->overflow (mismo patrón que box-sizing/opacity). 'scroll'/'auto' ya llegan
+        // coercionados a 'hidden' desde DeclarationParser (con warning) -- esta propiedad solo ve
+        // 'visible'|'hidden'.
+        public string $overflow,
         // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
         // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
         // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
@@ -237,6 +256,13 @@ final readonly class ComputedStyle
             // css-lists-3 §3: initial value real de list-style-type es 'disc' — ver docblock del
             // nuevo parámetro del constructor.
             ListStyleType::Disc,
+            // M7-T5: sin min/max-width/height (null = sin mínimo/máximo) ni overflow declarado
+            // (initial value real 'visible') en la raíz.
+            null,
+            null,
+            null,
+            null,
+            'visible',
         );
     }
 
@@ -610,6 +636,22 @@ final readonly class ComputedStyle
             default => $parent->listStyleType,
         };
 
+        // M7-T5 (CSS 2.2 §10.4): min-width/max-width, igual criterio que width (arriba) --
+        // LengthPercentage sin resolver (% diferido a Layout), null cuando no hay declaración
+        // (initial 'auto'/'none', ver DeclarationParser). NO heredan (nunca $parent->minWidth).
+        $minWidth = $hasLengthPercentage('min-width') ? $lengthPercentage('min-width') : null;
+        $maxWidth = $hasLengthPercentage('max-width') ? $lengthPercentage('max-width') : null;
+        // M7-T5 (CSS 2.2 §10.7): min-height/max-height, px-only (igual criterio que $height
+        // arriba) -- $length() ya devuelve null cuando no hay declaración.
+        $minHeight = $length('min-height');
+        $maxHeight = $length('max-height');
+
+        // M7-T5 (css-overflow-3): NO hereda -- initial 'visible' siempre que no haya declaración
+        // propia, nunca $parent->overflow. DeclarationParser ya solo produce 'visible'|'hidden'
+        // aquí (scroll/auto coercionados con warning antes de llegar).
+        $overflowValue = $declarations['overflow'] ?? null;
+        $overflow = $overflowValue === 'hidden' ? 'hidden' : 'visible';
+
         // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
         // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
         // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
@@ -672,6 +714,11 @@ final readonly class ComputedStyle
             $tableLayout,
             $verticalAlign,
             $listStyleType,
+            $minWidth,
+            $maxWidth,
+            $minHeight,
+            $maxHeight,
+            $overflow,
             $opacity,
             $customProperties,
         );

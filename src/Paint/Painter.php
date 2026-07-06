@@ -53,8 +53,22 @@ final readonly class Painter
                 $canvas->fillRect($fragment->rect, $fragment->background->withOpacity($fragment->opacity));
             }
             $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $canvas);
-            foreach ($fragment->children as $child) {
-                $this->paintFragment($child, $canvas);
+            // M7-T5 (css-overflow-3): $clipsChildren envuelve SOLO a los descendientes en un
+            // scope de recorte PDF (Canvas::clipRect()/restoreClip()) al rect BORDER-BOX de ESTA
+            // caja — el fondo/borde propios, ya pintados arriba, no lo necesitan (coinciden
+            // exactamente con ese rect). Paginator::flatten() garantiza que una caja clipsChildren
+            // NUNCA llega aquí descompuesta (mismo camino que $atomic, ver su docblock), así que
+            // el subárbol completo bajo el clip siempre está intacto.
+            if ($fragment->clipsChildren) {
+                $canvas->clipRect($fragment->rect);
+                foreach ($fragment->children as $child) {
+                    $this->paintFragment($child, $canvas);
+                }
+                $canvas->restoreClip();
+            } else {
+                foreach ($fragment->children as $child) {
+                    $this->paintFragment($child, $canvas);
+                }
             }
         } elseif ($fragment instanceof InlineBoxFragment) {
             // M7-T4: misma orden de pintado que un BoxFragment (fondo, luego bordes) — sin hijos

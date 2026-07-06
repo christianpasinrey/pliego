@@ -69,6 +69,34 @@ final class PdfCanvas implements Canvas
         $this->emitWithAlpha($color->alpha, $body);
     }
 
+    /**
+     * M7-T5 (ISO 32000-1 §8.5.4, "Clipping Path Operators"): `q` abre un scope propio (recortes
+     * PDF son parte del graphics state, revertidos por el `Q` de restoreClip() -- nunca deben
+     * "escaparse" al resto de la página), luego el rect en pt (misma transformación px CSS -> pt
+     * PDF que fillRect: flip de Y + offsetX/offsetY + escala 0.75) se añade al path actual con
+     * `re`, y `W n` lo fija como clipping path SIN pintarlo (`n` = "no-op paint", el operador de
+     * pintado nulo -- el propio rect nunca se ve, solo recorta lo que venga después dentro de este
+     * mismo scope).
+     */
+    public function clipRect(Rect $rect): void
+    {
+        $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+        $this->ops .= sprintf(
+            "q\n%.2F %.2F %.2F %.2F re W n\n",
+            $x,
+            $y,
+            $rect->width * self::PX_TO_PT,
+            $rect->height * self::PX_TO_PT,
+        );
+    }
+
+    /** Cierra el scope abierto por clipRect() -- ver su docblock. */
+    public function restoreClip(): void
+    {
+        $this->ops .= "Q\n";
+    }
+
     public function fillText(TextFragment $text): void
     {
         // M6-T5: fillText() recibe el TextFragment ENTERO (Painter no lo intercepta, ver su

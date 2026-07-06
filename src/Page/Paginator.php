@@ -51,11 +51,12 @@ final readonly class Paginator
                 $offset += $pushDown;
                 $top += $pushDown;
                 $leafPage++;
-            } elseif ($leaf instanceof BoxFragment && $leaf->atomic && $leaf->rect()->height > $h) {
+            } elseif ($leaf instanceof BoxFragment && ($leaf->atomic || $leaf->clipsChildren) && $leaf->rect()->height > $h) {
                 // M5-T1: la guarda de push-down de arriba nunca se activa para una hoja más alta
                 // que la propia página (misma limitación documentada, sin partir, que ya tenían
                 // texto/imágenes demasiado altos) — ahora, al menos para el caso atómico (M4-T5:
-                // contenedor flex entero), queda un aviso explícito en vez de quedar en silencio.
+                // contenedor flex entero) o clipping (M7-T5: overflow:hidden, misma ruta de
+                // flatten()), queda un aviso explícito en vez de quedar en silencio.
                 $this->warn('atomic fragment taller than page, kept unsplit');
             }
             while ($leafPage > $pageIndex) {
@@ -79,11 +80,18 @@ final readonly class Paginator
      * subárbol, ver relocate()); si es más alta que una página, se queda donde cae sin partirse
      * (misma limitación ya documentada para texto/imágenes demasiado altas, PERO desde M5-T1 con
      * un warning explícito para el caso atómico — ver paginate()).
+     *
+     * M7-T5 (css-overflow-3): un BoxFragment con $clipsChildren === true (overflow:hidden, ver
+     * BlockFlowContext::layout()) se trata IGUAL que $atomic aquí — reutiliza la misma ruta
+     * "composite preservado entero" en vez de introducir un tercer caso: si Paginator la
+     * descompusiera hoja a hoja (el camino normal de más abajo), el clip path que Painter aplica
+     * al pintar esta caja (ver su docblock) quedaría sin caja-contenedora a la que amarrarse — el
+     * rect que delimita el clip ES el rect de esta caja, que solo sobrevive intacto por esta rama.
      * @return \Generator<int, Fragment>
      */
     private function flatten(BoxFragment $box): \Generator
     {
-        if ($box->atomic) {
+        if ($box->atomic || $box->clipsChildren) {
             yield $box;
             return;
         }
@@ -128,6 +136,7 @@ final readonly class Paginator
                 $leaf->borders,
                 $leaf->atomic,
                 $leaf->opacity,
+                $leaf->clipsChildren,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se

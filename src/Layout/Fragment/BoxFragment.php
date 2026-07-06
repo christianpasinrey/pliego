@@ -25,6 +25,19 @@ final readonly class BoxFragment implements Fragment
      * de CSS/PDF — cada BoxFragment del subárbol trae su PROPIA opacity, resuelta de forma
      * independiente por ComputedStyle::compute() en su propio elemento).
      */
+    /**
+     * M7-T5 (css-overflow-3, css-box-3 §4): $clipsChildren marca esta caja como un clipping
+     * container (ComputedStyle::$overflow === 'hidden' en el elemento que la generó, ver
+     * BlockFlowContext::layout()) — Paint\Painter envuelve el pintado de TODOS sus descendientes
+     * en un clip path PDF (`q ... re W n ... Q`, ver PdfCanvas::clipRect()/restoreClip()) al rect
+     * BORDER-BOX de ESTA caja (el propio fondo/borde de la caja NO necesita clip: ya coincide
+     * exactamente con ese rect). Adjudicación del brief M7-T5: Paginator::flatten() trata
+     * $clipsChildren igual que $atomic (composite preservado entero, nunca descompuesto hoja a
+     * hoja) — sin esto, un push-down de página aplanaría los hijos de la caja por separado y el
+     * clip quedaría huérfano de la caja que lo aplica (ver Paginator::flatten()/paginate()).
+     * Ortogonal a $atomic: una caja puede ser clipsChildren sin ser un contenedor flex (el caso
+     * normal, un <div> con overflow:hidden), y viceversa.
+     */
     /** @param list<Fragment> $children */
     public function __construct(
         public Rect $rect,
@@ -33,6 +46,7 @@ final readonly class BoxFragment implements Fragment
         public BorderSet $borders,
         public bool $atomic = false,
         public float $opacity = 1.0,
+        public bool $clipsChildren = false,
     ) {}
 
     public function rect(): Rect

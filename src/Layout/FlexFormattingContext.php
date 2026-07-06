@@ -463,6 +463,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->borders,
             $fragment->atomic,
             $fragment->opacity,
+            $fragment->clipsChildren,
         );
     }
 
@@ -478,6 +479,35 @@ final readonly class FlexFormattingContext implements FormattingContext
      * un límite de la REDISTRIBUCIÓN, no del tamaño hipotético en sí.
      */
     private function hypotheticalMainSize(BlockBox|ImageBox $item, float $contentWidth): float
+    {
+        $style = $item->style;
+        $base = $this->hypotheticalMainSizeUnclamped($item, $contentWidth);
+        // M7-T5 (css-flexbox-1 §9.7 / §4.5): min/max-width del ITEM son límites del base size,
+        // igual criterio "min gana a max" que CSS 2.2 §10.4 -- aplicado aquí (una sola vez, antes
+        // de wrap/grow/shrink, ver hypotheticalMainSizesById()) en vez de en resolveMainSizes()
+        // porque el brief M7-T5 solo pide integrar el clamp en el BASE (§9.2), no reproducir la
+        // tabla completa de interacción min/max con grow/shrink resuelto (§9.7 congelamiento
+        // iterativo, ya simplificado a 2 pasadas por M4 -- ver el docblock de resolveMainSizes()).
+        // border-box uniforme (mismo criterio "adjudicación border-box main size" del docblock de
+        // clase): min/max-width se normalizan a border-box antes de comparar contra $base.
+        $paddingH = $style->paddingLeft->resolve($contentWidth) + $style->paddingRight->resolve($contentWidth);
+        $borderH = $style->borderLeft->widthPx + $style->borderRight->widthPx;
+        $toBorderBox = static fn(float $px): float => $style->boxSizing === 'border-box' ? $px : $px + $paddingH + $borderH;
+        $maxWidthPx = $style->maxWidth?->resolve($contentWidth);
+        if ($maxWidthPx !== null) {
+            $base = min($base, $toBorderBox($maxWidthPx));
+        }
+        $minWidthPx = $style->minWidth?->resolve($contentWidth);
+        if ($minWidthPx !== null) {
+            $base = max($base, $toBorderBox($minWidthPx));
+        }
+        return $base;
+    }
+
+    /** Cuerpo SIN clamp de hypotheticalMainSize() (§9.2, ver su docblock arriba) -- extraído para
+     * que el clamp de min/max-width (M7-T5) envuelva el resultado sin duplicar las 3 ramas
+     * flexBasis/width/max-content. */
+    private function hypotheticalMainSizeUnclamped(BlockBox|ImageBox $item, float $contentWidth): float
     {
         $style = $item->style;
         if ($style->flexBasis !== null) {

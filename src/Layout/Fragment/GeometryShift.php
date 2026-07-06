@@ -45,6 +45,7 @@ final class GeometryShift
             $fragment->borders,
             $fragment->atomic,
             $fragment->opacity,
+            $fragment->clipsChildren,
         );
     }
 

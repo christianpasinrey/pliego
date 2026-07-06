@@ -55,6 +55,16 @@ final class RecordingCanvas implements Canvas
     {
         $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey, $opacity);
     }
+
+    public function clipRect(Rect $rect): void
+    {
+        $this->calls[] = sprintf('clip(%.2F,%.2F,%.2F,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height);
+    }
+
+    public function restoreClip(): void
+    {
+        $this->calls[] = 'restoreClip()';
+    }
 }
 
 it('paints backgrounds and text in page order', function () {
@@ -394,6 +404,52 @@ it('paints only top/bottom borders for a non-extreme slice (lateral sides alread
         'rect(0.00,0.00,100.00,2.00,#000000)',  // top
         'rect(0.00,48.00,100.00,2.00,#000000)', // bottom
     ]);
+});
+
+// --- M7-T5 (css-overflow-3): overflow:hidden clipping -------------------------------------------
+
+it('wraps a clipsChildren BoxFragment\'s descendants in clipRect()/restoreClip(), around the OWN background/border unclipped', function () {
+    $canvas = new RecordingCanvas();
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$innerText], BorderSet::none(), clipsChildren: true);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)', // own background: NOT inside the clip scope
+        'clip(0.00,0.00,100.00,50.00)',         // clip scope opens at the box's OWN border-box rect
+        'text(Hi)',                             // child painted INSIDE the clip scope
+        'restoreClip()',                        // clip scope closes right after the last child
+    ]);
+});
+
+it('does not clip a BoxFragment whose clipsChildren is false (default), same as before this task', function () {
+    $canvas = new RecordingCanvas();
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$innerText], BorderSet::none());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)',
+        'text(Hi)',
+    ]);
+});
+
+it('clips a nested composite subtree (borders included) inside a single clip scope, closing it after ALL descendants', function () {
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $side = new BorderSide(1.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $inner = new BoxFragment(new Rect(0, 0, 40, 30), new Color(0, 0, 255), [$innerText], $borders);
+    $canvas = new RecordingCanvas();
+    $outer = new BoxFragment(new Rect(0, 0, 100, 50), null, [$inner], BorderSet::none(), clipsChildren: true);
+    $page = new Page(1, [$outer]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls[0])->toBe('clip(0.00,0.00,100.00,50.00)');
+    expect(end($canvas->calls))->toBe('restoreClip()');
+    // clip() + inner background + 4 inner border sides + inner text + restoreClip() = 8
+    expect($canvas->calls)->toHaveCount(8);
 });
 
 it('multiplies an InlineBoxFragment background/border alpha by its own opacity', function () {

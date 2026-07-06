@@ -61,6 +61,15 @@ use Pliego\Text\FontFace;
  * la wireó explícitamente (el caso normal: Engine construye `new BlockFlowContext(...)` a secas y
  * el primer <table> que encuentra dispara la autocreación).
  *
+ * M7-T5 breadcrumb para T6 (floats, CSS 2.2 §9.5/§9.4.3): overflow:hidden crea un nuevo block
+ * formatting context — relevante para floats porque un BFC nuevo NO deja que floats de fuera
+ * intersecten su content box (y, al revés, sus propios floats internos no se propagan al padre) —
+ * el clásico "clearfix vía overflow:hidden". Esta tarea (M7-T5) NO implementa floats todavía
+ * (T6), así que $clipsChildren (ver BoxFragment) hoy SOLO controla el clip de pintado — cuando T6
+ * añada FloatContext, revisar si un BlockBox con overflow:hidden debe arrancar su propio
+ * FloatContext aislado (bandas del padre invisibles dentro, bandas propias invisibles fuera) en
+ * vez de heredar/propagar el del padre.
+ *
  * M7-T3 (css-lists-3 §3, reducido): un hijo Display::ListItem (típicamente <li>, ver
  * Style\Display::ListItem) se layoutea como un BLOQUE NORMAL (misma rama de código que cualquier
  * otro hijo bloque, sin FormattingContext dedicado) MÁS un marcador sintético — ver
@@ -223,6 +232,27 @@ final class BlockFlowContext implements FormattingContext
                 $contentWidth = $declaredWidthPx;
                 $borderBoxWidth = $contentWidth + $paddingLeft + $paddingRight + $borderLeft + $borderRight;
             }
+
+            // M7-T5 (CSS 2.2 §10.4): clamp del ancho USADO -- max PRIMERO, min DESPUÉS (el propio
+            // texto del algoritmo del spec: si el min resultante excede el max, el min GANA). Se
+            // aplica solo en la rama SIN override (un item flex ya resuelve sus propios min/max
+            // en FlexFormattingContext::hypotheticalMainSize(), ver su docblock -- re-clampar aquí
+            // encima de un tamaño ya negociado por grow/shrink podría deshacer esa negociación).
+            // El clamp trabaja en CONTENT-space (self::toContentSpace() normaliza min/max-width
+            // igual que width: box-sizing:border-box les resta su propio padding+borde) para
+            // poder recomponer $borderBoxWidth con la MISMA fórmula que las 3 ramas de arriba --
+            // ANTES de layoutear a los hijos, porque el ancho clampeado es SU containing width.
+            $paddingH = $paddingLeft + $paddingRight;
+            $borderH = $borderLeft + $borderRight;
+            $maxWidthPx = $style->maxWidth?->resolve($cbWidth);
+            if ($maxWidthPx !== null) {
+                $contentWidth = min($contentWidth, self::toContentSpace($maxWidthPx, $style->boxSizing, $paddingH, $borderH));
+            }
+            $minWidthPx = $style->minWidth?->resolve($cbWidth);
+            if ($minWidthPx !== null) {
+                $contentWidth = max($contentWidth, self::toContentSpace($minWidthPx, $style->boxSizing, $paddingH, $borderH));
+            }
+            $borderBoxWidth = $contentWidth + $paddingH + $borderH;
         }
 
         $contentX = $x + $borderLeft + $paddingLeft;
@@ -365,14 +395,59 @@ final class BlockFlowContext implements FormattingContext
             }
         }
 
-        $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
+        // M7-T5 (CSS 2.2 §10.7): la altura de un bloque normal es SIEMPRE content-driven en este
+        // motor (no hay `height` declarado en bloques, ver docblock de $declaredHeightPx en
+        // resolveReplacedSize()/FlexFormattingContext -- una limitación preexistente, ajena a esta
+        // tarea) -- min-height/max-height son la ÚNICA forma de clamp de altura para un bloque.
+        // Mismo algoritmo max-primero-min-después que el ancho arriba, en CONTENT-space
+        // ($contentTop..$contentBottom, sin padding/borde). min-height > contentHeight natural =>
+        // el box CRECE (el contenido queda anclado arriba, sin recolocarse — el fondo/borde
+        // cubren el hueco extra por debajo, "floor" documentado en el brief); max-height <
+        // contentHeight natural encoge el BOX (no el contenido: los hijos ya layouteados NO se
+        // recolocan/recortan aquí) -- overflow:visible deja that contenido pintar más allá del
+        // borde inferior (documentado, sin clipping); overflow:hidden activa $clipsChildren más
+        // abajo, que es quien realmente oculta ese exceso en el momento de pintar (Paint\Painter).
+        $contentHeight = $contentBottom - $contentTop;
+        $paddingV = $paddingTop + $paddingBottom;
+        $borderV = $borderTop + $borderBottom;
+        $maxHeightPx = $style->maxHeight?->px;
+        if ($maxHeightPx !== null) {
+            $contentHeight = min($contentHeight, self::toContentSpace($maxHeightPx, $style->boxSizing, $paddingV, $borderV));
+        }
+        $minHeightPx = $style->minHeight?->px;
+        if ($minHeightPx !== null) {
+            $contentHeight = max($contentHeight, self::toContentSpace($minHeightPx, $style->boxSizing, $paddingV, $borderV));
+        }
+        $height = $borderTop + $paddingTop + $contentHeight + $paddingBottom + $borderBottom;
+
         return new BoxFragment(
             new Rect($x, $y, $borderBoxWidth, $height),
             $style->backgroundColor,
             $children,
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
+            // M7-T5 (css-overflow-3, reducido a visible|hidden): overflow:hidden en CUALQUIER
+            // bloque (con o sin max-height activo) marca esta caja para que Paint\Painter recorte
+            // TODOS sus descendientes al rect border-box final (YA clampeado arriba) -- ver
+            // BoxFragment::$clipsChildren.
+            clipsChildren: $style->overflow === 'hidden',
         );
+    }
+
+    /**
+     * M7-T5: normaliza un valor min/max-width/height DECLARADO (mismo espacio que `width`/`height`
+     * propios: border-box si box-sizing:border-box, content-box si no) al espacio de CONTENIDO,
+     * restando padding+borde del eje correspondiente cuando border-box -- para poder compararlo
+     * directamente contra un $contentWidth/$contentHeight ya en ese mismo espacio. Usado por AMBOS
+     * clamps de este método (ancho arriba, alto abajo) -- resolveReplacedSize()/
+     * InlineFlowContext::layoutInlineBlockAtomic()/FlexFormattingContext tienen su PROPIA copia de
+     * esta misma fórmula de 2 líneas (duplicación deliberada, mismo criterio "sin trait" ya
+     * documentado en FlexFormattingContext -- no vale la pena romper el encapsulamiento privado de
+     * cada clase por una función tan pequeña).
+     */
+    private static function toContentSpace(float $declaredPx, string $boxSizing, float $paddingSum, float $borderSum): float
+    {
+        return $boxSizing === 'border-box' ? max(0.0, $declaredPx - $paddingSum - $borderSum) : $declaredPx;
     }
 
     /**
@@ -631,6 +706,10 @@ final class BlockFlowContext implements FormattingContext
 
         $width = $declaredWidthPx ?? $box->attrWidth;
         $height = $declaredHeightPx ?? $box->attrHeight;
+        // M7-T5: capturado ANTES de que el if/elseif de abajo pueda asignar $height desde el
+        // ratio -- "auto" en el sentido de §10.4 significa NINGUNA de las 3 fuentes (CSS/attr) lo
+        // fijó, ni siquiera indirectamente.
+        $heightWasAuto = $declaredHeightPx === null && $box->attrHeight === null;
 
         if ($width === null && $height === null) {
             $width = $intrinsicWidth;
@@ -643,6 +722,31 @@ final class BlockFlowContext implements FormattingContext
         } elseif ($width === null) {
             $width = $ratio > 0.0 ? $height / $ratio : $intrinsicWidth;
         } elseif ($height === null) {
+            $height = $width * $ratio;
+        }
+
+        // M7-T5 (CSS 2.2 §10.4 table, SIMPLIFICADO): la tabla completa de la spec tiene 9 casos
+        // cruzando min/max-width CON min/max-height simultáneamente (incluyendo "shrink to
+        // satisfy both" cuando entran en conflicto). Este motor solo clampa min/max-WIDTH aquí y,
+        // cuando la altura era AUTO (ninguna de las 3 fuentes la fijó, ver $heightWasAuto arriba),
+        // la RE-DERIVA por el aspect ratio a partir del ancho YA clampeado -- exactamente el
+        // mismo mecanismo que la rama "$height === null" de arriba, aplicado una segunda vez tras
+        // el clamp. min/max-HEIGHT en un replaced element NO se aplican en absoluto en esta tarea
+        // (divergencia documentada: fuera del alcance reducido de M7-T5 -- un <img> con min/
+        // max-height propio simplemente los ignora, sin warning, igual criterio "soft" que otras
+        // simplificaciones ya documentadas en este método). Esta rama solo se alcanza SIN override
+        // (la rama con $usedWidthOverride ya retornó arriba -- mismo criterio que
+        // BlockFlowContext::layout(): un item flex ya negocia su propio ancho en
+        // FlexFormattingContext).
+        $maxWidthPx = $style->maxWidth?->resolve($cbWidth);
+        if ($maxWidthPx !== null) {
+            $width = min($width, self::toContentSpace($maxWidthPx, $style->boxSizing, $paddingBorderX, 0.0));
+        }
+        $minWidthPx = $style->minWidth?->resolve($cbWidth);
+        if ($minWidthPx !== null) {
+            $width = max($width, self::toContentSpace($minWidthPx, $style->boxSizing, $paddingBorderX, 0.0));
+        }
+        if ($heightWasAuto && $ratio > 0.0) {
             $height = $width * $ratio;
         }
 

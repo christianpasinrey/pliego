@@ -318,6 +318,28 @@ final class InlineFlowContext
             $usedWidth = max(0.0, min($maxContent, $availableWidth));
         }
 
+        // M7-T5 (CSS 2.2 §10.4): min/max-width clamp — se aplica DESPUÉS de resolver el ancho
+        // usado por CUALQUIER camino (declarado o shrink-to-fit, brief: "min(max(minW, fit),
+        // maxW)"), sobre $usedWidth (siempre BORDER-BOX en este punto, ver ambas ramas de arriba)
+        // — min/max-width se declaran en el MISMO espacio que `width` (content-box salvo
+        // box-sizing:border-box), así que se convierten a border-box aquí antes de comparar,
+        // mismo criterio que BlockFlowContext::layout()/resolveReplacedSize() (sin compartir
+        // código entre las 3: cada uno normaliza en su propia dirección — content->border aquí,
+        // border->content allá).
+        $minWidthPx = $style->minWidth?->resolve($availableWidth);
+        $maxWidthPx = $style->maxWidth?->resolve($availableWidth);
+        if ($minWidthPx !== null || $maxWidthPx !== null) {
+            $paddingH = $style->paddingLeft->resolve($availableWidth) + $style->paddingRight->resolve($availableWidth);
+            $borderH = $style->borderLeft->widthPx + $style->borderRight->widthPx;
+            $toBorderBox = static fn(float $px): float => $style->boxSizing === 'border-box' ? $px : $px + $paddingH + $borderH;
+            if ($maxWidthPx !== null) {
+                $usedWidth = min($usedWidth, $toBorderBox($maxWidthPx));
+            }
+            if ($minWidthPx !== null) {
+                $usedWidth = max($usedWidth, $toBorderBox($minWidthPx));
+            }
+        }
+
         $marginLeft = $style->marginLeft->resolve($availableWidth);
         $marginRight = $style->marginRight->resolve($availableWidth);
         $marginTop = $style->marginTop->resolve($availableWidth);
@@ -718,6 +740,7 @@ final class InlineFlowContext
                 $fragment->borders,
                 $fragment->atomic,
                 $fragment->opacity,
+                $fragment->clipsChildren,
             );
         }
         if ($fragment instanceof TextFragment) {

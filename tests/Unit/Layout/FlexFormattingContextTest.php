@@ -34,6 +34,28 @@ beforeEach(function (): void {
     $this->face = $this->catalog->select('default', 400, false);
 });
 
+// --- M7-T5 (css-flexbox-1 §9.7): declared min/max-width integrated into the flex base clamp ----
+
+it('min-width floors a flex item\'s hypothetical main size (base clamp), no grow to redistribute so it stays at the floor', function () {
+    $item = new BlockBox(flexStyle(['width' => LengthPercentage::px(40.0), 'min-width' => LengthPercentage::px(150.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(400.0)]), [$item], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+    expect($itemFrag->rect->width)->toBe(150.0);
+});
+
+it('max-width caps a flex item\'s hypothetical main size (base clamp)', function () {
+    $item = new BlockBox(flexStyle(['width' => LengthPercentage::px(300.0), 'max-width' => LengthPercentage::px(100.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(400.0)]), [$item], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+    expect($itemFrag->rect->width)->toBe(100.0);
+});
+
 // --- THE CARD: img 120px + div flex:1 + gap 12 in a 400px container ------------------------
 
 it('THE CARD: an auto-basis flex:1 item takes exactly the remaining space next to a fixed image, same line', function () {

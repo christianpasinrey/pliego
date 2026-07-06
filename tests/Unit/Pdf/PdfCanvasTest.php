@@ -311,6 +311,25 @@ it('paints NOTHING for a drawImage with opacity 0 — no XObject registered, no 
 // documented on emitWithAlpha() — an alpha'd op's `gs` is scoped to its OWN q/Q pair and must
 // never leak onto whatever paints right after it.
 
+// M7-T5 (css-overflow-3): clipRect()/restoreClip() — byte-level proof of the q/re/W n/Q clip scope.
+
+it('emits q + re W n for clipRect(), flipping Y and converting px to pt like fillRect', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->clipRect(new Rect(0, 0, 200, 100));
+    });
+    $expectedY = (PaperSize::A4->heightPx() - 100.0) * 0.75;
+    expect($pdf)->toContain("q\n");
+    expect($pdf)->toContain(sprintf("%.2F %.2F 150.00 75.00 re W n\n", 0.00, $expectedY));
+});
+
+it('emits a bare Q for restoreClip()', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->clipRect(new Rect(0, 0, 10, 10));
+        $canvas->restoreClip();
+    });
+    expect($pdf)->toContain("re W n\nQ\n");
+});
+
 it('leaves NO residual gs state after an alpha\'d op: the very next opaque op starts right at "Q\\n", byte for byte', function () {
     $pdf = renderOnePage(function (PdfCanvas $canvas): void {
         $canvas->fillRect(new Rect(0, 0, 10, 10), new Color(255, 0, 0, 0.5)); // alpha'd: q/gs/rg/Q
