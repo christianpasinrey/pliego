@@ -11,8 +11,14 @@ use Pliego\Image\ImageLoader;
  * Mirrors FontRegistry's shape for images: creates (lazily, memoized by $imageKey) one image
  * XObject (ISO 32000-1 §8.9.5) per distinct image actually drawn during painting — the same
  * photo referenced from 6 `<img>` tags produces exactly one XObject, `Do`-ed 6 times. `$imageKey`
- * is ImageFragment's already-resolved-and-verified source path (see ImageFragment's docblock),
- * reused as-is as the dedup key.
+ * is ImageFragment's already-resolved-and-verified source path (see ImageFragment's docblock).
+ *
+ * M5-T1 (housekeeping, deferred from M3): the dedup key is `realpath($imageKey) ?: $imageKey`
+ * (documented fallback below), not $imageKey verbatim — two DIFFERENT source strings that
+ * resolve to the SAME file on disk ('tiny.jpg' vs './tiny.jpg', two relative paths reaching the
+ * same target through a different basePath, ...) now share a single XObject/resource name
+ * instead of two, even though ImageFragment's own $imageKey (unchanged) still carries whichever
+ * un-normalized string BoxTreeBuilder resolved it to.
  *
  * Ordering: xobjectFor() only allocates the object id and resource name and decodes the file (so
  * a page's content stream can reference `/ImN` right away); the actual XObject dict + stream body
@@ -22,9 +28,9 @@ use Pliego\Image\ImageLoader;
  */
 final class ImageRegistry
 {
-    /** @var array<string, ImageXObjectRef> imageKey => ref, in first-use order */
+    /** @var array<string, ImageXObjectRef> dedup key (ver docblock de clase) => ref, in first-use order */
     private array $refs = [];
-    /** @var array<string, DecodedImage> imageKey => decoded image, kept for flushAll() */
+    /** @var array<string, DecodedImage> misma clave de dedup => decoded image, kept for flushAll() */
     private array $decoded = [];
     private int $nextResourceIndex = 1;
 
@@ -33,18 +39,26 @@ final class ImageRegistry
         private readonly ImageLoader $loader,
     ) {}
 
-    /** Devuelve (creando y decodificando si hace falta) el XObject de la imagen dada. */
+    /**
+     * Devuelve (creando y decodificando si hace falta) el XObject de la imagen dada.
+     *
+     * M5-T1: si realpath($imageKey) falla (fichero inexistente en este momento, symlink roto,
+     * etc. — devuelve `false`), se cae al $imageKey crudo como clave, exactamente el
+     * comportamiento pre-M5-T1 — ImageLoader::load() (llamado más abajo con el $imageKey ORIGINAL,
+     * sin normalizar) sigue siendo quien decide si el fichero es utilizable o lanza ImageException.
+     */
     public function xobjectFor(string $imageKey): ImageXObjectRef
     {
-        if (isset($this->refs[$imageKey])) {
-            return $this->refs[$imageKey];
+        $key = realpath($imageKey) ?: $imageKey;
+        if (isset($this->refs[$key])) {
+            return $this->refs[$key];
         }
 
-        $this->decoded[$imageKey] = $this->loader->load($imageKey);
+        $this->decoded[$key] = $this->loader->load($imageKey);
         $objectId = $this->writer->allocateObjectId();
         $name = 'Im' . $this->nextResourceIndex++;
 
-        return $this->refs[$imageKey] = new ImageXObjectRef($objectId, $name);
+        return $this->refs[$key] = new ImageXObjectRef($objectId, $name);
     }
 
     /** @return array<string, int> resource name ("Im1", "Im2", ...) => objectId de TODAS las imágenes usadas hasta el momento */

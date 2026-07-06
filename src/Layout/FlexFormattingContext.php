@@ -8,9 +8,12 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Style\AlignItems;
 use Pliego\Style\ComputedStyle;
@@ -25,26 +28,29 @@ use Pliego\Text\FontCatalog;
  * column (ver layoutColumnContainer()) y paginación atómica (ver $atomic más abajo); M4-T4 dejaba
  * la clase restringida a una sola línea en row. order, align-self, align-content, inline-flex,
  * flex-basis:content, *-reverse y writing modes siguen fuera de alcance (M4, ver brief) — caen a
- * warning y fallback en DeclarationParser/ComputedStyle, nunca llegan aquí; no hay canal de
- * warnings EN TIEMPO DE LAYOUT (el constructor de esta clase, fijado por el contrato del
- * milestone en T1/T3, no recibe un WarningCollector), así que cualquier simplificación adicional
- * de esta tarea queda documentada en el método correspondiente en vez de silenciosa.
+ * warning y fallback en DeclarationParser/ComputedStyle, nunca llegan aquí; cualquier
+ * simplificación adicional de esta tarea queda documentada en el método correspondiente en vez
+ * de silenciosa. M5-T1 (housekeeping) añade un canal de warnings EN TIEMPO DE LAYOUT (el
+ * constructor recibe un `?WarningCollector` opcional, ver warn()) — primer uso real:
+ * layoutColumnContainer(), "justify-content ignorado sin altura declarada".
  *
  * PAGINACIÓN ATÓMICA (brief T5): el BoxFragment que este contexto devuelve para el CONTENEDOR
  * (nunca para un item individual) se marca `atomic: true` — Paginator lo trata como una unidad
  * indivisible frente al push-down de página (ver Paginator::flatten()/relocate()): cruza un
  * límite de página y cabe entera en una sola → se empuja ENTERA (con todo su subárbol); es más
  * alta que una página → se queda donde cae, sin partirse (misma limitación ya documentada para
- * texto/imágenes demasiado altos, sin canal de warnings en Paginator tampoco — nota para M5).
+ * texto/imágenes demasiado altos — desde M5-T1, Paginator emite un warning explícito para este
+ * caso atómico, ver su docblock).
  *
  * RUPTURA DE CICLO (BlockFlowContext <-> FlexFormattingContext): un contenedor flex puede tener
  * items que a su vez son bloques normales (necesitan BlockFlowContext) o incluso OTROS
  * contenedores flex anidados (necesitan volver aquí); un bloque normal puede tener un hijo
  * `display:flex` (necesita este contexto). Ninguna de las dos clases puede recibir a la otra por
  * constructor sin ciclo. Solución: este constructor —cuya firma es la del contrato del milestone,
- * `(TextMeasurer, FontCatalog, IntrinsicSizer)`, sin parámetro extra— crea SU PROPIA instancia
- * interna de BlockFlowContext (mismo measurer/catalog, ambas clases son puras respecto a esos dos
- * colaboradores, sin estado compartido) y la conecta consigo mismo vía
+ * `(TextMeasurer, FontCatalog, IntrinsicSizer)` más el `?WarningCollector` opcional que M5-T1
+ * añade al final (housekeeping, no rompe la ruptura de ciclo descrita aquí)— crea SU PROPIA
+ * instancia interna de BlockFlowContext (mismo measurer/catalog/warnings, las tres clases son
+ * puras respecto a esos colaboradores, sin más estado propio compartido) y la conecta consigo mismo vía
  * `BlockFlowContext::setFlexContext()` (inyección perezosa, ver el docblock de esa clase): así,
  * cuando este contexto delega un ITEM que es un bloque normal a su BlockFlowContext interno, y
  * ese bloque tiene DESCENDIENTES con `display:flex`, el propio BlockFlowContext interno sabe
@@ -79,9 +85,15 @@ final readonly class FlexFormattingContext implements FormattingContext
         private TextMeasurer $measurer,
         private FontCatalog $catalog,
         private IntrinsicSizer $sizer,
+        private ?WarningCollector $warnings = null,
     ) {
-        $this->blockFlow = new BlockFlowContext($measurer, $catalog);
+        $this->blockFlow = new BlockFlowContext($measurer, $catalog, $warnings);
         $this->blockFlow->setFlexContext($this);
+    }
+
+    private function warn(string $message): void
+    {
+        $this->warnings?->addWarning($message);
     }
 
     public function layout(BlockBox $container, Rect $containingBlock, ?float $usedWidthOverride = null): BoxFragment
@@ -181,11 +193,19 @@ final readonly class FlexFormattingContext implements FormattingContext
             );
         }
 
+        // M5-T1 (housekeeping): hypotheticalMainSize() se calcula UNA sola vez por item aquí,
+        // memoizado por identidad de objeto — antes de esta tarea, splitIntoLines() (más abajo) y
+        // resolveMainSizes() (dentro de layoutRowLine(), una vez POR LÍNEA) lo recalculaban cada
+        // una por su cuenta para los MISMOS items, sin que el resultado pudiera cambiar entre
+        // ambas llamadas (mismo item, mismo $contentWidth) — ver el docblock de
+        // hypotheticalMainSizesById().
+        $basesById = $this->hypotheticalMainSizesById($items, $contentWidth);
+
         // §9.3 (wrap): parte $items en líneas — ver splitIntoLines(). flex-wrap:nowrap (default)
         // siempre produce UNA sola línea con TODOS los items (misma llamada, mismo resultado
         // exacto que T4 antes de esta tarea: la condición de apertura de línea en
         // splitIntoLines() solo se evalúa cuando $style->flexWrap === Wrap).
-        $lines = $this->splitIntoLines($items, $contentWidth, $style->columnGapPx, $style->flexWrap);
+        $lines = $this->splitIntoLines($items, $contentWidth, $style->columnGapPx, $style->flexWrap, $basesById);
 
         // Con una sola línea, la altura declarada del contenedor (si la hay) sigue forzando el
         // cross size de ESA línea (comportamiento T4 intacto, ver layoutRowLine()). Con 2+ líneas
@@ -198,7 +218,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $cursorY = $contentTop;
         $lineCrossSizes = [];
         foreach ($lines as $lineItems) {
-            [$lineFragments, $lineCross] = $this->layoutRowLine($lineItems, $contentWidth, $contentX, $cursorY, $style, $singleLineForcedCross);
+            [$lineFragments, $lineCross] = $this->layoutRowLine($lineItems, $contentWidth, $contentX, $cursorY, $style, $singleLineForcedCross, $basesById);
             foreach ($lineFragments as $fragment) {
                 $finalFragments[] = $fragment;
             }
@@ -227,17 +247,22 @@ final readonly class FlexFormattingContext implements FormattingContext
      * línea nueva — salvo que la línea actual esté vacía (el PRIMER item de una línea nunca se
      * rechaza: "un item solo más ancho que el contenedor se queda en su línea, sin partir", brief).
      *
+     * M5-T1: $basesById es el resultado YA calculado de hypotheticalMainSizesById() para estos
+     * MISMOS items (una sola vez, en layout()) — este método ya no vuelve a invocar
+     * hypotheticalMainSize() por su cuenta, solo lee del mapa por identidad de objeto.
+     *
      * @param non-empty-list<BlockBox|ImageBox> $items
+     * @param array<int, float> $basesById spl_object_id($item) => hypotheticalMainSize
      * @return non-empty-list<non-empty-list<BlockBox|ImageBox>>
      */
-    private function splitIntoLines(array $items, float $contentWidth, float $columnGapPx, FlexWrap $wrap): array
+    private function splitIntoLines(array $items, float $contentWidth, float $columnGapPx, FlexWrap $wrap, array $basesById): array
     {
         $lines = [];
         /** @var list<BlockBox|ImageBox> $currentLine */
         $currentLine = [];
         $currentSum = 0.0;
         foreach ($items as $item) {
-            $outer = $this->hypotheticalMainSize($item, $contentWidth)
+            $outer = $basesById[spl_object_id($item)]
                 + $item->style->marginLeft->resolve($contentWidth) + $item->style->marginRight->resolve($contentWidth);
             if ($currentLine === []) {
                 $currentLine[] = $item;
@@ -285,12 +310,16 @@ final readonly class FlexFormattingContext implements FormattingContext
      * base realmente "dual" en este método es otra (ver el comentario junto a $marginsX en
      * resolveMainSizes()).
      *
+     * M5-T1: $basesById, ver el docblock de splitIntoLines()/hypotheticalMainSizesById() — se
+     * reenvía tal cual a resolveMainSizes() en vez de dejar que recalcule.
+     *
      * @param non-empty-list<BlockBox|ImageBox> $items items de ESTA línea
+     * @param array<int, float> $basesById spl_object_id($item) => hypotheticalMainSize
      * @return array{0: list<Fragment>, 1: float} fragments (orden de documento) + cross size de la línea
      */
-    private function layoutRowLine(array $items, float $contentWidth, float $contentX, float $lineTop, ComputedStyle $style, ?float $forcedCross): array
+    private function layoutRowLine(array $items, float $contentWidth, float $contentX, float $lineTop, ComputedStyle $style, ?float $forcedCross, array $basesById): array
     {
-        [$resolvedMain, $marginsX] = $this->resolveMainSizes($items, $contentWidth, $style->columnGapPx);
+        [$resolvedMain, $marginsX] = $this->resolveMainSizes($items, $contentWidth, $style->columnGapPx, $basesById);
         $finalX = self::mainAxisPositions($resolvedMain, $marginsX, $contentWidth, $contentX, $style->columnGapPx, $style->justifyContent);
 
         $natural = [];
@@ -320,12 +349,61 @@ final readonly class FlexFormattingContext implements FormattingContext
                 AlignItems::FlexEnd => $lineCross - $itemCross,
                 default => 0.0,
             };
-            $finalFragments[] = $offset !== 0.0
-                ? $this->layoutItem($item, new Rect($finalX[$i], $lineTop + $offset, $resolvedMain[$i] + $marginsX[$i], INF), $resolvedMain[$i])
-                : $natural[$i];
+            // M5-T1 (housekeeping): antes de esta tarea, un offset≠0 (center/flex-end) volvía a
+            // invocar layoutItem() ENTERO con el ÚNICO cambio de sumarle $offset a la Y de
+            // partida — mismo $resolvedMain[$i]/$marginsX[$i] (mismo tamaño) que el layout
+            // "natural" ya calculado unas líneas arriba. translateY() reutiliza ESE fragmento,
+            // desplazando su subárbol completo en vez de repetir el layout — seguro porque Y
+            // solo entra de forma ADITIVA en BlockFlowContext::layout()/layoutImage() (ningún
+            // cálculo depende de su valor absoluto), así que el resultado es idéntico bit a bit.
+            $finalFragments[] = $offset !== 0.0 ? self::translateY($natural[$i], $offset) : $natural[$i];
         }
 
         return [$finalFragments, $lineCross];
+    }
+
+    /**
+     * M5-T1: ver el comentario de layoutRowLine() en su call site — desplaza un BoxFragment YA
+     * calculado (y todo su subárbol) $deltaY en el eje vertical sin volver a layoutear nada.
+     */
+    private static function translateY(BoxFragment $fragment, float $deltaY): BoxFragment
+    {
+        return new BoxFragment(
+            new Rect($fragment->rect->x, $fragment->rect->y + $deltaY, $fragment->rect->width, $fragment->rect->height),
+            $fragment->background,
+            self::translateChildrenY($fragment->children, $deltaY),
+            $fragment->borders,
+            $fragment->atomic,
+        );
+    }
+
+    /**
+     * @param list<Fragment> $children
+     * @return list<Fragment>
+     */
+    private static function translateChildrenY(array $children, float $deltaY): array
+    {
+        $result = [];
+        foreach ($children as $child) {
+            $result[] = match (true) {
+                $child instanceof BoxFragment => self::translateY($child, $deltaY),
+                $child instanceof TextFragment => new TextFragment(
+                    new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
+                    $child->text,
+                    $child->baselineY + $deltaY,
+                    $child->fontSizePx,
+                    $child->color,
+                    $child->faceKey,
+                    $child->underline,
+                ),
+                $child instanceof ImageFragment => new ImageFragment(
+                    new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
+                    $child->imageKey,
+                ),
+                default => throw new \LogicException('Unknown fragment leaf: ' . $child::class),
+            };
+        }
+        return $result;
     }
 
     /**
@@ -439,6 +517,30 @@ final readonly class FlexFormattingContext implements FormattingContext
     }
 
     /**
+     * M5-T1 (housekeeping): calcula hypotheticalMainSize() UNA sola vez por item de $items,
+     * memoizado por identidad de objeto (spl_object_id) — antes de esta tarea, un layout() en
+     * row invocaba hypotheticalMainSize() DOS veces por item: una en splitIntoLines() (decidir
+     * dónde abrir línea) y otra en resolveMainSizes() (llamado UNA vez POR LÍNEA, para el §9.7
+     * real), sin que el resultado pudiera cambiar entre ambas llamadas (mismo item, mismo
+     * $contentWidth — ninguna de las dos varía dentro de un mismo layout()). El duplicado salía
+     * más caro cuanto más contenido (texto/hijos) tuviera el item, vía
+     * IntrinsicSizer::maxContentWidth() -> TextMeasurer::widthOf() por carácter. spl_object_id()
+     * es seguro aquí porque $items nunca se copia ni reconstruye entre layout(), splitIntoLines()
+     * y layoutRowLine(): son los MISMOS objetos BlockBox|ImageBox de principio a fin.
+     *
+     * @param non-empty-list<BlockBox|ImageBox> $items
+     * @return array<int, float> spl_object_id($item) => hypotheticalMainSize
+     */
+    private function hypotheticalMainSizesById(array $items, float $contentWidth): array
+    {
+        $bases = [];
+        foreach ($items as $item) {
+            $bases[spl_object_id($item)] = $this->hypotheticalMainSize($item, $contentWidth);
+        }
+        return $bases;
+    }
+
+    /**
      * css-flexbox-1 §9.7 (resolver longitudes flexibles), una sola línea: libre = contentWidth −
      * Σ(base + márgenes horizontales del item) − columnGap×(n−1). libre>0 con Σgrow>0 reparte el
      * sobrante proporcional al grow de cada item (items con grow:0, el default, no se mueven).
@@ -466,14 +568,18 @@ final readonly class FlexFormattingContext implements FormattingContext
      * aquí para que una futura tarea con % en margin sepa dónde mirar antes de asumir que ambos
      * cálculos coinciden.
      *
+     * M5-T1: $basesById trae ya calculado (una sola vez por item, en layout()) lo que este método
+     * antes recomputaba aquí mismo para cada línea — ver hypotheticalMainSizesById().
+     *
      * @param list<BlockBox|ImageBox> $items
+     * @param array<int, float> $basesById spl_object_id($item) => hypotheticalMainSize
      * @return array{0: array<int, float>, 1: array<int, float>} resolvedMain (border-box, eje
      *     principal) y marginsX (margin-left+right, resuelto contra $contentWidth), mismo índice
      *     que $items (array<int,...> en vez de list<...>: PHPStan no puede probar por sí solo que
      *     las asignaciones `$arr[$i] = ...` dentro de un foreach sobre un list producen un list
      *     sin huecos, aunque en efecto lo sea).
      */
-    private function resolveMainSizes(array $items, float $contentWidth, float $columnGapPx): array
+    private function resolveMainSizes(array $items, float $contentWidth, float $columnGapPx, array $basesById): array
     {
         $n = count($items);
         $base = [];
@@ -481,7 +587,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $grow = [];
         $shrink = [];
         foreach ($items as $i => $item) {
-            $base[$i] = $this->hypotheticalMainSize($item, $contentWidth);
+            $base[$i] = $basesById[spl_object_id($item)];
             $marginsX[$i] = $item->style->marginLeft->resolve($contentWidth) + $item->style->marginRight->resolve($contentWidth);
             $grow[$i] = $item->style->flexGrow;
             $shrink[$i] = $item->style->flexShrink;
@@ -692,6 +798,14 @@ final readonly class FlexFormattingContext implements FormattingContext
                     }
                 }
             }
+        }
+
+        // M5-T1: primer warning real de este contexto (ver docblock de columnAxisPositions()) —
+        // sin altura declarada, justify-content distinto de flex-start (el default, sin efecto
+        // observable por construcción) queda sin nada que repartir: la columna "hugs content" y
+        // el valor declarado se ignora en silencio salvo por este aviso.
+        if ($declaredContentHeight === null && $style->justifyContent !== JustifyContent::FlexStart) {
+            $this->warn('flex column: justify-content has no effect without a declared container height (auto height hugs content)');
         }
 
         $finalY = self::columnAxisPositions($resolvedMain, $marginsY, $declaredContentHeight, $contentTop, $style->rowGapPx, $style->justifyContent);

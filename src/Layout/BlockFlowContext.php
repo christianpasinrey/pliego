@@ -8,6 +8,7 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TextRun;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
@@ -36,6 +37,13 @@ use Pliego\Text\FontCatalog;
  * público sigue existiendo por si un caller quiere inyectar una instancia propia (p.ej. un test
  * con un doble, o FlexFormattingContext conectando SU BlockFlowContext interno consigo mismo,
  * ver el docblock de esa clase) en vez de la autocreada.
+ *
+ * M5-T1 (housekeeping): $warnings (último parámetro, opcional, null = silencioso) es el mismo
+ * WarningCollector que Engine::render() comparte con BoxTreeBuilder/Paginator — esta clase no
+ * emite ningún warning propio todavía, pero DEBE reenviarlo al FlexFormattingContext que crea
+ * perezosamente en flexContext() (ver más abajo), para que un `display:flex` anidado a
+ * cualquier profundidad siga viendo el MISMO colector que el resto del pipeline, en vez de uno
+ * silencioso por accidente de wiring.
  */
 final class BlockFlowContext implements FormattingContext
 {
@@ -45,6 +53,7 @@ final class BlockFlowContext implements FormattingContext
     public function __construct(
         private readonly TextMeasurer $measurer,
         private readonly FontCatalog $catalog,
+        private readonly ?WarningCollector $warnings = null,
     ) {
         $this->inline = new InlineFlowContext($measurer, $catalog);
     }
@@ -58,7 +67,12 @@ final class BlockFlowContext implements FormattingContext
     private function flexContext(): FlexFormattingContext
     {
         if ($this->flexContext === null) {
-            $this->flexContext = new FlexFormattingContext($this->measurer, $this->catalog, new IntrinsicSizer($this->measurer, $this->catalog));
+            $this->flexContext = new FlexFormattingContext(
+                $this->measurer,
+                $this->catalog,
+                new IntrinsicSizer($this->measurer, $this->catalog),
+                $this->warnings,
+            );
         }
         return $this->flexContext;
     }

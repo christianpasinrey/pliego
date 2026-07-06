@@ -202,8 +202,8 @@ final class BoxTreeBuilder
      * texto-antes → ImageBox → texto-después), reusando el mismo buildImage() con sus mismos
      * warnings de fallo suave (src remoto, fichero ausente, formato no soportado). `collapse()`
      * trata el token ImageBox como separador de secuencia (igual que un LineBreakRun): no se le
-     * aplica el whitespace-collapsing propio de texto, y no imprime a la caja padre bordes que
-     * espacio de frontera con el texto adyacente. SIEMPRE se añade un warning adicional
+     * aplica el whitespace-collapsing propio de texto, ni genera espacio de frontera con el
+     * texto adyacente. SIEMPRE se añade un warning adicional
      * (independiente del éxito/fallo de buildImage) para que la aproximación quede visible en
      * RenderReport — el consumidor del reporte necesita saber que el layout aquí no es fiel al
      * documento fuente.
@@ -231,9 +231,11 @@ final class BoxTreeBuilder
             }
             if ($tag === 'img') {
                 $src = $node->getAttribute('src') ?? '';
-                $this->warnings->addWarning(
-                    "inline image hoisted to block level (inline replaced boxes not supported yet): $src",
-                );
+                // M5-T1 (housekeeping): un src vacío ya no arrastra un "): " colgante y feo al
+                // final del mensaje -- el sufijo con el src solo se añade cuando hay algo que
+                // mostrar.
+                $message = 'inline image hoisted to block level (inline replaced boxes not supported yet)';
+                $this->warnings->addWarning($src === '' ? $message : "$message: $src");
                 $imageBox = $this->buildImage($node, $styles->get($node));
                 if ($imageBox !== null) {
                     $pending[] = $imageBox;

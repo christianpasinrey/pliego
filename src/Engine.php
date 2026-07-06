@@ -100,9 +100,16 @@ final class Engine
             $parseResult = (new StylesheetParser())->parse($this->css);
             $document = HtmlParser::parse($html);
             $styles = (new StyleResolver([new CssStyleSource($parseResult)]))->resolve($document);
-            $imageWarnings = new WarningCollector();
+            // M5-T1 (housekeeping): un ÚNICO WarningCollector, compartido entre BoxTreeBuilder
+            // (imágenes), BlockFlowContext/FlexFormattingContext (layout) y Paginator
+            // (paginación) — antes de esta tarea solo cubría imágenes; ahora RenderReport también
+            // refleja limitaciones de layout/paginación (ver los docblocks de esas clases). Se
+            // drena al FINAL (ver el `$warnings = [...]` justo antes del `return`), después de
+            // consumir el generador de Paginator::paginate(), para no perder los warnings que
+            // solo se emiten DURANTE esa iteración.
+            $layoutWarnings = new WarningCollector();
             $imageLoader = new ImageLoader();
-            $boxTree = (new BoxTreeBuilder($imageLoader, $imageWarnings, $this->basePath))->build($document, $styles);
+            $boxTree = (new BoxTreeBuilder($imageLoader, $layoutWarnings, $this->basePath))->build($document, $styles);
 
             // fontFile() registra/sobreescribe la cara regular de la familia 'default'; el resto
             // de caras (bold/italic/bold-italic) siguen siendo las builtin de withDefaults().
@@ -121,7 +128,6 @@ final class Engine
             // geometría del área de contenido y el canvas.
             $pageRuleFactory = new PageRuleFactory();
             $pageRule = $pageRuleFactory->fromCssData($parseResult->pageRule);
-            $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings(), ...$imageWarnings->drain()];
 
             $uniformMargin = $this->margin->px;
             // Nullsafe + ?? en la misma expresión dispara un falso positivo de PHPStan (ver
@@ -137,7 +143,7 @@ final class Engine
 
             $contentWidth = $this->paper->widthPx() - $marginLeft - $marginRight;
             $contentHeight = $this->paper->heightPx() - $marginTop - $marginBottom;
-            $rootFragment = (new BlockFlowContext($measurer, $catalog))
+            $rootFragment = (new BlockFlowContext($measurer, $catalog, $layoutWarnings))
                 ->layout($boxTree, new Rect(0.0, 0.0, $contentWidth, INF));
 
             $writer = new PdfWriter($stream);
@@ -162,7 +168,7 @@ final class Engine
                 $marginLeft,
             );
             $pageCount = 0;
-            foreach ((new Paginator($contentHeight))->paginate($rootFragment) as $page) {
+            foreach ((new Paginator($contentHeight, $layoutWarnings))->paginate($rootFragment) as $page) {
                 $canvas->beginPage();
                 $painter->paint($page, $canvas);
                 if ($pageRule !== null) {
@@ -178,6 +184,11 @@ final class Engine
             $images->flushAll();
             $fonts->flushAll();
             $writer->finish();
+            // M5-T1: $layoutWarnings se drena aquí, AL FINAL — el generador de Paginator::paginate()
+            // ya se consumió por completo en el foreach de arriba, así que cualquier warning
+            // emitido durante la paginación (además de los de BoxTreeBuilder/BlockFlowContext,
+            // acumulados antes) ya está presente en el colector compartido.
+            $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings(), ...$layoutWarnings->drain()];
             return new RenderReport($warnings, $pageCount);
         });
     }

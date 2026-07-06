@@ -8,6 +8,7 @@ use Pliego\Box\ImageBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\FlexFormattingContext;
 use Pliego\Layout\Fragment\BoxFragment;
@@ -538,4 +539,97 @@ it('column: align-items stretch subtracts the item\'s own horizontal margins fro
     expect($itemFrag->rect->x)->toBe(0.0);
     expect($itemFrag->rect->width)->toBe(280.0); // 300 - 20 (margin-right)
     expect($itemFrag->rect->right())->toBe(280.0); // flush against the margin, not the raw content edge
+});
+
+// --- M5-T1: warning channel (column justify-content ignored without a declared height) ---------
+
+it('warns exactly once when column justify-content has no effect because the container has auto height', function () {
+    $warnings = new WarningCollector();
+    $ctx = new FlexFormattingContext($this->measurer, $this->catalog, $this->sizer, $warnings);
+    $a = new BlockBox(flexStyle(['height' => Length::px(20.0)]), [], 'div');
+    $b = new BlockBox(flexStyle(['height' => Length::px(20.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'flex-direction' => 'column', 'justify-content' => 'center']),
+        [$a, $b],
+        'div',
+    );
+
+    $ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+
+    expect($warnings->drain())->toBe([
+        'flex column: justify-content has no effect without a declared container height (auto height hugs content)',
+    ]);
+});
+
+it('does not warn about column justify-content when the container DOES declare a height', function () {
+    $warnings = new WarningCollector();
+    $ctx = new FlexFormattingContext($this->measurer, $this->catalog, $this->sizer, $warnings);
+    $a = new BlockBox(flexStyle(['height' => Length::px(20.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'height' => Length::px(100.0), 'flex-direction' => 'column', 'justify-content' => 'center']),
+        [$a],
+        'div',
+    );
+
+    $ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+
+    expect($warnings->drain())->toBeEmpty();
+});
+
+it('does not warn (stays silent) when no WarningCollector is injected, same column-without-height scenario', function () {
+    // Regression: the new constructor parameter is OPTIONAL (null = silent), so $this->ctx (built
+    // with no 4th argument in beforeEach) must keep behaving exactly as before this task.
+    $a = new BlockBox(flexStyle(['height' => Length::px(20.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'flex-direction' => 'column', 'justify-content' => 'center']),
+        [$a],
+        'div',
+    );
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    expect($frag->rect->width)->toBe(200.0); // just proving layout() ran fine with no collector
+});
+
+// --- M5-T1 (housekeeping): memoized hypothetical sizes + reused (translated) natural layout on
+// align-items offset must produce IDENTICAL geometry to before the refactor -----------------------
+
+it('A/B: wrap + align-items:center produces the exact same geometry as hand-computed, exercising both the memoized bases and the translated (not relaid-out) offset fragment', function () {
+    // Reuses the existing wrap fixture's shape (3 items, container 200px wide, wraps into 2
+    // lines) but adds align-items:center (default is Stretch) so BOTH refactored paths fire
+    // together: splitIntoLines()+resolveMainSizes() share the SAME memoized hypotheticalMainSize
+    // per item (instead of recomputing), and the per-item vertical centering offset reuses the
+    // natural fragment via a geometry-only Y translation instead of a second layoutItem() call.
+    $item1 = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(80.0)]), 'a.jpg', 80, 30, null, 30.0);
+    $item2 = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(80.0)]), 'b.jpg', 80, 50, null, 50.0);
+    $item3 = new ImageBox(flexStyle(['flex-basis' => LengthPercentage::px(80.0)]), 'c.jpg', 80, 20, null, 20.0);
+    $container = new BlockBox(
+        flexStyle([
+            'width' => LengthPercentage::px(200.0),
+            'flex-wrap' => 'wrap',
+            'row-gap' => Length::px(10.0),
+            'align-items' => 'center',
+        ]),
+        [$item1, $item2, $item3],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$f1, $f2, $f3] = $frag->children;
+    assert($f1 instanceof BoxFragment && $f2 instanceof BoxFragment && $f3 instanceof BoxFragment);
+
+    // Line 1 cross size = max(30, 50) = 50. item1 (h30) is centered: offset = (50-30)/2 = 10.
+    // item2 (h50) fills the line exactly: offset = 0, stays as the natural fragment.
+    expect($f1->rect->x)->toBe(0.0);
+    expect($f1->rect->y)->toBe(10.0); // centered within line 1's 50px cross size
+    expect($f1->rect->height)->toBe(30.0);
+    expect($f2->rect->x)->toBe(80.0);
+    expect($f2->rect->y)->toBe(0.0);
+    expect($f2->rect->height)->toBe(50.0);
+
+    // Line 2 (just item3, h20) starts at y = 50 (line 1 cross) + 10 (row-gap) = 60; with a single
+    // item, its own height IS the line cross, so centering offset is 0 -- unaffected either way.
+    expect($f3->rect->x)->toBe(0.0);
+    expect($f3->rect->y)->toBe(60.0);
+    expect($f3->rect->height)->toBe(20.0);
+
+    expect($frag->rect->height)->toBe(80.0); // same total as the original wrap test (unaffected by align-items)
 });

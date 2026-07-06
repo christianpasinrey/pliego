@@ -404,10 +404,10 @@ it('expands "flex: auto" to grow 1, shrink 1, basis auto', function () {
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('expands a single unitless number "flex: N" to grow N, shrink 1, basis 0', function () {
+it('expands a single unitless number "flex: N" to grow N, shrink 1, basis 0% (M5-T1: §7.1.1 says 0%, not 0px)', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('flex', '2'))->toEqual([
-        'flex-grow' => 2.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::zero(),
+        'flex-grow' => 2.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::percent(0.0),
     ]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
@@ -420,10 +420,10 @@ it('expands a single width "flex: Npx" to grow 1, shrink 1, basis N', function (
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('expands two numbers "flex: N M" to grow N, shrink M, basis 0', function () {
+it('expands two numbers "flex: N M" to grow N, shrink M, basis 0% (M5-T1: §7.1.1 says 0%, not 0px)', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('flex', '2 3'))->toEqual([
-        'flex-grow' => 2.0, 'flex-shrink' => 3.0, 'flex-basis' => LengthPercentage::zero(),
+        'flex-grow' => 2.0, 'flex-shrink' => 3.0, 'flex-basis' => LengthPercentage::percent(0.0),
     ]);
     expect($parser->drainWarnings())->toBeEmpty();
 });

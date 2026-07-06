@@ -210,6 +210,41 @@ it('documents the cross-run word min-content under-estimate: a bold mid-word spl
     expect($splitMin)->toBeLessThan($wholeMin);
 });
 
+// M5-T1 (housekeeping): a nested display:flex row child sums its items' max-content + gaps
+// instead of taking the max like a plain block would.
+
+it('sums (not maxes) a nested display:flex ROW child\'s items max-content plus column-gap', function () {
+    $flexStyle = sizerStyle(['display' => 'flex', 'column-gap' => Length::px(10.0)]);
+    $itemAStyle = sizerStyle([], $flexStyle);
+    $itemBStyle = sizerStyle([], $flexStyle);
+    $itemA = new BlockBox($itemAStyle, [new TextRun('uno', $itemAStyle)], 'div');
+    $itemB = new BlockBox($itemBStyle, [new TextRun('dostres', $itemBStyle)], 'div');
+    $flexChild = new BlockBox($flexStyle, [$itemA, $itemB], 'div');
+    $box = new BlockBox(sizerStyle(), [$flexChild], 'div');
+
+    $widthA = $this->measurer->widthOf('uno', $this->face, 16.0);
+    $widthB = $this->measurer->widthOf('dostres', $this->face, 16.0);
+    // SUM + gap, not max(widthA, widthB) -- the row lays its items out side by side.
+    $expected = $widthA + $widthB + 10.0;
+
+    expect($this->sizer->maxContentWidth($flexChild))->toEqualWithDelta($expected, 0.001);
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expected, 0.001);
+});
+
+it('keeps the MAX criterion for a nested display:flex COLUMN child (items stack vertically)', function () {
+    $flexStyle = sizerStyle(['display' => 'flex', 'flex-direction' => 'column']);
+    $itemAStyle = sizerStyle([], $flexStyle);
+    $itemBStyle = sizerStyle([], $flexStyle);
+    $itemA = new BlockBox($itemAStyle, [new TextRun('uno', $itemAStyle)], 'div');
+    $itemB = new BlockBox($itemBStyle, [new TextRun('dostres', $itemBStyle)], 'div');
+    $flexChild = new BlockBox($flexStyle, [$itemA, $itemB], 'div');
+
+    $widthA = $this->measurer->widthOf('uno', $this->face, 16.0);
+    $widthB = $this->measurer->widthOf('dostres', $this->face, 16.0);
+    // MAX, not sum -- column stacks its items vertically, same criterion as a plain block.
+    expect($this->sizer->maxContentWidth($flexChild))->toEqualWithDelta(max($widthA, $widthB), 0.001);
+});
+
 it('adds an image child intrinsic width plus its margins into the parent max-content', function () {
     $style = sizerStyle();
     $imgStyle = sizerStyle(['margin-left' => LengthPercentage::px(6.0)], $style);

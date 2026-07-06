@@ -453,11 +453,18 @@ final class DeclarationParser
      *   none              → flex-grow:0    flex-shrink:0  flex-basis:auto
      *   initial           → flex-grow:0    flex-shrink:1  flex-basis:auto  (initial value)
      *   auto              → flex-grow:1    flex-shrink:1  flex-basis:auto
-     *   <N>               → flex-grow:N    flex-shrink:1  flex-basis:0
+     *   <N>               → flex-grow:N    flex-shrink:1  flex-basis:0%
      *   <width>           → flex-grow:1    flex-shrink:1  flex-basis:<width>
-     *   <N> <M>           → flex-grow:N    flex-shrink:M  flex-basis:0
+     *   <N> <M>           → flex-grow:N    flex-shrink:M  flex-basis:0%
      *   <N> <width>       → flex-grow:N    flex-shrink:1  flex-basis:<width>
      *   <N> <M> <width>   → flex-grow:N    flex-shrink:M  flex-basis:<width>
+     *
+     * M5-T1 (housekeeping): la basis omitida es `0%` (LengthPercentage::percent(0.0)), no `0px`
+     * (LengthPercentage::zero(), lo que este método usaba antes) — el propio texto del spec
+     * (§7.1.1: "flex: <positive-number>" expande a "flex-grow, 1, 0%") lo fija en porcentaje.
+     * Numéricamente resuelve idéntico (0% y 0px de CUALQUIER base dan 0px, ver
+     * LengthPercentage::resolve()), así que esta corrección no cambia ninguna geometría ya
+     * calculada — es una corrección de fidelidad al spec, no de comportamiento observable.
      *
      * @return array<string, mixed>
      */
@@ -489,7 +496,7 @@ final class DeclarationParser
     private function parseFlexOneValue(string $token, string $original): array
     {
         if (preg_match(self::FLEX_NUMBER_RE, $token) === 1) {
-            return ['flex-grow' => (float) $token, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::zero()];
+            return ['flex-grow' => (float) $token, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::percent(0.0)];
         }
         $basis = $this->flexBasisToken($token);
         if ($basis === null) {
@@ -506,7 +513,7 @@ final class DeclarationParser
         }
         $grow = (float) $first;
         if (preg_match(self::FLEX_NUMBER_RE, $second) === 1) {
-            return ['flex-grow' => $grow, 'flex-shrink' => (float) $second, 'flex-basis' => LengthPercentage::zero()];
+            return ['flex-grow' => $grow, 'flex-shrink' => (float) $second, 'flex-basis' => LengthPercentage::percent(0.0)];
         }
         $basis = $this->flexBasisToken($second);
         if ($basis === null) {

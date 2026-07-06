@@ -95,3 +95,21 @@ it('writes exactly one XObject definition even when the same imageKey is request
     });
     expect(substr_count($pdf, '/Subtype /Image'))->toBe(1);
 });
+
+it('dedups the same file reached via two different path spellings using realpath (M5-T1, deferred from M3)', function () {
+    // 'tiny.jpg' vs './tiny.jpg': different strings, same real file -- must share one XObject
+    // (resource name/objectId), not two, even though ImageFragment's own imageKey is never
+    // normalized itself (see the class docblock's "documented fallback").
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $registry = new ImageRegistry($writer, new ImageLoader());
+
+    $dotted = dirname(IMG_JPEG_FIXTURE) . '/./' . basename(IMG_JPEG_FIXTURE);
+    $plain = $registry->xobjectFor(IMG_JPEG_FIXTURE);
+    $viaDotted = $registry->xobjectFor($dotted);
+
+    expect($viaDotted)->toBe($plain);
+    expect($registry->pageResources())->toHaveCount(1);
+});

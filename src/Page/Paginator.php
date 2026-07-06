@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pliego\Page;
 
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
@@ -14,10 +15,24 @@ use Pliego\Layout\Geometry\Rect;
  * Fragmentación M0 (css-break-3 mínimo): push-down de hojas que cruzan el
  * límite de página. Streaming real: cada página se emite en cuanto la
  * siguiente hoja pertenece a una página posterior.
+ *
+ * M5-T1 (housekeeping): $warnings es opcional (null = silencioso, no rompe ninguna firma de
+ * test unitario existente) — Engine::render() inyecta AQUÍ el mismo WarningCollector compartido
+ * que ya recibe BoxTreeBuilder/BlockFlowContext/FlexFormattingContext, para que RenderReport
+ * también refleje limitaciones de PAGINACIÓN (antes solo cubría CSS/imagen/@page). Primer uso
+ * real: ver flatten()/paginate() más abajo, "atomic fragment taller than page, kept unsplit".
  */
 final readonly class Paginator
 {
-    public function __construct(private float $contentHeightPx) {}
+    public function __construct(
+        private float $contentHeightPx,
+        private ?WarningCollector $warnings = null,
+    ) {}
+
+    private function warn(string $message): void
+    {
+        $this->warnings?->addWarning($message);
+    }
 
     /** @return \Generator<int, Page> */
     public function paginate(BoxFragment $root): \Generator
@@ -35,6 +50,12 @@ final readonly class Paginator
                 $offset += $pushDown;
                 $top += $pushDown;
                 $leafPage++;
+            } elseif ($leaf instanceof BoxFragment && $leaf->atomic && $leaf->rect()->height > $h) {
+                // M5-T1: la guarda de push-down de arriba nunca se activa para una hoja más alta
+                // que la propia página (misma limitación documentada, sin partir, que ya tenían
+                // texto/imágenes demasiado altos) — ahora, al menos para el caso atómico (M4-T5:
+                // contenedor flex entero), queda un aviso explícito en vez de quedar en silencio.
+                $this->warn('atomic fragment taller than page, kept unsplit');
             }
             while ($leafPage > $pageIndex) {
                 yield new Page($pageIndex + 1, $current);
@@ -55,8 +76,8 @@ final readonly class Paginator
      * bucle de paginate() de más abajo lo trata entonces como cualquier otra hoja indivisible: si
      * cruza un límite de página Y cabe entera en una sola página, se empuja completa (con TODO su
      * subárbol, ver relocate()); si es más alta que una página, se queda donde cae sin partirse
-     * (misma limitación ya documentada para texto/imágenes demasiado altas — sin canal de
-     * warnings en este Paginator, nota para endurecer en M5).
+     * (misma limitación ya documentada para texto/imágenes demasiado altas, PERO desde M5-T1 con
+     * un warning explícito para el caso atómico — ver paginate()).
      * @return \Generator<int, Fragment>
      */
     private function flatten(BoxFragment $box): \Generator

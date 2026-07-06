@@ -50,6 +50,13 @@ it('does not memoize across different paths', function () {
     expect($png)->not->toBe($jpg);
 });
 
+it('memoizes via realpath: two different path spellings for the same file share one DecodedImage (M5-T1)', function () {
+    $dir = __DIR__ . '/../../../resources/images';
+    $plain = $this->loader->load($dir . '/tiny.jpg');
+    $dotted = $this->loader->load($dir . '/./tiny.jpg'); // resolves to the identical real file
+    expect($dotted)->toBe($plain);
+});
+
 it('serves the cached instance even if the file is deleted after the first load (closes build/paint TOCTOU)', function () {
     $source = __DIR__ . '/../../../resources/images/tiny.jpg';
     $path = tempnam(sys_get_temp_dir(), 'img') . '.jpg';
