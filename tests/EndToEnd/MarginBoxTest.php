@@ -175,6 +175,40 @@ it('mixes a deferred (counter(pages)) box and a direct (page-only) box on the sa
     }
 });
 
+it('shares one page\'s /Resources /XObject dict between a deferred margin-box Form XObject and an image XObject, both structurally valid (M3-T5)', function () {
+    // Regression guard for the two XObject families colliding/overwriting each other in the
+    // SAME /Resources /XObject dict: PdfCanvas::endPage() merges $this->xobjectRefs (margin-box
+    // Form XObjects, "XOn") with $this->images->pageResources() ("Imn") — see its docblock. A
+    // counter(pages) box forces the deferred path (PdfWriter::defer()); the <img> forces
+    // ImageRegistry::xobjectFor() — both land on the one page this document produces.
+    $path = sys_get_temp_dir() . '/pliego-marginbox-with-image.pdf';
+    $css = '@page { @bottom-center { content: "Pagina " counter(page) " de " counter(pages); } }';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->stylesheet($css)
+        ->render('<body><img src="tiny.jpg"><p>Una pagina con foto y pie de pagina.</p></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($report->pageCount)->toBe(1);
+    expect($report->warnings)->toBe([]);
+
+    // Structurally valid PDF (same technique as the rest of this file / KitchenSinkTest).
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/startxref\n(\d+)\n%%EOF\s*$/', $pdf, $m))->toBe(1);
+    expect(substr($pdf, (int) $m[1], 4))->toBe('xref');
+
+    // Both XObjects end up in the SAME page's /Resources /XObject dict, distinct name prefixes.
+    // Im1 first: Painter::paint() draws the <img> (PdfCanvas::drawImage() registers "Im1" into
+    // the page-local $xobjectRefs) before MarginBoxPainter::paintPage() runs and registers "XO1"
+    // via placeXObject() — the later ...$images->pageResources() spread in endPage() re-touches
+    // the already-present "Im1" key without moving it (PHP array spread keeps a repeated string
+    // key's original position), so first-registered order survives.
+    expect(preg_match('/\/XObject << \/Im1 \d+ 0 R \/XO1 \d+ 0 R >>/', $pdf))->toBe(1);
+    expect(substr_count($pdf, '/Subtype /Form'))->toBe(1);
+    expect(substr_count($pdf, '/Subtype /Image'))->toBe(1);
+});
+
 it('keeps the deferred builders\' glyphs inside the flushed font subset (encode() before flushAll())', function () {
     // Regression guard for the ordering pitfall documented in PdfWriter: if writeDeferred() ran
     // AFTER FontRegistry::flushAll(), the digit glyphs used ONLY by the deferred @bottom-center

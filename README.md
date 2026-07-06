@@ -4,10 +4,10 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M2); the
+> **Not published to Packagist yet.** This is an early milestone (M3); the
 > package is not installable via Composer from a registry at this point.
 
-## Status: M2 — box model & paged media
+## Status: M3 — images
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -16,11 +16,39 @@ needs — solid **borders**, `width`/margin/padding **percentages**,
 `box-sizing` — plus **paged media**: `@page` margins that override the
 engine default per side, and repeating margin boxes (`@top-*`/`@bottom-*`)
 with literal text and `counter(page)`/`counter(pages)`, so a document can
-carry a real "Página X de Y" footer. It is still not a general-purpose
-renderer — images and flexbox are the milestones ahead (see
-[Roadmap](#roadmap)).
+carry a real "Página X de Y" footer. M3 adds **images**: `<img>` as a
+replaced block-level element, JPEG passthrough (`DCTDecode`) and PNG decoding
+(gray/RGB/RGBA, `FlateDecode`, alpha via `/SMask`), intrinsic sizing from the
+file's own dimensions plus HTML `width`/`height` attributes, and a
+deduplicating `ImageRegistry` so the same photo referenced N times becomes
+one PDF XObject. It is still not a general-purpose renderer — flexbox is the
+milestone ahead (see [Roadmap](#roadmap)).
 
-### Supported as of M2
+### Supported as of M3
+
+- **Images** (css-images-3 subset): `<img src="...">` as a replaced
+  block-level box — inline images (an `<img>` nested inside `span`/`a`/etc.)
+  are hoisted to block level with a visible warning rather than silently
+  dropped or laid out inline (inline replaced boxes aren't supported yet).
+  - **JPEG**: baseline (SOF0), extended-sequential (SOF1) and progressive
+    (SOF2) all pass through untouched as a `DCTDecode` XObject — the file's
+    own entropy-coded stream is embedded as-is, no re-encoding.
+  - **PNG**: 8-bit only, color types gray (0), RGB (2) and RGBA (6),
+    non-interlaced. Decoded (zlib inflate + per-scanline unfilter: None/Sub/
+    Up/Average/Paeth) and re-deflated as `FlateDecode`. RGBA splits into an
+    RGB `DeviceRGB` image plus its alpha channel as a separate 8-bit
+    `DeviceGray` `/SMask` XObject (ISO 32000-1 §11.6.5.3).
+  - **Sizing**: intrinsic size comes from the file's own pixel dimensions
+    (96dpi assumed, so image px = CSS px); the HTML `width`/`height`
+    attributes (purely numeric values only) override one axis, the other
+    derives from the image's own aspect ratio when only one is given.
+  - **Dedup**: the same resolved path referenced from multiple `<img>` tags
+    produces exactly one XObject (`ImageRegistry`, keyed by path), `Do`-ed
+    once per occurrence — a 6-photo repeat costs one embedded image, not six.
+  - **Soft failures**: a missing file, an unsupported format/variant, or a
+    `src` that fails to load reports a warning and the box is silently
+    omitted (no ImageBox emitted) — never a thrown exception from the box
+    tree. See limitations below for what's *not* supported and reported.
 
 - **HTML**: a `<body>` with block elements and inline tags (`span`,
   `strong`, `em`, `b`, `i`, `u`, `a`, `small`, `code`) that keep their own
@@ -111,7 +139,18 @@ renderer — images and flexbox are the milestones ahead (see
   overflow is cut at the column edge instead. Either way, overflow only
   becomes visible/lossy when the neighboring column also paints into the
   shared boundary region.
-- No images (M3), no flexbox (M4), no tables/floats (M5+).
+- No flexbox (M4), no tables/floats (M5+).
+- **Images**: no indexed/palette PNG (color type 3), no interlaced (Adam7)
+  PNG, no bit depths other than 8, no CMYK JPEG, no formats beyond JPEG/PNG
+  (no GIF/WebP/SVG/BMP). No remote `src` (`http://`/`https://` is reported as
+  a warning, never fetched) — only local files resolved against
+  `->basePath()`. No `object-fit`/`object-position`, no inline replaced
+  boxes (an inline `<img>` is hoisted to block level, see above). Every
+  referenced image is decoded **twice** per document — once in
+  `BoxTreeBuilder` (to read intrinsic dimensions for layout) and again in
+  `ImageRegistry` (to build the XObject at paint time) — there is no shared
+  decode cache between the two passes, so a large photo pays its JPEG/PNG
+  decode cost twice even when it's only used once.
 - `text-decoration`/underline is treated as inheriting through the tree for
   simplicity, which isn't how real CSS decoration propagation works (see
   above) — precise decoration-island tracking is deferred past M1.
@@ -196,8 +235,8 @@ of flexbox/grid:
 | Milestone | Scope | Why |
 |---|---|---|
 | **M1** | Real text: styled inline runs, UAX #14 line breaking, alignment, subsetting, ToUnicode | Bold/sizes/alignment from the target document; ~10× smaller PDFs than M0's whole-font embedding |
-| **M2** (this release) | Full box model — **borders**, width/margin/padding %, `box-sizing` — plus **`@page` margins, repeating margin boxes, `counter(page)`/`counter(pages)`** ("Page X of Y") | The bordered rows and numbered footer from the target document |
-| **M3** | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject), basic `object-fit`, intrinsic sizing | The photos in the itinerary cards |
+| **M2** | Full box model — **borders**, width/margin/padding %, `box-sizing` — plus **`@page` margins, repeating margin boxes, `counter(page)`/`counter(pages)`** ("Page X of Y") | The bordered rows and numbered footer from the target document |
+| **M3** (this release) | **Images**: `<img>` JPEG passthrough + PNG (decoded to an XObject, alpha via `/SMask`), deduplicated XObjects, intrinsic + attribute sizing | The photos in the itinerary cards |
 | **M4** | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width` | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
 | **M5+** | Tables → floats/position → Bootstrap → Tailwind JIT → flex to spec (`order`, `align-self`, `stretch`) → grid | Tables stay necessary for third-party/email-style HTML; flex gets completed to spec in its own milestone |
 

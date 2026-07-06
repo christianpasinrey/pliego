@@ -135,6 +135,24 @@ it('dedups the same <img src> referenced 3 times into a single image XObject (M3
     expect(substr_count($pdf, '/Im1 Do'))->toBe(3);          // ...Do-ed 3 times
 });
 
+it('paints an RGBA PNG with alpha as a DeviceRGB XObject plus its own DeviceGray SMask XObject, through the full Engine pipeline (M3-T5)', function () {
+    // T4's ImageRegistryTest already covers this at the registry level (unit test, PdfWriter
+    // wired by hand); this is the same assertion driven end-to-end through Engine::render() —
+    // HtmlParser -> BoxTreeBuilder -> BlockFlowContext -> Painter -> PdfCanvas -> ImageRegistry.
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-rgba.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny-rgba-paeth.png"></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($report->warnings)->toBe([]);
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/\/SMask (\d+) 0 R/', $pdf, $m))->toBe(1);
+    expect($pdf)->toContain('/ColorSpace /DeviceGray'); // the SMask's own colorspace
+    expect($pdf)->toContain('/ColorSpace /DeviceRGB');  // the main image's colorspace
+});
+
 it('paints solid borders as filled rects beyond the background, in css-backgrounds-3 painting order (M2-T5)', function () {
     // Una única caja con fondo + borde uniforme visible en los 4 lados: 1 "re f" para el fondo
     // + 4 "re f" para los lados del borde (Painter::paintBorders). Nada más en el documento
