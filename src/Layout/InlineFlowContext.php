@@ -282,6 +282,20 @@ final class InlineFlowContext
      * la posición FINAL (dependiente de dónde cae en la línea, decidido en closeLine()) se aplica
      * después vía shiftFragment(), desplazando el subárbol entero.
      *
+     * M7-T4 fix (review Finding 1): un width declarado es, por CSS default (box-sizing:content-box),
+     * el ancho de CONTENIDO -- pero BlockFlowContext::layout() SIEMPRE interpreta $usedWidthOverride
+     * como el ancho BORDER-BOX ya resuelto (ver su docblock M4-T5, mismo contrato que usa
+     * FlexFormattingContext). Pasar el valor declarado tal cual (bug original) hacía que los
+     * paddings/bordes horizontales del propio inline-block se "comieran" ese ancho en vez de
+     * sumarse a él (repro adjudicado: .btn{width:100px;padding:6px 20px;border:1px} debía medir
+     * 142px de border-box, no 100px). Se convierte aquí ANTES de llamar a layout(), replicando el
+     * mismo patrón ya usado por BlockFlowContext::layout() consigo mismo cuando NO hay override
+     * (rama "declared width", box-sizing incluido) e IntrinsicSizer::sizeBlock() (mismo cálculo
+     * para max-content) -- box-sizing:border-box, en cambio, YA ES el ancho border-box, pasa
+     * intacto. Aplica igual a % (resuelto contra $availableWidth primero, ver $style->width->resolve()
+     * más abajo) que a px: la conversión ocurre DESPUÉS de resolver el valor a píxeles, así que
+     * cubre ambos casos con el mismo código.
+     *
      * @return array{fragment: BoxFragment, width: float, height: float} width/height = tamaño de
      *     MARGIN box (lo que avanza el cursor de línea / lo que compite por el alto de línea).
      */
@@ -290,7 +304,15 @@ final class InlineFlowContext
         $style = $box->style;
         $declaredWidthPx = $style->width?->resolve($availableWidth);
         if ($declaredWidthPx !== null) {
-            $usedWidth = max(0.0, $declaredWidthPx);
+            if ($style->boxSizing === 'border-box') {
+                $usedWidth = max(0.0, $declaredWidthPx);
+            } else {
+                $paddingLeft = $style->paddingLeft->resolve($availableWidth);
+                $paddingRight = $style->paddingRight->resolve($availableWidth);
+                $borderLeft = $style->borderLeft->widthPx;
+                $borderRight = $style->borderRight->widthPx;
+                $usedWidth = max(0.0, $declaredWidthPx + $paddingLeft + $paddingRight + $borderLeft + $borderRight);
+            }
         } else {
             $maxContent = $this->intrinsicSizer()->maxContentWidth($box);
             $usedWidth = max(0.0, min($maxContent, $availableWidth));
@@ -443,6 +465,16 @@ final class InlineFlowContext
         $maxFontSize = 0.0;
         $maxAscent = 0.0;
         $maxAtomicHeight = 0.0;
+        // M7-T4 fix (review Finding 2): un box-open/box-close NUNCA contribuía a estas métricas --
+        // inofensivo mientras la línea tuviera ALGÚN 'text'/'atomic' real (el caso normal), pero
+        // dejaba una línea compuesta ÚNICAMENTE por una caja vacía (ver más abajo, hasContent) sin
+        // NINGUNA fuente de altura ($maxFontSize se quedaba en 0.0). Se registra aquí, aparte, el
+        // font-size/ascent propio de cada caja abierta en esta línea -- SOLO se usa como fallback
+        // cuando ninguna entry 'text'/'atomic' aportó nada (ver el if de debajo), así que no cambia
+        // ni un bit el resultado de ninguna línea con contenido real (byte-stable, mismo docblock
+        // de arriba).
+        $emptyBoxFontSize = 0.0;
+        $emptyBoxAscent = 0.0;
         foreach ($lineEntries as $entry) {
             if ($entry['kind'] === 'text') {
                 $fontSize = $entry['run']->style->fontSizePx;
@@ -450,7 +482,19 @@ final class InlineFlowContext
                 $maxAscent = max($maxAscent, $this->measurer->ascent($entry['face'], $fontSize));
             } elseif ($entry['kind'] === 'atomic') {
                 $maxAtomicHeight = max($maxAtomicHeight, $entry['height']);
+            } elseif ($entry['kind'] === 'box-open') {
+                $boxFontSize = $entry['style']->fontSizePx;
+                $emptyBoxFontSize = max($emptyBoxFontSize, $boxFontSize);
+                $emptyBoxAscent = max($emptyBoxAscent, $this->measurer->ascent($this->faceFor($entry['style']), $boxFontSize));
             }
+        }
+        if ($maxFontSize === 0.0 && $emptyBoxFontSize > 0.0) {
+            // Línea SIN NINGÚN 'text'/'atomic' (solo caja(s) inline vacías con box visible, ver
+            // Finding 2 más abajo): el "strut" de fuente de la propia caja (convención 1.2x, ver
+            // TextMeasurer::lineHeight()) es lo único que le da altura a la línea -- documentado,
+            // adjudicación del review.
+            $maxFontSize = $emptyBoxFontSize;
+            $maxAscent = $emptyBoxAscent;
         }
         $normalLineHeight = max($blockStyle->lineHeightPx ?? 0.0, $this->measurer->lineHeight($maxFontSize));
         $normalAscentAboveTop = ($normalLineHeight - $maxFontSize) / 2 + $maxAscent;
@@ -508,7 +552,17 @@ final class InlineFlowContext
                 $seq = $frame['seq'];
                 $state = $lineBoxState[$seq];
                 $state['maxX'] = $cursorX;
-                if ($state['hasContent'] && $state['minX'] !== null) {
+                // M7-T4 fix (review Finding 2): antes se exigía además $state['hasContent'], lo que
+                // descartaba SILENCIOSAMENTE una caja inline COMPLETAMENTE vacía (p.ej.
+                // <span class="tag"></span> con bg/padding) -- contradiciendo CSS 2.2 (una caja
+                // inline vacía sigue generando su caja: ancho = paddings horizontales, altura mínima
+                // = el strut de línea, ver el fallback de más arriba). InlineBoxStart/InlineBoxEnd
+                // SOLO llegan aquí para una caja YA confirmada visible por
+                // BoxTreeBuilder::hasVisibleInlineBox() -- así que $state['minX'] !== null (posición
+                // establecida en ESTA línea, siempre cierto tras la rama 'box-open' de arriba) es la
+                // ÚNICA condición real que hace falta; exigir 'hasContent' además era redundante Y el
+                // bug, porque descartaba precisamente el caso "sin contenido" que sí debe pintarse.
+                if ($state['minX'] !== null) {
                     $isFirstSlice = $state['openedThisLine'];
                     $emittedBoxFragments[$seq] = $this->buildInlineBoxFragment(
                         $frame,

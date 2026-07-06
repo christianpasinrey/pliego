@@ -909,3 +909,131 @@ it('M7-T4: an inline-block taller than the surrounding text grows the line heigh
     expect($btn->rect->height)->toBeGreaterThan(80.0);
     expect($rowTwo->rect->y - $rowOne->rect->y)->toBeGreaterThanOrEqual($btn->rect->height - 0.5);
 });
+
+// --- M7-T4 code review Finding 1: inline-block declared width must honor box-sizing -----------
+// Bug: layoutInlineBlockAtomic() passed the declared width straight through as $usedWidthOverride,
+// which BlockFlowContext::layout() ALWAYS treats as the BORDER-BOX width (ver su docblock M4-T5).
+// CSS default box-sizing:content-box means a declared `width` is the CONTENT width, not the
+// border-box width -- reviewer repro: .btn{width:100px;padding:6px 20px;border:1px} rendered as
+// a 100px border-box (spec: 142px, since 100 + 20*2 padding + 1*2 border = 142).
+
+it('M7-T4 fix: inline-block declared width (box-sizing:content-box, the CSS default) converts to the correct border-box override', function () {
+    $frag = layoutHtml(
+        '<body><p>x <a class="btn">Y</a></p></body>',
+        '.btn { display: inline-block; width: 100px; padding: 6px 20px; border: 1px solid #000000; background-color: #ff00ff; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $btn = findBoxByBackground($p, '#ff00ff');
+    expect($btn)->not->toBeNull();
+    assert($btn instanceof BoxFragment);
+    // content-box (default): declared width IS the content width -- border-box override passed to
+    // BlockFlowContext must be 100 (content) + 20*2 (padding) + 1*2 (border) = 142.
+    expect($btn->rect->width)->toBe(142.0);
+});
+
+it('M7-T4 fix: inline-block declared width with box-sizing:border-box passes through unchanged (declared width IS the border-box width)', function () {
+    $frag = layoutHtml(
+        '<body><p>x <a class="btn">Y</a></p></body>',
+        '.btn { display: inline-block; width: 100px; padding: 6px 20px; border: 1px solid #000000; box-sizing: border-box; background-color: #ff00ff; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $btn = findBoxByBackground($p, '#ff00ff');
+    expect($btn)->not->toBeNull();
+    assert($btn instanceof BoxFragment);
+    expect($btn->rect->width)->toBe(100.0);
+});
+
+it('M7-T4 fix: inline-block declared % width (content-box) is resolved against availableWidth THEN converted to border-box (same root cause as the px case)', function () {
+    $frag = layoutHtml(
+        '<body><p><a class="btn">Y</a></p></body>',
+        '.btn { display: inline-block; width: 50%; padding: 10px; background-color: #ff00ff; }',
+        200.0,
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $btn = findBoxByBackground($p, '#ff00ff');
+    expect($btn)->not->toBeNull();
+    assert($btn instanceof BoxFragment);
+    // 50% of the <p> content width (200, no margins/padding of its own in this fixture) = 100
+    // content width + 10*2 padding (no border declared) = 120 border-box.
+    expect($btn->rect->width)->toBe(120.0);
+});
+
+// --- M7-T4 code review Finding 2: an empty inline box with a visible box must still PAINT ------
+// Bug: closeLine()'s `hasContent` gate silently dropped an InlineBoxFragment for a completely
+// empty inline element (<span class="tag"></span>, no text/children between open and close) even
+// when it declares a visible background/padding/border -- adjudicated: CSS 2.2 says an empty
+// inline box still generates its own box (width = horizontal paddings, minimal line participation).
+// InlineBoxStart/InlineBoxEnd only ever reach InlineFlowContext for a box BoxTreeBuilder already
+// confirmed visible (ver BoxTreeBuilder::hasVisibleInlineBox()), so the extra hasContent check was
+// both redundant AND the bug: it discarded exactly the "no content" case that must still paint.
+
+it('M7-T4 fix: an empty inline span with a visible box (bg+padding) still emits ONE InlineBoxFragment (CSS: an empty inline box still generates a box)', function () {
+    $frag = layoutHtml(
+        '<body><p>before<span class="tag"></span>after</p></body>',
+        '.tag { background-color: #cccccc; padding: 0 5px; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $boxes = inlineBoxFragments($p);
+    expect($boxes)->toHaveCount(1);
+    $box = $boxes[0];
+    // Width = padding-left + padding-right only (no content, no border declared here) -- exactly
+    // what a "populated" box's rect already computes naturally with zero-width content, ver
+    // InlineFlowContext::closeLine().
+    expect($box->rect->width)->toEqualWithDelta(10.0, 0.001);
+    expect($box->isFirstSlice)->toBeTrue();
+    expect($box->isLastSlice)->toBeTrue();
+    expect($box->background)->not->toBeNull();
+    expect(hexColor($box->background))->toBe('#cccccc');
+
+    // The empty box still occupies real horizontal advance (its padding) -- "after" starts right
+    // where the box's right edge sits, immediately following "before" via the box's left edge.
+    $lines = textFragments($p);
+    [$before, $after] = $lines;
+    expect($before->text)->toBe('before');
+    expect($after->text)->toBe('after');
+    expect($box->rect->x)->toEqualWithDelta($before->rect->right(), 0.001);
+    expect($after->rect->x)->toEqualWithDelta($box->rect->right(), 0.001);
+});
+
+it('M7-T4 fix: an empty inline span WITHOUT any visible box stays on the fast path (byte-stable, nothing emitted)', function () {
+    $frag = layoutHtml(
+        '<body><p>before<span></span>after</p></body>',
+        '',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    expect(inlineBoxFragments($p))->toBe([]);
+    $lines = textFragments($p);
+    // Pre-existing collapse() behavior (unrelated to this fix, see BoxTreeBuilder::collapse()):
+    // an invisible span contributes NEITHER InlineBoxStart NOR InlineBoxEnd to the token sequence
+    // (fast path), so nothing separates "before" and "after" -- they merge into a single TextRun,
+    // exactly as if the empty <span></span> were not there at all (byte-stable, no box fragment).
+    expect($lines)->toHaveCount(1);
+    expect($lines[0]->text)->toBe('beforeafter');
+});
+
+it('M7-T4 fix: an empty inline box ALONE on a line (no other text/atomic content) gives the line its own strut height, from the box\'s own font-size', function () {
+    $frag = layoutHtml(
+        '<body><p><span class="tag"></span></p></body>',
+        '.tag { background-color: #cccccc; padding: 0 5px; font-size: 40px; }',
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $boxes = inlineBoxFragments($p);
+    expect($boxes)->toHaveCount(1);
+    $box = $boxes[0];
+    // No text/atomic entry exists on this line to derive lineHeight from -- the empty box's own
+    // font-size (1.2x convention, ver TextMeasurer::lineHeight()) is the ONLY thing giving this
+    // line a height (documented fallback, ver InlineFlowContext::closeLine()).
+    expect($box->rect->height)->toEqualWithDelta(48.0, 0.001);
+});
