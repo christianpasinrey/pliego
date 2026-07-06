@@ -6,6 +6,7 @@ namespace Pliego\Page;
 
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 
@@ -79,6 +80,10 @@ final readonly class Paginator
                 $leaf->underline,
             ),
             $leaf instanceof BoxFragment => new BoxFragment($rect, $leaf->background, [], $leaf->borders),
+            // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
+            // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se
+            // queda cruzando el límite sin pushear, documentado en el brief).
+            $leaf instanceof ImageFragment => new ImageFragment($rect, $leaf->imageKey),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };
     }

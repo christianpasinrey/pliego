@@ -17,4 +17,11 @@ interface Canvas
 
     /** Segmento recto de $widthPx de grosor, en px CSS (p.ej. subrayado bajo la baseline). */
     public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void;
+
+    /**
+     * Pinta la imagen de $imageKey (ruta ya resuelta y verificada, ver ImageFragment) dentro de
+     * $rectPx (content box del replaced element, px CSS). M3-T4: dedup por $imageKey delegado en
+     * Pdf\ImageRegistry — pintar la misma imagen varias veces solo escribe un XObject.
+     */
+    public function drawImage(Rect $rectPx, string $imageKey): void;
 }

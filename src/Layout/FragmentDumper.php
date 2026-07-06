@@ -10,6 +10,7 @@ use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 
@@ -32,6 +33,7 @@ final class FragmentDumper
         return match (true) {
             $fragment instanceof TextFragment => $this->dumpText($fragment),
             $fragment instanceof BoxFragment => $this->dumpBox($fragment),
+            $fragment instanceof ImageFragment => $this->dumpImage($fragment),
             default => throw new \LogicException('Unknown fragment type: ' . $fragment::class),
         };
     }
@@ -81,6 +83,22 @@ final class FragmentDumper
             'faceKey' => $fragment->faceKey,
             'underline' => $fragment->underline,
             'baselineY' => round($fragment->baselineY, 2),
+        ];
+    }
+
+    /**
+     * M3-T3: imageKey vuelca solo el basename() de la ruta, NUNCA la ruta completa — el imageKey
+     * real es un path absoluto (basePath del Engine + src), que varía por máquina/checkout y
+     * rompería el golden en cualquier otro entorno (mandato explícito del brief: "goldens
+     * machine-independent").
+     * @return array<string, mixed>
+     */
+    private function dumpImage(ImageFragment $fragment): array
+    {
+        return [
+            'type' => 'image',
+            'rect' => $this->rect($fragment->rect),
+            'imageKey' => basename($fragment->imageKey),
         ];
     }
 

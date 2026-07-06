@@ -7,6 +7,48 @@ parameters:
 			path: tests/EndToEnd/ItinerarySkeletonTest.php
 
 		-
+			message: '#^Cannot access offset 0 on array\{0\: int\<0, max\>, 1\: int\<0, max\>, 2\: int, 3\: string, mime\: string, channels\?\: int, bits\?\: int\}\|false\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: tests/EndToEnd/ItineraryWithPhotosTest.php
+
+		-
+			message: '#^Cannot access offset 1 on array\{0\: int\<0, max\>, 1\: int\<0, max\>, 2\: int, 3\: string, mime\: string, channels\?\: int, bits\?\: int\}\|false\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: tests/EndToEnd/ItineraryWithPhotosTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 2
+			path: tests/EndToEnd/ItineraryWithPhotosTest.php
+
+		-
+			message: '#^Parameter \#2 \$red of function imagecolorallocate expects int\<0, 255\>, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/ItineraryWithPhotosTest.php
+
+		-
+			message: '#^Parameter \#3 \$green of function imagecolorallocate expects int\<0, 255\>, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/ItineraryWithPhotosTest.php
+
+		-
+			message: '#^Parameter \#6 \$color of function imageline expects int, int\<0, max\>\|false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/EndToEnd/ItineraryWithPhotosTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/MarginBoxTest.php
+
+		-
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, non\-empty\-string, non\-empty\-string\}\.$#'
 			identifier: offsetAccess.notFound
 			count: 1
@@ -17,6 +59,12 @@ parameters:
 			identifier: offsetAccess.notFound
 			count: 1
 			path: tests/EndToEnd/PageRuleTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 2
+			path: tests/EndToEnd/RenderTest.php
 
 		-
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
@@ -59,6 +107,24 @@ parameters:
 			identifier: method.nonObject
 			count: 2
 			path: tests/Unit/Css/LengthTest.php
+
+		-
+			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$loader\.$#'
+			identifier: property.notFound
+			count: 11
+			path: tests/Unit/Image/ImageLoaderTest.php
+
+		-
+			message: '#^Cannot call method load\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 10
+			path: tests/Unit/Image/ImageLoaderTest.php
+
+		-
+			message: '#^Cannot call method widthPx\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 2
+			path: tests/Unit/Image/ImageLoaderTest.php
 
 		-
 			message: '#^Binary operation "\+" between mixed and 4\.0 results in an error\.$#'
@@ -303,6 +369,18 @@ parameters:
 		-
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
 			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/Unit/Pdf/ImageRegistryTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<int\<0, max\>\|false\|null\>\:\:toBeLessThan\(\) expects DateTimeInterface\|float\|int\|string, int\<0, max\>\|false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Pdf/ImageRegistryTest.php
+
+		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
+			identifier: offsetAccess.notFound
 			count: 3
 			path: tests/Unit/Pdf/PdfWriterTest.php
 
@@ -367,6 +445,12 @@ parameters:
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
+			message: '#^Cannot access property \$height on mixed\.$#'
+			identifier: property.nonObject
+			count: 4
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
 			message: '#^Cannot access property \$isPercent on mixed\.$#'
 			identifier: property.nonObject
 			count: 1
@@ -382,6 +466,12 @@ parameters:
 			message: '#^Cannot access property \$paddingLeft on mixed\.$#'
 			identifier: property.nonObject
 			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$px on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -423,13 +513,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 29
+			count: 33
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 27
+			count: 31
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

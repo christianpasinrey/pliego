@@ -19,7 +19,7 @@ if (PHP_SAPI === 'cli') {
     HTML;
     $css = 'h1 { font-size: 28px; color: #8b5e34; margin: 0 0 16px 0 }
     p { margin: 0 0 10px 0 } .box { background-color: #eee; padding: 14px }';
-    $report = Engine::make()->stylesheet($css)->margins(Length::px(60))->render($html)->save('out.pdf');
+    $report = Engine::make()->basePath(__DIR__)->stylesheet($css)->margins(Length::px(60))->render($html)->save('out.pdf');
     echo "out.pdf generado — {$report->pageCount} página(s), " . count($report->warnings) . " warning(s)\n";
     exit(0);
 }
@@ -31,7 +31,7 @@ if ($action === 'pdf' || $action === 'download' || $action === 'report') {
     $html = (string) ($_POST['html'] ?? '');
     $css = (string) ($_POST['css'] ?? '');
     try {
-        $engine = Engine::make()->stylesheet($css)->margins(Length::px(48));
+        $engine = Engine::make()->basePath(__DIR__)->stylesheet($css)->margins(Length::px(48));
         $start = microtime(true);
         $stream = fopen('php://temp', 'r+b');
         assert($stream !== false);
@@ -83,6 +83,7 @@ $sampleHtml = <<<'HTML'
   <div class="band">Itinerario</div>
 
   <div class="card">
+    <img src="playground-assets/sample-photo.jpg" width="120">
     <p class="day"><strong>Sarria</strong> — <em>Giorno 1</em></p>
     <p class="data">Data: 19/09/2026 · Pernottamento a <u>Sarria</u></p>
     <p>Una volta arrivato a Sarria, ti consigliamo di visitare la città e di goderti

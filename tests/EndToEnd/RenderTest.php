@@ -81,6 +81,112 @@ it('registers an extra font family via ->font() and embeds it only when referenc
     expect(substr_count($pdf2, '/Subtype /Type0'))->toBe(2);
 });
 
+it('resolves relative <img> src against ->basePath() and renders a valid PDF (M3-T2)', function () {
+    // M3-T3 aún no consume ImageBox en layout (ver BlockFlowContext), así que esto solo verifica
+    // el wiring Engine -> BoxTreeBuilder -> WarningCollector -> RenderReport: 0 warnings cuando la
+    // imagen se resuelve y carga correctamente contra basePath.
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-ok.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny.jpg"></body>')
+        ->save($path);
+    expect($report->warnings)->toBe([]);
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});
+
+it('reports a missing/remote <img> src as a soft warning, PDF still valid (M3-T2)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-missing.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="does-not-exist.png"><img src="https://example.com/a.jpg"></body>')
+        ->save($path);
+    expect($report->warnings)->toHaveCount(2);
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});
+
+it('reports a truncated-IDAT PNG (short after inflate) as a soft warning, PDF still valid (M3 final-review)', function () {
+    // A PNG with a valid IHDR + a valid zlib stream that inflates to fewer bytes than
+    // height*(stride+1) requires -- PngImage::fromBytes() must throw ImageException instead of
+    // letting the raw offset run past the string end (see PngImageTest's dedicated unit test),
+    // and the ImageException must surface here as a normal warning + still-valid PDF, same soft
+    // failure contract as the missing/remote cases above.
+    $width = 2;
+    $height = 2;
+    $ihdr = pack('N', $width) . pack('N', $height) . chr(8) . chr(2) . chr(0) . chr(0) . chr(0);
+    $shortRaw = str_repeat("\x00", 7); // needs 2 * (1 + 2*3) = 14 bytes, only 7 supplied
+    $idatData = (string) zlib_encode($shortRaw, ZLIB_ENCODING_DEFLATE);
+    $chunk = static fn(string $type, string $data): string => pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
+    $bytes = "\x89PNG\r\n\x1a\n" . $chunk('IHDR', $ihdr) . $chunk('IDAT', $idatData) . $chunk('IEND', '');
+
+    $pngPath = sys_get_temp_dir() . '/pliego-e2e-truncated-idat.png';
+    file_put_contents($pngPath, $bytes);
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-truncated.pdf';
+    try {
+        $report = Engine::make()
+            ->basePath(sys_get_temp_dir())
+            ->render('<body><img src="pliego-e2e-truncated-idat.png"></body>')
+            ->save($path);
+    } finally {
+        unlink($pngPath);
+    }
+
+    expect($report->warnings)->toHaveCount(1);
+    expect($report->warnings[0])->toContain('PNG data truncated');
+    $pdf = (string) file_get_contents($path);
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/startxref\n(\d+)\n%%EOF\s*$/', $pdf, $m))->toBe(1);
+    expect(substr($pdf, (int) $m[1], 4))->toBe('xref');
+});
+
+it('paints a <img src="..."> JPEG as an image XObject, in a structurally valid PDF (M3-T4)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-paint.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny.jpg"></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($report->warnings)->toBe([]);
+    // Structurally valid PDF: header + a well-formed xref/trailer (same technique as RenderTest's
+    // other structural checks / PdfWriterTest).
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/startxref\n(\d+)\n%%EOF\s*$/', $pdf, $m))->toBe(1);
+    expect(substr($pdf, (int) $m[1], 4))->toBe('xref');
+
+    expect($pdf)->toContain('/Type /XObject')->toContain('/Subtype /Image')->toContain('/Filter /DCTDecode');
+    expect($pdf)->toContain(' cm /Im1 Do Q');
+});
+
+it('dedups the same <img src> referenced 3 times into a single image XObject (M3-T4)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-dedup.pdf';
+    Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny.jpg"><img src="tiny.jpg"><img src="tiny.jpg"></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect(substr_count($pdf, '/Subtype /Image'))->toBe(1); // one XObject definition...
+    expect(substr_count($pdf, '/Im1 Do'))->toBe(3);          // ...Do-ed 3 times
+});
+
+it('paints an RGBA PNG with alpha as a DeviceRGB XObject plus its own DeviceGray SMask XObject, through the full Engine pipeline (M3-T5)', function () {
+    // T4's ImageRegistryTest already covers this at the registry level (unit test, PdfWriter
+    // wired by hand); this is the same assertion driven end-to-end through Engine::render() —
+    // HtmlParser -> BoxTreeBuilder -> BlockFlowContext -> Painter -> PdfCanvas -> ImageRegistry.
+    $path = sys_get_temp_dir() . '/pliego-e2e-image-rgba.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->render('<body><img src="tiny-rgba-paeth.png"></body>')
+        ->save($path);
+    $pdf = (string) file_get_contents($path);
+
+    expect($report->warnings)->toBe([]);
+    expect($pdf)->toStartWith('%PDF-1.7');
+    expect(preg_match('/\/SMask (\d+) 0 R/', $pdf, $m))->toBe(1);
+    expect($pdf)->toContain('/ColorSpace /DeviceGray'); // the SMask's own colorspace
+    expect($pdf)->toContain('/ColorSpace /DeviceRGB');  // the main image's colorspace
+});
+
 it('paints solid borders as filled rects beyond the background, in css-backgrounds-3 painting order (M2-T5)', function () {
     // Una única caja con fondo + borde uniforme visible en los 4 lados: 1 "re f" para el fondo
     // + 4 "re f" para los lados del borde (Painter::paintBorders). Nada más en el documento

@@ -22,10 +22,12 @@ namespace Pliego\Pdf;
  *      and writes the resulting Form XObject objects. Builders typically call
  *      `FontEmbedder::encode()` while composing their text, which registers glyphs into that
  *      font's subset — so this step MUST run before...
- *   2. `FontRegistry::flushAll()` — writes the font objects (subset now includes every glyph
- *      used by margin-box labels, because step 1 already ran).
+ *   2. `FontRegistry::flushAll()` and `Image\ImageRegistry::flushAll()` (M3-T4) — write the font
+ *      objects (subset now includes every glyph used by margin-box labels, because step 1 already
+ *      ran) and the image XObjects (+ SMasks) for every image actually drawn. Neither depends on
+ *      the other — they can run in either order relative to each other — but both must run before...
  *   3. `finish()` — writes the pages tree, catalog and xref. Assumes every other object (deferred
- *      XObjects included) is already written.
+ *      XObjects and image XObjects included) is already written.
  *
  * `writeDeferred()` is only required when `defer()` was actually used — callers with no margin
  * boxes never call either and `finish()` behaves exactly as before T7 (backward compatible).

@@ -8,6 +8,7 @@ use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\FragmentDumper;
 use Pliego\Layout\Geometry\Rect;
@@ -117,5 +118,17 @@ it('dumps a text fragment with underline true', function () {
         'faceKey' => 'default:700:italic',
         'underline' => true,
         'baselineY' => 15.36,
+    ]);
+});
+
+it('dumps an image fragment with the imageKey reduced to its basename (M3-T3: machine-independent goldens)', function () {
+    $image = new ImageFragment(new Rect(1.234, 2.346, 40.004, 30.006), '/some/machine/specific/path/photo.jpg');
+
+    $dump = new FragmentDumper()->dump($image);
+
+    expect($dump)->toBe([
+        'type' => 'image',
+        'rect' => [1.23, 2.35, 40.0, 30.01],
+        'imageKey' => 'photo.jpg',
     ]);
 });

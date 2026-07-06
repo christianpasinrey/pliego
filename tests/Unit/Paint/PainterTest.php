@@ -7,6 +7,7 @@ use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
@@ -41,6 +42,11 @@ final class RecordingCanvas implements Canvas
     public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void
     {
         $this->calls[] = sprintf('line(%.2F,%.2F,%.2F,%.2F,%.2F)', $x1, $y1, $x2, $y2, $widthPx);
+    }
+
+    public function drawImage(Rect $rect, string $imageKey): void
+    {
+        $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey);
     }
 }
 
@@ -218,4 +224,19 @@ it('skips border painting entirely when the box has no visible border side', fun
     $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none())]);
     new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([]);
+});
+
+it('paints an ImageFragment via Canvas::drawImage(), in document order between backgrounds and text (M3-T4)', function () {
+    $canvas = new RecordingCanvas();
+    $page = new Page(1, [
+        new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none()),
+        new ImageFragment(new Rect(10, 10, 40, 30), '/tmp/tiny.jpg'),
+        new TextFragment(new Rect(10, 50, 50, 19.2), 'Hola', 60.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)',
+        'image(10.00,10.00,40.00,30.00,/tmp/tiny.jpg)',
+        'text(Hola)',
+    ]);
 });
