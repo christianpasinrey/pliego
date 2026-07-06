@@ -141,31 +141,31 @@ parameters:
 		-
 			message: '#^Cannot access property \$height on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 5
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$rect on mixed\.$#'
 			identifier: property.nonObject
-			count: 12
+			count: 20
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$width on mixed\.$#'
 			identifier: property.nonObject
-			count: 1
+			count: 3
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$x on mixed\.$#'
 			identifier: property.nonObject
-			count: 2
+			count: 4
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
 			message: '#^Cannot access property \$y on mixed\.$#'
 			identifier: property.nonObject
-			count: 6
+			count: 8
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-

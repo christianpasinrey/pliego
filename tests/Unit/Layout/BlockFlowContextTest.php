@@ -409,3 +409,27 @@ it('advances the cursor for the next sibling using the image margin-bottom, like
     expect($img->rect->height)->toBe(20.0);
     expect($p->rect->y)->toBe(20.0 + 15.0);
 });
+
+// M4-T2: BoxTreeBuilder envuelve el texto de un contenedor flex en un BlockBox anónimo
+// (tag "anonymous", estilo heredado del contenedor). BlockFlowContext todavía no distingue
+// Display::Flex (M4-T4 lo hará): el contenedor sigue fluyendo como un bloque normal, y su hijo
+// anónimo es, a su vez, otro bloque normal sin margin/padding/border propios. A/B: el texto
+// dentro de un contenedor flex debe producir EXACTAMENTE la misma geometría que el mismo texto
+// sin el wrapper anónimo (un <div> normal) — el envoltorio no debe filtrar ningún desplazamiento.
+it('renders identical text geometry whether wrapped in an anonymous flex item or not (M4-T2 A/B)', function () {
+    $flexFrag = layoutHtml('<body><div class="flex">hola mundo</div></body>', '.flex { display: flex }');
+    $plainFrag = layoutHtml('<body><div>hola mundo</div></body>', '');
+
+    $flexText = textFragments($flexFrag)[0];
+    $plainText = textFragments($plainFrag)[0];
+
+    expect($flexText->rect->x)->toBe($plainText->rect->x);
+    expect($flexText->rect->y)->toBe($plainText->rect->y);
+    expect($flexText->rect->width)->toBe($plainText->rect->width);
+    expect($flexText->rect->height)->toBe($plainText->rect->height);
+
+    $flexDiv = $flexFrag->children[0];
+    $plainDiv = $plainFrag->children[0];
+    assert($flexDiv instanceof BoxFragment && $plainDiv instanceof BoxFragment);
+    expect($flexDiv->rect)->toEqual($plainDiv->rect);
+});
