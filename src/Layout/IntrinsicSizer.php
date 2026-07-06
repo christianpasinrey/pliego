@@ -54,10 +54,22 @@ use Pliego\Text\FontFace;
  * propio de la imagen (box-sizing: border-box reinterpreta solo el width DECLARADO EN CSS, igual
  * que BlockFlowContext::resolveReplacedSize() — divergencia con M3: aquí NUNCA se deriva el ancho
  * a partir del alto/ratio, ni se aplica el tope al containing block, porque no existe uno).
+ *
+ * BUGFIX post-review (M5-T4, "nested table collapses its column to zero width"): TableBox YA NO
+ * se salta — tiene su propio min/max-content real (ver sizeTable()), igual criterio "width
+ * declarado corta la recursión" que sizeBlock() (css-sizing-3 §4), y si no hay uno, la suma de los
+ * extents por columna (ver ColumnExtentsCalculator, la misma aritmética que
+ * TableFormattingContext usa para su propio algoritmo de columnas auto) más el border-spacing
+ * total y el padding/borde propios de la tabla. Antes de este fix, una celda cuyo ÚNICO contenido
+ * era una TableBox anidada aportaba 0 al max/min-content de esa celda (el "skip, documented, no
+ * crash" original de M5-T3/T4) — en una tabla ancestro de 2+ columnas, esa columna recibía 0/Σmax
+ * de reparto (TableFormattingContext::distributeAutoWidths()) mientras sus hermanas SÍ tenían
+ * contenido, colapsando su ancho a 0 y solapando la tabla anidada con la columna vecina.
  */
 final class IntrinsicSizer
 {
     private BreakFinder $breakFinder;
+    private ?ColumnExtentsCalculator $columnExtents = null;
 
     public function __construct(
         private TextMeasurer $measurer,
@@ -66,20 +78,71 @@ final class IntrinsicSizer
         $this->breakFinder = new BreakFinder();
     }
 
-    public function maxContentWidth(BlockBox|ImageBox $box): float
+    public function maxContentWidth(BlockBox|ImageBox|TableBox $box): float
     {
         if ($box instanceof ImageBox) {
             return $this->usedImageWidth($box);
+        }
+        if ($box instanceof TableBox) {
+            return $this->sizeTable($box, max: true);
         }
         return $this->sizeBlock($box, max: true);
     }
 
-    public function minContentWidth(BlockBox|ImageBox $box): float
+    public function minContentWidth(BlockBox|ImageBox|TableBox $box): float
     {
         if ($box instanceof ImageBox) {
             return $this->usedImageWidth($box);
         }
+        if ($box instanceof TableBox) {
+            return $this->sizeTable($box, max: false);
+        }
         return $this->sizeBlock($box, max: false);
+    }
+
+    /**
+     * css-sizing-3 §4 aplicado a una TableBox: un width propio declarado en px corta la recursión
+     * EXACTAMENTE igual que en sizeBlock() (mismo bloque de código, duplicado a propósito — ver el
+     * comentario de esa rama en sizeBlock() para el razonamiento completo, no repetido aquí). Sin
+     * uno, el contenido "real" de una tabla en el sentido de min/max-content es la suma de los
+     * extents por columna (ColumnExtentsCalculator::extentsFor(), MISMA aritmética que
+     * TableFormattingContext::layout() usa para decidir el ancho auto de la tabla) más el
+     * border-spacing total (borderSpacing×(cols+1), separated model §17.6.1 — igual fórmula que
+     * TableFormattingContext::layout()), más el padding/borde horizontal PROPIO de la tabla (igual
+     * criterio que cualquier BlockBox).
+     */
+    private function sizeTable(TableBox $table, bool $max): float
+    {
+        $style = $table->style;
+        [$borderPaddingLeft, $borderPaddingRight] = $this->borderPaddingX($style);
+
+        $declaredWidth = $style->width;
+        if ($declaredWidth !== null && !$declaredWidth->isPercent) {
+            $widthPx = $declaredWidth->value;
+            return $style->boxSizing === 'border-box'
+                ? $widthPx
+                : $widthPx + $borderPaddingLeft + $borderPaddingRight;
+        }
+
+        [$colMax, $colMin] = $this->columnExtents()->extentsFor($table);
+        $cols = count($colMax);
+        $spacingTotal = $style->borderSpacingPx * ($cols + 1);
+        $columnsExtent = array_sum($max ? $colMax : $colMin);
+
+        return $columnsExtent + $spacingTotal + $borderPaddingLeft + $borderPaddingRight;
+    }
+
+    /**
+     * Inyección perezosa (mismo patrón "roto por autocreación diferida" que
+     * BlockFlowContext::tableContext()/flexContext(), ver sus docblocks): ColumnExtentsCalculator
+     * necesita un IntrinsicSizer para medir el contenido de cada celda (ver su propio docblock de
+     * clase), así que esta instancia no puede pasarse a sí misma DENTRO de su propio constructor —
+     * se autocrea la PRIMERA vez que sizeTable() la necesita, cuando $this ya está completamente
+     * construido.
+     */
+    private function columnExtents(): ColumnExtentsCalculator
+    {
+        return $this->columnExtents ??= new ColumnExtentsCalculator($this);
     }
 
     private function sizeBlock(BlockBox $box, bool $max): float
@@ -163,17 +226,9 @@ final class IntrinsicSizer
                 continue;
             }
             $flush();
-            // M5-T3/T4: una TableBox hija de un BLOQUE GENÉRICO (no de una celda — ver
-            // TableFormattingContext::cellMaxContent()/cellMinContent(), que sí le dan a una
-            // TableBox de CELDA un min/max-content propio vía esta misma clase) sigue sin aportar
-            // nada a este máximo — se ignora, mismo patrón "skip, documented, no crash" que
-            // BlockFlowContext aplica en su bucle de layout. Gap conocido y documentado, no
-            // cubierto por ningún test requerido de M5: una tabla anidada dentro de un bloque
-            // normal (o dentro de una celda, vía la misma ruta) no ensancha el max-content de ese
-            // contenedor aunque su propio contenido sea más ancho.
-            if ($child instanceof TableBox) {
-                continue;
-            }
+            // M5-T4 (bugfix): una TableBox hija de un BLOQUE GENÉRICO ya no se salta -- tiene su
+            // propio max-content real (ver sizeTable()), tratada exactamente igual que cualquier
+            // otro hijo BlockBox|ImageBox de esta caja (su propio ancho + sus márgenes propios).
             $best = max($best, $this->maxContentWidth($child) + $this->marginsX($child->style));
         }
         $flush();
@@ -194,10 +249,8 @@ final class IntrinsicSizer
                 // run (ver docblock de clase), y un <br> no es un TextRun.
                 continue;
             }
-            // M5-T3/T4: ver el comentario análogo en maxContentOfChildren().
-            if ($child instanceof TableBox) {
-                continue;
-            }
+            // M5-T4 (bugfix): ver el comentario análogo en maxContentOfChildren() -- una TableBox
+            // hija ya no se salta, tiene su propio min-content real (ver sizeTable()).
             $best = max($best, $this->minContentWidth($child) + $this->marginsX($child->style));
         }
         return $best;

@@ -16,6 +16,7 @@ use Pliego\Css\WarningCollector;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
+use Pliego\Layout\FragmentDumper;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\IntrinsicSizer;
 use Pliego\Layout\TableFormattingContext;
@@ -378,9 +379,10 @@ it('lays out a table nested inside a cell via BlockFlowContext delegation, no cr
     $innerRow = new TableRowBox(tableStyle(), [$innerCell], false);
     $innerTable = new TableBox(tableStyle(), [$innerRow], 'table');
 
-    // Outer table declares its own width so the outer cell gets a real (non-degenerate) column
-    // width regardless of the documented gap where a nested TableBox contributes 0 to its
-    // containing cell's own intrinsic sizing (see IntrinsicSizer::maxContentOfChildren()).
+    // Outer table declares its own width -- kept from before the bugfix that gave a nested
+    // TableBox its own real intrinsic size (see IntrinsicSizer::sizeTable()); this single-column
+    // table would get a real width from that fix alone too, but the declared width keeps this
+    // test focused on the delegation/no-crash behavior it was written for, not column sizing.
     $outerCell = new TableCellBox(tableStyle(), [$innerTable], 1, 'td');
     $outerRow = new TableRowBox(tableStyle(), [$outerCell], false);
     $outerTable = new TableBox(tableStyle(['width' => LengthPercentage::px(200.0)]), [$outerRow], 'table');
@@ -402,6 +404,78 @@ it('lays out a table nested inside a cell via BlockFlowContext delegation, no cr
     $innerTextFrag = $innerCellFrag->children[0];
     assert($innerTextFrag instanceof TextFragment);
     expect($innerTextFrag->text)->toBe('inner');
+});
+
+// --- bugfix (post-review): a nested-table-only cell no longer collapses its column to 0 ---------
+
+// Reviewer's exact overlap probe: a 2-column table where col0's ONLY content is a nested table
+// (no other text/block sibling in that cell) and col1 is plain text. Before the fix, IntrinsicSizer
+// skipped TableBox entirely when measuring a cell's own intrinsic content, so col0's max-content
+// was 0 -- in TableFormattingContext::distributeAutoWidths()'s proportional-surplus branch, a 0 max
+// against a non-zero sibling max means a 0 SHARE of the surplus too, so col0 collapsed to exactly
+// 0 width while col1 took the entire table. The nested table then painted at col0's x (0), which
+// was ALSO col1's x (since col0 had 0 width) -- a direct visual overlap.
+it('a nested-table-only cell gets the nested table\'s real intrinsic width instead of collapsing its column to zero (reviewer overlap probe)', function () {
+    $innerText = new TextRun('nested wide text here', tableStyle());
+    $innerCell = new TableCellBox(tableStyle(), [$innerText], 1, 'td');
+    $innerRow = new TableRowBox(tableStyle(), [$innerCell], false);
+    $innerTable = new TableBox(tableStyle(), [$innerRow], 'table');
+
+    $col0Cell = new TableCellBox(tableStyle(), [$innerTable], 1, 'td');
+    $col1Text = new TextRun('col1 text', tableStyle());
+    $col1Cell = new TableCellBox(tableStyle(), [$col1Text], 1, 'td');
+    $row = new TableRowBox(tableStyle(), [$col0Cell, $col1Cell], false);
+
+    // Declare the OUTER table's width as exactly the sum of the two columns' natural max-content
+    // (computed independently below via the same IntrinsicSizer, not the code under test) so
+    // distributeAutoWidths() takes its "Σmax <= available, no surplus" branch and returns colMax
+    // UNCHANGED -- letting this test assert EXACT widths instead of only "greater than zero".
+    $expectedCol0Max = $this->sizer->maxContentWidth($innerTable);
+    $expectedCol1Max = $this->measurer->widthOf('col1 text', $this->face, 16.0);
+    expect($expectedCol0Max)->toBeGreaterThan(0.0); // sanity: the fix must produce a REAL width here
+    $declaredWidth = $expectedCol0Max + $expectedCol1Max;
+    $table = new TableBox(tableStyle(['width' => LengthPercentage::px($declaredWidth)]), [$row], 'table');
+
+    $frag = $this->ctx->layout($table, new Rect(0.0, 0.0, 1000.0, INF));
+    $dump = new FragmentDumper()->dump($frag);
+
+    [$rowFrag] = $frag->children;
+    assert($rowFrag instanceof BoxFragment);
+    [$col0Frag, $col1Frag] = $rowFrag->children;
+    assert($col0Frag instanceof BoxFragment && $col1Frag instanceof BoxFragment);
+
+    // col0 gets the nested table's real intrinsic width, not 0.
+    expect($col0Frag->rect->width)->toEqualWithDelta($expectedCol0Max, 0.001);
+    expect($col1Frag->rect->width)->toEqualWithDelta($expectedCol1Max, 0.001);
+
+    // No overlap between the two columns: col0's border-box ends exactly where col1 begins.
+    expect($col0Frag->rect->right())->toBeLessThanOrEqual($col1Frag->rect->x);
+
+    [$innerTableFrag] = $col0Frag->children;
+    assert($innerTableFrag instanceof BoxFragment);
+    [$innerRowFrag] = $innerTableFrag->children;
+    assert($innerRowFrag instanceof BoxFragment);
+    [$innerCellFrag] = $innerRowFrag->children;
+    assert($innerCellFrag instanceof BoxFragment);
+    $innerTextFrag = $innerCellFrag->children[0];
+    assert($innerTextFrag instanceof TextFragment);
+    $col1TextFrag = $col1Frag->children[0];
+    assert($col1TextFrag instanceof TextFragment);
+
+    // The nested table's own text sits strictly LEFT of col1's text -- not at the same x, the
+    // exact symptom the reviewer reported ("nested text at same x as col1").
+    expect($innerTextFrag->rect->x)->toBeLessThan($col1TextFrag->rect->x);
+
+    // Same assertions again, but via FragmentDumper's plain-array rects (task requirement): the
+    // dumped rect tuple is [x, y, width, height].
+    $rowDump = $dump['children'][0];
+    $col0Dump = $rowDump['children'][0];
+    $col1Dump = $rowDump['children'][1];
+    expect($col0Dump['rect'][2])->toBeGreaterThan(0.0);
+
+    $nestedTextDump = $col0Dump['children'][0]['children'][0]['children'][0];
+    $col1TextDump = $col1Dump['children'][0];
+    expect($nestedTextDump['rect'][0])->toBeLessThan($col1TextDump['rect'][0]);
 });
 
 // --- row fragments stay atomic:false for now (T5 flips this) / rows never paint their own border

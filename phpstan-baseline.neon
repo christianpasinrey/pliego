@@ -519,19 +519,19 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$face\.$#'
 			identifier: property.notFound
-			count: 22
+			count: 31
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
 			identifier: property.notFound
-			count: 26
+			count: 35
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$sizer\.$#'
 			identifier: property.notFound
-			count: 30
+			count: 38
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
@@ -549,25 +549,25 @@ parameters:
 		-
 			message: '#^Binary operation "\+" between mixed and mixed results in an error\.$#'
 			identifier: binaryOp.invalid
-			count: 2
+			count: 4
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
 			message: '#^Cannot call method maxContentWidth\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 18
+			count: 23
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
 			message: '#^Cannot call method minContentWidth\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 11
+			count: 14
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
 			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 25
+			count: 34
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
@@ -591,25 +591,25 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$ctx\.$#'
 			identifier: property.notFound
-			count: 12
+			count: 13
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$face\.$#'
 			identifier: property.notFound
-			count: 20
+			count: 21
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$measurer\.$#'
 			identifier: property.notFound
-			count: 24
+			count: 25
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$sizer\.$#'
 			identifier: property.notFound
-			count: 3
+			count: 4
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
@@ -639,7 +639,7 @@ parameters:
 		-
 			message: '#^Binary operation "\+" between mixed and mixed results in an error\.$#'
 			identifier: binaryOp.invalid
-			count: 8
+			count: 9
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
@@ -661,6 +661,36 @@ parameters:
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
+			message: '#^Cannot access offset ''children'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 6
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset ''rect'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 3
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset 0 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 8
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset 1 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Cannot access offset 2 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
 			message: '#^Cannot access property \$atomic on mixed\.$#'
 			identifier: property.nonObject
 			count: 1
@@ -669,7 +699,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$children on mixed\.$#'
 			identifier: property.nonObject
-			count: 11
+			count: 12
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
@@ -693,19 +723,37 @@ parameters:
 		-
 			message: '#^Cannot call method layout\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 11
+			count: 12
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Cannot call method maxContentWidth\(\) on mixed\.$#'
+			identifier: method.nonObject
+			count: 1
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
 			message: '#^Cannot call method widthOf\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 19
+			count: 20
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-
 			message: '#^Cannot use array destructuring on mixed\.$#'
 			identifier: offsetAccess.nonArray
-			count: 11
+			count: 12
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$expected of method Pest\\Mixins\\Expectation\<mixed\>\:\:toBeLessThan\(\) expects DateTimeInterface\|float\|int\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
+			path: tests/Unit/Layout/TableFormattingContextTest.php
+
+		-
+			message: '#^Parameter \#1 \$fragment of method Pliego\\Layout\\FragmentDumper\:\:dump\(\) expects Pliego\\Layout\\Fragment\\Fragment, mixed given\.$#'
+			identifier: argument.type
+			count: 1
 			path: tests/Unit/Layout/TableFormattingContextTest.php
 
 		-

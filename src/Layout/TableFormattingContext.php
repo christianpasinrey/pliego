@@ -6,7 +6,6 @@ namespace Pliego\Layout;
 
 use Pliego\Box\BlockBox;
 use Pliego\Box\TableBox;
-use Pliego\Box\TableCellBox;
 use Pliego\Box\TableRowBox;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
@@ -42,22 +41,30 @@ use Pliego\Text\FontCatalog;
  * BlockFlowContext padre.
  *
  * Nº DE COLUMNAS (§17.2.1, sin rowspan — M6 lo difiere, ver TableCellBox): max de Σcolspan por
- * fila (ver columnCount()); sin necesidad de rastrear una grid de celdas ocupadas porque no hay
- * rowspan que desplace columnas entre filas — el índice de columna de una celda depende solo de
- * las celdas QUE LA PRECEDEN EN SU PROPIA FILA.
+ * fila (ver ColumnExtentsCalculator::columnCount()); sin necesidad de rastrear una grid de celdas
+ * ocupadas porque no hay rowspan que desplace columnas entre filas — el índice de columna de una
+ * celda depende solo de las celdas QUE LA PRECEDEN EN SU PROPIA FILA.
  *
  * AUTO (table-layout:auto, el default, o table-layout:fixed sin width declarado — ver más abajo):
  * min/max-content POR CELDA vía IntrinsicSizer sobre una BlockBox SINTÉTICA que envuelve
  * `$cell->children` con el propio ComputedStyle de la celda (más barato que añadir un método
  * dedicado a IntrinsicSizer para `list<...>` — su sizeBlock() YA suma el padding/borde propios de
  * ESE style, exactamente "cell intrinsic = children intrinsic + cell paddings + cell borders" sin
- * código adicional; ver cellMaxContent()/cellMinContent()). Por columna: max/min = el MAYOR entre
- * todas las celdas de span=1 que caen en esa columna (distintas filas pueden competir por la misma
- * columna, gana el máximo, nunca se suman). Una celda con colspan>1 reparte su EXCESO (lo que su
- * propio min/max supera a la suma de las columnas que abarca) entre esas columnas, proporcional al
- * max de single-span YA acumulado en cada una (partes iguales si todas están en 0) — la MISMA
- * ponderación para el exceso de max Y el de min (adjudicación del brief: no hay una ponderación
- * separada "por min" independiente). Ver autoColumnExtents().
+ * código adicional). Por columna: max/min = el MAYOR entre todas las celdas de span=1 que caen en
+ * esa columna (distintas filas pueden competir por la misma columna, gana el máximo, nunca se
+ * suman). Una celda con colspan>1 reparte su EXCESO (lo que su propio min/max supera a la suma de
+ * las columnas que abarca) entre esas columnas, proporcional al max de single-span YA acumulado en
+ * cada una (partes iguales si todas están en 0) — la MISMA ponderación para el exceso de max Y el
+ * de min (adjudicación del brief: no hay una ponderación separada "por min" independiente).
+ *
+ * BUGFIX post-review (M5-T4): este cálculo por columna vivía ENTERO en esta clase
+ * (autoColumnExtents()/cellMaxContent()/cellMinContent()/columnCount()) — ahora extraído,
+ * VERBATIM, a `ColumnExtentsCalculator` (ver su propio docblock para el porqué de la extracción:
+ * IntrinsicSizer necesitaba la MISMA aritmética para medir una TableBox como caja, sin poder
+ * depender de esta clase entera por el ciclo de constructores que crearía). Esta clase aloja una
+ * instancia propia ($columnExtents, construida en el constructor con el mismo $sizer que ya
+ * recibía) y la usa exactamente donde antes llamaba a sus métodos privados — sin cambio de
+ * comportamiento, solo de dueño del código.
  *
  * Ancho de tabla (auto): width declarado (resuelto contra el containing block, box-sizing
  * reinterpretado igual que un bloque normal) si lo hay; si no, el MENOR entre el ancho que un
@@ -103,6 +110,7 @@ use Pliego\Text\FontCatalog;
 final readonly class TableFormattingContext
 {
     private BlockFlowContext $blockFlow;
+    private ColumnExtentsCalculator $columnExtents;
 
     public function __construct(
         private TextMeasurer $measurer,
@@ -112,6 +120,7 @@ final readonly class TableFormattingContext
     ) {
         $this->blockFlow = new BlockFlowContext($measurer, $catalog, $warnings);
         $this->blockFlow->setTableContext($this);
+        $this->columnExtents = new ColumnExtentsCalculator($sizer);
     }
 
     private function warn(string $message): void
@@ -145,7 +154,7 @@ final readonly class TableFormattingContext
         $borderTop = $style->borderTop->widthPx;
         $borderBottom = $style->borderBottom->widthPx;
 
-        $cols = self::columnCount($table->rows);
+        $cols = ColumnExtentsCalculator::columnCount($table->rows);
         $borderSpacing = $style->borderSpacingPx;
         $spacingTotal = $borderSpacing * ($cols + 1);
 
@@ -163,7 +172,7 @@ final readonly class TableFormattingContext
             if ($style->tableLayout === 'fixed') {
                 $this->warn('table-layout: fixed without a declared width falls back to auto');
             }
-            [$colMax, $colMin] = $this->autoColumnExtents($table->rows, $cols);
+            [$colMax, $colMin] = $this->columnExtents->columnExtents($table->rows, $cols);
             $sumMax = array_sum($colMax);
             if ($declaredWidthPx !== null) {
                 $gridWidth = self::contentWidthFromDeclared($declaredWidthPx, $style->boxSizing, $paddingLeft, $paddingRight, $borderLeft, $borderRight);
@@ -200,105 +209,9 @@ final readonly class TableFormattingContext
     }
 
     /**
-     * css-tables-3 §2 / CSS 2.2 §17.2.1: max Σcolspan por fila (sin rowspan, ver docblock de clase).
-     * @param list<TableRowBox> $rows
-     */
-    private static function columnCount(array $rows): int
-    {
-        $max = 0;
-        foreach ($rows as $row) {
-            $sum = 0;
-            foreach ($row->cells as $cell) {
-                $sum += $cell->colspan;
-            }
-            $max = max($max, $sum);
-        }
-        return $max;
-    }
-
-    /**
-     * CSS 2.2 §17.5.2: min/max-content por columna a partir de celdas de span=1 (el MAYOR entre
-     * todas las que caen en esa columna, en cualquier fila) + el reparto del exceso de las celdas
-     * con colspan>1 (ver docblock de clase para la ponderación). Dos pasadas: la primera acumula
-     * los máximos de single-span de TODAS las filas (para que el reparto de colspan de la segunda
-     * ya vea el estado final, no uno parcial de su propia fila); la segunda reparte cada colspan
-     * en el orden en que se encontró (documentado: si dos celdas colspan se solapan en columnas —
-     * imposible sin rowspan salvo entre FILAS DISTINTAS de la misma columna — la segunda ve el
-     * reparto ya aplicado por la primera como parte de su ponderación).
-     *
-     * @param list<TableRowBox> $rows
-     * @return array{0: array<int, float>, 1: array<int, float>} colMax, colMin (tamaño $cols;
-     *     array<int,...> en vez de list<...> por el mismo motivo que
-     *     FlexFormattingContext::resolveMainSizes(): PHPStan no puede probar por sí solo que las
-     *     asignaciones `$arr[$i] = ...`/`$arr[$i] += ...` dentro de un bucle sobre índices
-     *     acotados producen un list sin huecos, aunque en efecto lo sea)
-     */
-    private function autoColumnExtents(array $rows, int $cols): array
-    {
-        $colMax = array_fill(0, $cols, 0.0);
-        $colMin = array_fill(0, $cols, 0.0);
-        /** @var list<array{0: int, 1: int, 2: float, 3: float}> $spans (colIndex, span, cellMax, cellMin) */
-        $spans = [];
-
-        foreach ($rows as $row) {
-            $colIndex = 0;
-            foreach ($row->cells as $cell) {
-                $cellMax = $this->cellMaxContent($cell);
-                $cellMin = $this->cellMinContent($cell);
-                if ($cell->colspan === 1) {
-                    $colMax[$colIndex] = max($colMax[$colIndex], $cellMax);
-                    $colMin[$colIndex] = max($colMin[$colIndex], $cellMin);
-                } else {
-                    $spans[] = [$colIndex, $cell->colspan, $cellMax, $cellMin];
-                }
-                $colIndex += $cell->colspan;
-            }
-        }
-
-        foreach ($spans as [$start, $span, $cellMax, $cellMin]) {
-            $weights = array_slice($colMax, $start, $span);
-            $weightSum = array_sum($weights);
-            $sliceMax = $weightSum;
-            $sliceMin = array_sum(array_slice($colMin, $start, $span));
-            $excessMax = max(0.0, $cellMax - $sliceMax);
-            $excessMin = max(0.0, $cellMin - $sliceMin);
-            for ($k = 0; $k < $span; $k++) {
-                $share = $weightSum > 0.0 ? ($weights[$k] / $weightSum) : (1.0 / $span);
-                $colMax[$start + $k] += $excessMax * $share;
-                $colMin[$start + $k] += $excessMin * $share;
-            }
-        }
-
-        return [$colMax, $colMin];
-    }
-
-    /**
-     * css-sizing-3 §4 vía IntrinsicSizer, sobre una BlockBox SINTÉTICA que envuelve
-     * `$cell->children` (misma unión de tipos que BlockBox::$children, ver TableCellBox) con el
-     * ComputedStyle de la propia celda — más barato que añadir un método `list<...>`-aware
-     * dedicado a IntrinsicSizer (adjudicación del brief): sizeBlock() ya suma el padding/borde
-     * PROPIO de ese style (el de la celda) sin código adicional aquí, satisfaciendo "cell
-     * intrinsic = children intrinsic + cell paddings + cell borders" gratis. Limitación heredada
-     * y documentada: si `$cell->children` incluye una TableBox anidada, IntrinsicSizer la salta
-     * (mismo "skip, documented, no crash" de maxContentOfChildren()/minContentOfChildren(), sin
-     * cambios en esta tarea) — una tabla anidada en celda LAYOUTEA correctamente (ver
-     * BlockFlowContext::layout(), delegación añadida en esta misma tarea) pero no aporta nada al
-     * min/max-content de la celda que la contiene; gap conocido, no cubierto por ningún test
-     * requerido de este milestone.
-     */
-    private function cellMaxContent(TableCellBox $cell): float
-    {
-        return $this->sizer->maxContentWidth(new BlockBox($cell->style, $cell->children, $cell->tag));
-    }
-
-    private function cellMinContent(TableCellBox $cell): float
-    {
-        return $this->sizer->minContentWidth(new BlockBox($cell->style, $cell->children, $cell->tag));
-    }
-
-    /**
      * CSS 2.2 §17.5.2.2, reparto final por columna a partir de $colMax/$colMin ya resueltos (ver
-     * autoColumnExtents()) y el $available (content width de la tabla menos el spacing total).
+     * ColumnExtentsCalculator::columnExtents()) y el $available (content width de la tabla menos
+     * el spacing total).
      * Orden de ramas EXACTO del brief (mutuamente excluyentes, primera que aplique gana):
      *   1. Σmax ≤ available: cada columna a su max; el sobrante (solo posible si el width
      *      declarado de la tabla es mayor que su contenido natural, ver layout()) se reparte
@@ -308,6 +221,16 @@ final readonly class TableFormattingContext
      *   3. Intermedio: interpolación lineal min+(available−Σmin)×(max−min)/(Σmax−Σmin) — sin
      *      división por cero posible aquí: si Σmax=Σmin la rama 1 ya habría capturado el caso
      *      (available ≥ Σmin = Σmax), así que llegar aquí garantiza Σmax > Σmin.
+     *
+     * BUGFIX post-review (M5-T4): toda salida de este método pasa por
+     * warnIfColumnCollapsed() antes de devolver — una defensa, no el fix en sí (el fix real es que
+     * IntrinsicSizer/ColumnExtentsCalculator ya no le dan 0 de max-content a una celda cuyo único
+     * contenido es una TableBox anidada, ver el docblock de clase de ColumnExtentsCalculator, así
+     * que el caso que reportó el reviewer YA NO llega aquí con un colMax en 0). Queda para
+     * cualquier OTRA fuente futura de "0 de max-content genuino" que compita en la misma tabla
+     * contra columnas con contenido real — sin este aviso, ese 0 se propaga en silencio a un ancho
+     * de columna final también 0 (el mismo síntoma visual: contenido solapado con la columna
+     * vecina), exactamente como pasaba con las tablas anidadas antes de este fix.
      *
      * @param array<int, float> $colMax
      * @param array<int, float> $colMin
@@ -325,6 +248,7 @@ final readonly class TableFormattingContext
         if ($sumMax <= $available) {
             $surplus = $available - $sumMax;
             if ($surplus <= 0.0) {
+                $this->warnIfColumnCollapsed($colMax);
                 return $colMax;
             }
             $equalShare = $surplus / $cols;
@@ -332,11 +256,13 @@ final readonly class TableFormattingContext
             foreach ($colMax as $i => $max) {
                 $widths[$i] = $sumMax > 0.0 ? $max + $surplus * ($max / $sumMax) : $max + $equalShare;
             }
+            $this->warnIfColumnCollapsed($widths);
             return $widths;
         }
 
         if ($sumMin >= $available) {
             $this->warn('table minimum content width exceeds available width');
+            $this->warnIfColumnCollapsed($colMin);
             return $colMin;
         }
 
@@ -346,7 +272,36 @@ final readonly class TableFormattingContext
             $min = $colMin[$i];
             $widths[$i] = $min + ($available - $sumMin) * (($max - $min) / $denom);
         }
+        $this->warnIfColumnCollapsed($widths);
         return $widths;
+    }
+
+    /**
+     * Ver el docblock de distributeAutoWidths() para el porqué de esta defensa. Un único warning
+     * por llamada (no uno por columna colapsada) — igual criterio "un aviso, no spam" que el resto
+     * de esta clase (p.ej. el de table-layout:fixed sin width). Una tabla de una sola columna
+     * nunca dispara esto (no hay "columna vecina no-cero" con la que contrastar: un ancho 0 ahí es
+     * un caso degenerado distinto, no el síntoma de solapamiento que motiva este aviso).
+     *
+     * @param array<int, float> $widths
+     */
+    private function warnIfColumnCollapsed(array $widths): void
+    {
+        if (count($widths) < 2) {
+            return;
+        }
+        $hasZero = false;
+        $hasNonZero = false;
+        foreach ($widths as $width) {
+            if ($width <= 0.0) {
+                $hasZero = true;
+            } else {
+                $hasNonZero = true;
+            }
+        }
+        if ($hasZero && $hasNonZero) {
+            $this->warn('table column collapsed to zero width');
+        }
     }
 
     /**
@@ -423,7 +378,8 @@ final readonly class TableFormattingContext
         foreach ($row->cells as $cell) {
             $span = $cell->colspan;
             // Invariante: colIndex nunca excede $cols dentro de esta fila (cols = max Σcolspan por
-            // fila, ver columnCount()) — colX[colIndex] y colX[colIndex+span] SIEMPRE existen.
+            // fila, ver ColumnExtentsCalculator::columnCount()) — colX[colIndex] y
+            // colX[colIndex+span] SIEMPRE existen.
             $cellX = $colX[$colIndex];
             $cellRight = $colX[$colIndex + $span] - $borderSpacing;
             $cellWidth = max(0.0, $cellRight - $cellX);

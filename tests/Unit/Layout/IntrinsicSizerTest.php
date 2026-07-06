@@ -7,6 +7,8 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
+use Pliego\Box\TableCellBox;
+use Pliego\Box\TableRowBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Length;
@@ -258,16 +260,96 @@ it('adds an image child intrinsic width plus its margins into the parent max-con
     expect($this->sizer->maxContentWidth($box))->toBe(96.0);
 });
 
-// M5-T3: una TableBox hija (M5-T4 lo consume, no tiene min/max-content todavía) debe ser
-// IGNORADA por sizeBlock() sin crashear -- mismo patrón "skip, documented" verificado también en
-// BlockFlowContext. Se contrasta el resultado con y sin la tabla para probar que su presencia no
-// cambia el número (contribución 0, no un error de tipo).
-it('skips a TableBox child without crashing (M5-T4 not implemented yet)', function () {
+// M5-T4 (bugfix, post-review): a TableBox no longer contributes 0 to an ancestor's intrinsic
+// sizing -- it has its own real min/max-content (sum of per-column extents + border-spacing +
+// its own padding/border), so a TableBox child now WIDENS the parent exactly like any other
+// BlockBox|ImageBox child would (contrast with the old "skips a TableBox child" behavior this
+// test replaces: an empty table used to contribute 0 by construction, indistinguishable from a
+// real skip -- this uses a NON-empty nested table so the two code paths are actually
+// distinguishable).
+it('a TableBox child contributes its own real max/min-content to the parent, not 0', function () {
     $style = sizerStyle();
-    $table = new TableBox($style, [], 'table');
+    $cell = new TableCellBox($style, [new TextRun('a much wider cell than abc', $style)], 1, 'td');
+    $row = new TableRowBox($style, [$cell], false);
+    $table = new TableBox($style, [$row], 'table');
     $withTable = new BlockBox($style, [new TextRun('abc', $style), $table], 'div');
     $withoutTable = new BlockBox($style, [new TextRun('abc', $style)], 'div');
 
-    expect($this->sizer->maxContentWidth($withTable))->toBe($this->sizer->maxContentWidth($withoutTable));
-    expect($this->sizer->minContentWidth($withTable))->toBe($this->sizer->minContentWidth($withoutTable));
+    $tableMax = $this->sizer->maxContentWidth($table);
+    $tableMin = $this->sizer->minContentWidth($table);
+    expect($tableMax)->toBeGreaterThan(0.0);
+    expect($tableMin)->toBeGreaterThan(0.0);
+
+    // The table is wider than "abc" alone, so it now WINS the max() across the parent's children
+    // -- if it were still silently skipped, the parent's max/min-content would equal the
+    // table-less sibling's instead.
+    expect($this->sizer->maxContentWidth($withTable))->toEqualWithDelta($tableMax, 0.001);
+    expect($this->sizer->minContentWidth($withTable))->toEqualWithDelta($tableMin, 0.001);
+    expect($this->sizer->maxContentWidth($withTable))->not->toBe($this->sizer->maxContentWidth($withoutTable));
+});
+
+// M5-T4 (bugfix): maxContent(TableBox) without a declared width == hand-computed Σ(per-column
+// max extents) + borderSpacing×(cols+1) -- the exact formula documented in
+// IntrinsicSizer::sizeTable() / ColumnExtentsCalculator, verified independently here instead of
+// just trusting the implementation under test.
+it('max-content of a TableBox equals the hand-computed sum of per-column extents plus border-spacing', function () {
+    $style = sizerStyle(['border-spacing' => Length::px(4.0)]);
+    $shortText = new TextRun('hi', $style);
+    $longText = new TextRun('a much longer piece of text', $style);
+    $cellA = new TableCellBox($style, [$shortText], 1, 'td');
+    $cellB = new TableCellBox($style, [$longText], 1, 'td');
+    $row = new TableRowBox($style, [$cellA, $cellB], false);
+    $table = new TableBox($style, [$row], 'table');
+
+    $maxA = $this->measurer->widthOf('hi', $this->face, 16.0);
+    $maxB = $this->measurer->widthOf('a much longer piece of text', $this->face, 16.0);
+    // 2 columns -> spacing x (2+1) = 12px total, same formula TableFormattingContext::layout()
+    // uses for the table's own border-spacing total.
+    $expected = $maxA + $maxB + 4.0 * 3;
+
+    expect($this->sizer->maxContentWidth($table))->toEqualWithDelta($expected, 0.001);
+
+    $minA = $this->measurer->widthOf('hi', $this->face, 16.0); // single word, min == max here
+    $minB = max(
+        $this->measurer->widthOf('a', $this->face, 16.0),
+        $this->measurer->widthOf('much', $this->face, 16.0),
+        $this->measurer->widthOf('longer', $this->face, 16.0),
+        $this->measurer->widthOf('piece', $this->face, 16.0),
+        $this->measurer->widthOf('of', $this->face, 16.0),
+        $this->measurer->widthOf('text', $this->face, 16.0),
+    );
+    $expectedMin = $minA + $minB + 4.0 * 3;
+    expect($this->sizer->minContentWidth($table))->toEqualWithDelta($expectedMin, 0.001);
+});
+
+// M5-T4 (bugfix): a declared px width on the TABLE ITSELF short-circuits exactly like on a
+// BlockBox (css-sizing-3 §4) -- both min- and max-content collapse to that one value regardless
+// of how much wider the cell content actually is, content-box adds the table's own
+// padding/border, border-box does not.
+it('a declared px width on a TableBox short-circuits to that value, ignoring column content', function () {
+    $contentBoxStyle = sizerStyle([
+        'width' => LengthPercentage::px(50.0),
+        'padding-left' => LengthPercentage::px(5.0),
+        'padding-right' => LengthPercentage::px(5.0),
+    ]);
+    $cell = new TableCellBox($contentBoxStyle, [
+        new TextRun('this cell content is way wider than fifty pixels', $contentBoxStyle),
+    ], 1, 'td');
+    $row = new TableRowBox($contentBoxStyle, [$cell], false);
+    $table = new TableBox($contentBoxStyle, [$row], 'table');
+
+    expect($this->sizer->maxContentWidth($table))->toBe(60.0);
+    expect($this->sizer->minContentWidth($table))->toBe(60.0);
+
+    $borderBoxStyle = sizerStyle([
+        'width' => LengthPercentage::px(50.0),
+        'padding-left' => LengthPercentage::px(5.0),
+        'padding-right' => LengthPercentage::px(5.0),
+        'box-sizing' => 'border-box',
+    ]);
+    $borderBoxCell = new TableCellBox($borderBoxStyle, [new TextRun('x', $borderBoxStyle)], 1, 'td');
+    $borderBoxRow = new TableRowBox($borderBoxStyle, [$borderBoxCell], false);
+    $borderBoxTable = new TableBox($borderBoxStyle, [$borderBoxRow], 'table');
+    expect($this->sizer->maxContentWidth($borderBoxTable))->toBe(50.0);
+    expect($this->sizer->minContentWidth($borderBoxTable))->toBe(50.0);
 });

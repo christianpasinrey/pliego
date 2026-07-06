@@ -18,10 +18,12 @@ use Pliego\Style\ComputedStyle;
  * M5-T4 (TableFormattingContext) layoutea esta caja (algoritmo de anchos §17.5.2) — consumida por
  * BlockFlowContext::layout() cuando aparece como hijo de un bloque normal (delega vía
  * tableContext(), ver el docblock de esa clase). FlexFormattingContext SIGUE excluyéndola como
- * item flex directo (adjudicación deliberada, no un hueco temporal — ver su docblock) e
- * IntrinsicSizer SIGUE saltándola cuando aparece como hijo de un bloque/celda genérico (una
- * TableBox anidada no aporta a un max/min-content ajeno, gap documentado en IntrinsicSizer) —
- * mismo patrón "skip, documented, no crash" que ya cubría ambos casos antes de esta tarea.
+ * item flex directo (adjudicación deliberada, no un hueco temporal — ver su docblock).
+ * IntrinsicSizer (bugfix post-review M5-T4) YA NO la salta cuando aparece como hijo de un
+ * bloque/celda genérico: tiene su propio min/max-content real (ver
+ * IntrinsicSizer::sizeTable()/ColumnExtentsCalculator) — una tabla anidada SÍ aporta ahora al
+ * max/min-content de su contenedor, cerrando el gap que colapsaba a 0 el ancho de una columna cuyo
+ * único contenido era una tabla anidada.
  */
 final readonly class TableBox
 {
