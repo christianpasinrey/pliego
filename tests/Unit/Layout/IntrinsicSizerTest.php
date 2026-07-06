@@ -1,0 +1,194 @@
+<?php
+
+// tests/Unit/Layout/IntrinsicSizerTest.php
+declare(strict_types=1);
+
+use Pliego\Box\BlockBox;
+use Pliego\Box\ImageBox;
+use Pliego\Box\LineBreakRun;
+use Pliego\Box\TextRun;
+use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\Length;
+use Pliego\Css\Value\LengthPercentage;
+use Pliego\Layout\IntrinsicSizer;
+use Pliego\Layout\TextMeasurer;
+use Pliego\Style\ComputedStyle;
+use Pliego\Text\FontCatalog;
+
+/** @param array<string, mixed> $declarations */
+function sizerStyle(array $declarations = [], ?ComputedStyle $parent = null): ComputedStyle
+{
+    return ComputedStyle::compute($declarations, $parent ?? ComputedStyle::root(), 'div');
+}
+
+beforeEach(function (): void {
+    $this->measurer = new TextMeasurer();
+    $this->catalog = FontCatalog::withDefaults();
+    $this->sizer = new IntrinsicSizer($this->measurer, $this->catalog);
+    $this->face = $this->catalog->select('default', 400, false);
+    $this->boldFace = $this->catalog->select('default', 700, false);
+});
+
+it('max-content sums a 3-word phrase unbroken; min-content is the longest word', function () {
+    $style = sizerStyle();
+    $box = new BlockBox($style, [new TextRun('uno dos tres', $style)], 'p');
+
+    $expectedMax = $this->measurer->widthOf('uno dos tres', $this->face, 16.0);
+    $expectedMin = max(
+        $this->measurer->widthOf('uno', $this->face, 16.0),
+        $this->measurer->widthOf('dos', $this->face, 16.0),
+        $this->measurer->widthOf('tres', $this->face, 16.0),
+    );
+
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expectedMax, 0.001);
+    expect($this->sizer->minContentWidth($box))->toEqualWithDelta($expectedMin, 0.001);
+});
+
+it('measures each run with its own face: a bold segment widens max-content and can win min-content', function () {
+    $normal = sizerStyle();
+    $bold = sizerStyle(['font-weight' => 700], $normal);
+    $box = new BlockBox($normal, [
+        new TextRun('ab ', $normal),
+        new TextRun('cd', $bold),
+    ], 'p');
+
+    $expectedMax = $this->measurer->widthOf('ab ', $this->face, 16.0)
+        + $this->measurer->widthOf('cd', $this->boldFace, 16.0);
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expectedMax, 0.001);
+
+    // min-content is computed PER RUN (longest word within that run), then the max is taken
+    // across runs — the bold "cd" is wider per-glyph than the normal "ab", so it wins.
+    $expectedMin = max(
+        $this->measurer->widthOf('ab', $this->face, 16.0),
+        $this->measurer->widthOf('cd', $this->boldFace, 16.0),
+    );
+    expect($this->sizer->minContentWidth($box))->toEqualWithDelta($expectedMin, 0.001);
+    expect($this->measurer->widthOf('cd', $this->boldFace, 16.0))
+        ->toBeGreaterThan($this->measurer->widthOf('cd', $this->face, 16.0));
+});
+
+it('a LineBreakRun splits a run sequence into segments for max-content, taking the widest', function () {
+    $style = sizerStyle();
+    $box = new BlockBox($style, [
+        new TextRun('un texto muy largo', $style),
+        new LineBreakRun(),
+        new TextRun('x', $style),
+    ], 'p');
+
+    $expectedMax = $this->measurer->widthOf('un texto muy largo', $this->face, 16.0);
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expectedMax, 0.001);
+
+    // min-content ignores LineBreakRun entirely (per-run word analysis) and just looks at the
+    // longest word across the two TextRuns — "largo" beats the second run's lone "x".
+    $expectedMin = max(
+        $this->measurer->widthOf('un', $this->face, 16.0),
+        $this->measurer->widthOf('texto', $this->face, 16.0),
+        $this->measurer->widthOf('muy', $this->face, 16.0),
+        $this->measurer->widthOf('largo', $this->face, 16.0),
+        $this->measurer->widthOf('x', $this->face, 16.0),
+    );
+    expect($this->sizer->minContentWidth($box))->toEqualWithDelta($expectedMin, 0.001);
+});
+
+it('recurses into a nested block child, adding its horizontal margins', function () {
+    $style = sizerStyle();
+    $childStyle = sizerStyle([
+        'margin-left' => LengthPercentage::px(5.0),
+        'margin-right' => LengthPercentage::px(7.0),
+    ], $style);
+    $child = new BlockBox($childStyle, [new TextRun('palabra', $childStyle)], 'div');
+    $box = new BlockBox($style, [$child], 'div');
+
+    $expectedChildMax = $this->measurer->widthOf('palabra', $this->face, 16.0);
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expectedChildMax + 12.0, 0.001);
+    expect($this->sizer->minContentWidth($box))->toEqualWithDelta($expectedChildMax + 12.0, 0.001);
+});
+
+it('takes the max across sibling sequences/children, and adds the parent own paddings/borders', function () {
+    $style = sizerStyle([
+        'padding-left' => LengthPercentage::px(3.0),
+        'padding-right' => LengthPercentage::px(4.0),
+        'border-left-width' => Length::px(1.0),
+        'border-left-style' => BorderStyle::Solid,
+        'border-right-width' => Length::px(2.0),
+        'border-right-style' => BorderStyle::Solid,
+    ]);
+    $narrowChildStyle = sizerStyle([], $style);
+    $narrowChild = new BlockBox($narrowChildStyle, [new TextRun('a', $narrowChildStyle)], 'div');
+    $box = new BlockBox($style, [
+        new TextRun('un texto largo de verdad', $style),
+        $narrowChild,
+    ], 'p');
+
+    $expectedContent = $this->measurer->widthOf('un texto largo de verdad', $this->face, 16.0);
+    $expectedOwnBorderPadding = 3.0 + 4.0 + 1.0 + 2.0;
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expectedContent + $expectedOwnBorderPadding, 0.001);
+});
+
+it('a declared px width short-circuits recursion: content-box adds paddings/borders, border-box does not', function () {
+    $contentBoxStyle = sizerStyle([
+        'width' => LengthPercentage::px(100.0),
+        'padding-left' => LengthPercentage::px(10.0),
+        'padding-right' => LengthPercentage::px(10.0),
+    ]);
+    $box = new BlockBox($contentBoxStyle, [
+        new TextRun('esto seria mucho mas ancho que cien pixeles', $contentBoxStyle),
+    ], 'div');
+    expect($this->sizer->maxContentWidth($box))->toBe(120.0);
+    expect($this->sizer->minContentWidth($box))->toBe(120.0);
+
+    $borderBoxStyle = sizerStyle([
+        'width' => LengthPercentage::px(100.0),
+        'padding-left' => LengthPercentage::px(10.0),
+        'padding-right' => LengthPercentage::px(10.0),
+        'box-sizing' => 'border-box',
+    ]);
+    $borderBoxBox = new BlockBox($borderBoxStyle, [new TextRun('x', $borderBoxStyle)], 'div');
+    expect($this->sizer->maxContentWidth($borderBoxBox))->toBe(100.0);
+    expect($this->sizer->minContentWidth($borderBoxBox))->toBe(100.0);
+});
+
+it('a declared PERCENT width is treated as auto (indefinite basis), falling back to content sizing', function () {
+    $style = sizerStyle(['width' => LengthPercentage::percent(50.0)]);
+    $box = new BlockBox($style, [new TextRun('palabra', $style)], 'div');
+
+    $expected = $this->measurer->widthOf('palabra', $this->face, 16.0);
+    expect($this->sizer->maxContentWidth($box))->toEqualWithDelta($expected, 0.001);
+});
+
+it('sizes an ImageBox using the CSS > attr > intrinsic priority, adding its own padding/border', function () {
+    $style = sizerStyle();
+
+    $intrinsicOnly = new ImageBox($style, 'a.png', 40, 20, null, null);
+    expect($this->sizer->maxContentWidth($intrinsicOnly))->toBe(40.0);
+    expect($this->sizer->minContentWidth($intrinsicOnly))->toBe(40.0);
+
+    $withAttr = new ImageBox($style, 'a.png', 40, 20, 80.0, null);
+    expect($this->sizer->maxContentWidth($withAttr))->toBe(80.0);
+
+    $withCssPadded = sizerStyle([
+        'width' => LengthPercentage::px(120.0),
+        'padding-left' => LengthPercentage::px(5.0),
+        'padding-right' => LengthPercentage::px(5.0),
+    ]);
+    $withCss = new ImageBox($withCssPadded, 'a.png', 40, 20, 80.0, null);
+    expect($this->sizer->maxContentWidth($withCss))->toBe(130.0);
+
+    // % width has no containing block here (documented divergence from M3): falls back to
+    // attr/intrinsic exactly like an unset width.
+    $percentStyle = sizerStyle(['width' => LengthPercentage::percent(50.0)]);
+    $withPercent = new ImageBox($percentStyle, 'a.png', 40, 20, 80.0, null);
+    expect($this->sizer->maxContentWidth($withPercent))->toBe(80.0);
+});
+
+it('adds an image child intrinsic width plus its margins into the parent max-content', function () {
+    $style = sizerStyle();
+    $imgStyle = sizerStyle(['margin-left' => LengthPercentage::px(6.0)], $style);
+    $img = new ImageBox($imgStyle, 'a.png', 90, 45, null, null);
+    $box = new BlockBox($style, [
+        new TextRun('x', $style),
+        $img,
+    ], 'div');
+
+    expect($this->sizer->maxContentWidth($box))->toBe(96.0);
+});
