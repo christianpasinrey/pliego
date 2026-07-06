@@ -12,6 +12,7 @@ use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
 use Pliego\Layout\Geometry\Rect;
+use Pliego\Style\Display;
 use Pliego\Text\FontCatalog;
 
 /**
@@ -23,16 +24,43 @@ use Pliego\Text\FontCatalog;
  * encarga de agrupar tramos consecutivos de TextRun|LineBreakRun (pueden aparecer intercalados
  * con hijos BlockBox, ver BoxTreeBuilder::buildBlock) y pasarle cada grupo íntegro al inline
  * context de una vez.
+ *
+ * M4-T4: BlockFlowContext y FlexFormattingContext se necesitan mutuamente (un hijo bloque puede
+ * ser un contenedor flex; un item flex se layoutea con la misma maquinaria de bloque) — ciclo de
+ * constructores. Se rompe con INYECCIÓN PEREZOSA: esta clase deja de ser `readonly` a nivel de
+ * clase (las propiedades promovidas del constructor se marcan `readonly` individualmente, igual
+ * que antes) para poder alojar $flexContext, un colaborador MUTABLE que arranca en null y se
+ * autoconstruye la PRIMERA vez que hace falta (ver flexContext()) — así ningún caller (Engine,
+ * tests, el propio FlexFormattingContext) necesita wiring explícito: basta con
+ * `new BlockFlowContext($measurer, $catalog)` para que un hijo `display:flex` funcione. El setter
+ * público sigue existiendo por si un caller quiere inyectar una instancia propia (p.ej. un test
+ * con un doble, o FlexFormattingContext conectando SU BlockFlowContext interno consigo mismo,
+ * ver el docblock de esa clase) en vez de la autocreada.
  */
-final readonly class BlockFlowContext implements FormattingContext
+final class BlockFlowContext implements FormattingContext
 {
-    private InlineFlowContext $inline;
+    private readonly InlineFlowContext $inline;
+    private ?FlexFormattingContext $flexContext = null;
 
     public function __construct(
-        private TextMeasurer $measurer,
-        private FontCatalog $catalog,
+        private readonly TextMeasurer $measurer,
+        private readonly FontCatalog $catalog,
     ) {
         $this->inline = new InlineFlowContext($measurer, $catalog);
+    }
+
+    /** Ver docblock de clase: wiring explícito opcional del delegado flex (por defecto, perezoso). */
+    public function setFlexContext(FlexFormattingContext $flexContext): void
+    {
+        $this->flexContext = $flexContext;
+    }
+
+    private function flexContext(): FlexFormattingContext
+    {
+        if ($this->flexContext === null) {
+            $this->flexContext = new FlexFormattingContext($this->measurer, $this->catalog, new IntrinsicSizer($this->measurer, $this->catalog));
+        }
+        return $this->flexContext;
     }
 
     public function layout(BlockBox $box, Rect $containingBlock): BoxFragment
@@ -110,6 +138,20 @@ final readonly class BlockFlowContext implements FormattingContext
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
+            // M4-T4: un hijo bloque con display:flex se layoutea ENTERO con FlexFormattingContext
+            // (resuelve su propia caja — márgenes/width/box-sizing — con el mismo cálculo que esta
+            // clase, ver el docblock de esa clase) en vez de recursar aquí; el resto del bucle
+            // (avance del cursor con el margin-bottom del hijo) es idéntico a un bloque normal.
+            // $child ya está acotado a BlockBox aquí (los otros dos casos posibles, TextRun|
+            // LineBreakRun e ImageBox, ya hicieron `continue` arriba), así que solo hace falta
+            // mirar su display.
+            if ($child->style->display === Display::Flex) {
+                $childFragment = $this->flexContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
+                $children[] = $childFragment;
+                $contentBottom = $childFragment->rect->bottom();
+                $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
+                continue;
+            }
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;
             // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la
@@ -140,8 +182,12 @@ final readonly class BlockFlowContext implements FormattingContext
      * block. Se emite como un BoxFragment (border-box, background/borders pintables igual que
      * cualquier otra caja) cuyo único hijo es el ImageFragment (la content box real, lo que
      * pinta la imagen).
+     *
+     * M4-T4: PÚBLICO (era privado) — FlexFormattingContext reutiliza este mismo método para sus
+     * items ImageBox, sin duplicar el sizing de replaced elements (resolveReplacedSize no cambia:
+     * es agnóstico a flex/bloque, el sizing de un <img> es el mismo eje a eje en ambos contextos).
      */
-    private function layoutImage(ImageBox $box, Rect $containingBlock): BoxFragment
+    public function layoutImage(ImageBox $box, Rect $containingBlock): BoxFragment
     {
         $style = $box->style;
         $cbWidth = $containingBlock->width;

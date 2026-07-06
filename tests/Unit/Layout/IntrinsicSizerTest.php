@@ -181,6 +181,35 @@ it('sizes an ImageBox using the CSS > attr > intrinsic priority, adding its own 
     expect($this->sizer->maxContentWidth($withPercent))->toBe(80.0);
 });
 
+// M4-T3 report nice-to-have (documented under "Concerns"): min-content is computed PER RUN (see
+// class docblock), so a word split across two runs by inline markup (e.g. "au<b>to</b>") is
+// measured as two INDEPENDENT half-words ("au", "to") instead of the single wider word "auto" a
+// real browser's shaping/measurement would use. This regression test documents the resulting
+// UNDER-ESTIMATE — it is not desired behavior, just the known, adjudicated simplification.
+it('documents the cross-run word min-content under-estimate: a bold mid-word split measures shorter than the whole word', function () {
+    $normal = sizerStyle();
+    $bold = sizerStyle(['font-weight' => 700], $normal);
+    $split = new BlockBox($normal, [
+        new TextRun('au', $normal),
+        new TextRun('to', $bold),
+    ], 'p');
+    $whole = new BlockBox($normal, [new TextRun('auto', $normal)], 'p');
+
+    $splitMin = $this->sizer->minContentWidth($split);
+    $wholeMin = $this->sizer->minContentWidth($whole);
+
+    // Sanity: the split measurement is exactly the max of its two independent halves (never the
+    // combined "auto"), confirming the per-run treatment described in the class docblock.
+    $expectedSplitMin = max(
+        $this->measurer->widthOf('au', $this->face, 16.0),
+        $this->measurer->widthOf('to', $this->boldFace, 16.0),
+    );
+    expect($splitMin)->toEqualWithDelta($expectedSplitMin, 0.001);
+
+    // The regression itself: measuring in two halves under-estimates the true one-word min-content.
+    expect($splitMin)->toBeLessThan($wholeMin);
+});
+
 it('adds an image child intrinsic width plus its margins into the parent max-content', function () {
     $style = sizerStyle();
     $imgStyle = sizerStyle(['margin-left' => LengthPercentage::px(6.0)], $style);
