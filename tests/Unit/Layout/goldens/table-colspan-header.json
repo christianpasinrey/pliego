@@ -1,0 +1,205 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        400.0,
+        68.4
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                178.0,
+                68.4
+            ],
+            "background": null,
+            "borders": {
+                "top": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                },
+                "right": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                },
+                "bottom": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                },
+                "left": {
+                    "widthPx": 1.0,
+                    "color": "#999999"
+                }
+            },
+            "atomic": false,
+            "children": [
+                {
+                    "type": "box",
+                    "rect": [
+                        1.0,
+                        5.0,
+                        176.0,
+                        27.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                5.0,
+                                5.0,
+                                168.0,
+                                27.2
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        14.17,
+                                        9.0,
+                                        149.66,
+                                        19.2
+                                    ],
+                                    "text": "Resumen del día",
+                                    "faceKey": "default:700:normal",
+                                    "underline": false,
+                                    "baselineY": 25.45
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        1.0,
+                        36.2,
+                        176.0,
+                        27.2
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": true,
+                    "children": [
+                        {
+                            "type": "box",
+                            "rect": [
+                                5.0,
+                                36.2,
+                                61.37,
+                                27.2
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        12.0,
+                                        40.2,
+                                        47.37,
+                                        19.2
+                                    ],
+                                    "text": "Sarria",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 56.65
+                                }
+                            ]
+                        },
+                        {
+                            "type": "box",
+                            "rect": [
+                                70.37,
+                                36.2,
+                                102.63,
+                                27.2
+                            ],
+                            "background": null,
+                            "borders": {
+                                "top": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "right": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "bottom": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                },
+                                "left": {
+                                    "widthPx": 1.0,
+                                    "color": "#cccccc"
+                                }
+                            },
+                            "atomic": false,
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "rect": [
+                                        77.37,
+                                        40.2,
+                                        88.63,
+                                        19.2
+                                    ],
+                                    "text": "Portomarín",
+                                    "faceKey": "default:400:normal",
+                                    "underline": false,
+                                    "baselineY": 56.65
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

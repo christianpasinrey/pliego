@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
@@ -144,20 +145,34 @@ it('pushes an atomic fragment crossing the page boundary down as a whole subtree
     expect($relocatedChild2->rect->y)->toBe(40.0);
 });
 
-it('leaves an atomic fragment taller than the page crossing the boundary unsplit (documented push-down limitation, no warning channel)', function () {
+it('leaves an atomic fragment taller than the page crossing the boundary unsplit and warns (M5-T1: warning channel)', function () {
     // Height (1200) > page content height (1000): the generic push-down guard never fires,
-    // same documented limitation as an over-tall image/text fragment already has.
+    // same documented limitation as an over-tall image/text fragment already has -- but M5-T1
+    // adds an explicit warning for this specific (atomic) case via the injected WarningCollector.
     $child = textAt(500.0, 10.0);
     $atomicBox = new BoxFragment(new Rect(0, 500.0, 100, 1200), new Color(0, 200, 0), [$child], BorderSet::none(), atomic: true);
     $root = new BoxFragment(new Rect(0, 0, 100, 1800), null, [$atomicBox], BorderSet::none());
 
-    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    $warnings = new WarningCollector();
+    $pages = iterator_to_array(new Paginator(1000.0, $warnings)->paginate($root));
     expect($pages)->toHaveCount(1);
     $box = $pages[0]->fragments[0];
     assert($box instanceof BoxFragment);
     expect($box->rect->y)->toBe(500.0);
     expect($box->rect->height)->toBe(1200.0);
     expect($box->children[0]->rect()->y)->toBe(500.0);
+    expect($warnings->drain())->toBe(['atomic fragment taller than page, kept unsplit']);
+});
+
+it('stays silent (no WarningCollector injected) when an atomic fragment taller than the page is left unsplit', function () {
+    // Regression: the new constructor parameter is OPTIONAL (null = silent) so every existing
+    // caller/test that builds a Paginator with just the content height keeps working unchanged.
+    $child = textAt(500.0, 10.0);
+    $atomicBox = new BoxFragment(new Rect(0, 500.0, 100, 1200), new Color(0, 200, 0), [$child], BorderSet::none(), atomic: true);
+    $root = new BoxFragment(new Rect(0, 0, 100, 1800), null, [$atomicBox], BorderSet::none());
+
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(1);
 });
 
 it('does not decompose an atomic fragment into its individual children even when it fits entirely within one page', function () {

@@ -207,3 +207,34 @@ it('paints solid borders as filled rects beyond the background, in css-backgroun
     $pattern = '/^' . preg_quote($blackFill, '/') . ' [\d.]+ [\d.]+ [\d.]+ [\d.]+ re f$/m';
     expect(preg_match_all($pattern, $pdf))->toBe(4);
 });
+
+// --- M5-T1: warning channel end to end (Engine -> BlockFlowContext/FlexFormattingContext/Paginator) --
+
+it('warns when an atomic flex fragment is taller than the page and stays unsplit (M5-T1)', function () {
+    // Default A4 + default 48px margins -> content height ~1026px; an <img> forced to 1200px
+    // tall via the HTML height attribute inside a flex row container makes the WHOLE container
+    // (atomic for pagination, see FlexFormattingContext's docblock) taller than the page.
+    $path = sys_get_temp_dir() . '/pliego-e2e-warning-atomic-taller.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->stylesheet('.row { display: flex }')
+        ->render('<body><div class="row"><img src="tiny.jpg" height="1200"></div></body>')
+        ->save($path);
+
+    expect($report->warnings)->toContain('atomic fragment taller than page, kept unsplit');
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});
+
+it('warns when a flex column\'s justify-content has no effect because the container has no declared height (M5-T1)', function () {
+    $path = sys_get_temp_dir() . '/pliego-e2e-warning-column-justify.pdf';
+    $report = Engine::make()
+        ->stylesheet('.col { display: flex; flex-direction: column; justify-content: center }
+                      .item { height: 20px }')
+        ->render('<body><div class="col"><div class="item"></div><div class="item"></div></div></body>')
+        ->save($path);
+
+    expect($report->warnings)->toContain(
+        'flex column: justify-content has no effect without a declared container height (auto height hugs content)',
+    );
+    expect((string) file_get_contents($path))->toStartWith('%PDF-1.7');
+});

@@ -471,3 +471,18 @@ it('BlockFlowContext delegates a display:flex child to FlexFormattingContext end
     expect($b->rect->width)->toBe(100.0);
     expect($b->rect->x)->toBe($a->rect->right());
 });
+
+// M5-T4: TableBox ya tiene layout real (TableFormattingContext) — BlockFlowContext la delega
+// ENTERA (reemplaza el skip de T3, ver su docblock) y el cursor avanza tras ella, así que el
+// hermano siguiente ya no se solapa con donde la tabla cayó.
+it('delegates a TableBox child to TableFormattingContext end-to-end, advancing the cursor past it', function () {
+    $frag = layoutHtml('<body><table><tr><td>a</td></tr></table><p>after</p></body>', '');
+    expect($frag->children)->toHaveCount(2);
+    [$table, $after] = $frag->children;
+    assert($table instanceof BoxFragment && $after instanceof BoxFragment);
+
+    $text = textFragments($after)[0];
+    expect($text->text)->toBe('after');
+    // No overlap: the paragraph starts exactly where the table's border-box ends.
+    expect($after->rect->y)->toBe($table->rect->bottom());
+});

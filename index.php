@@ -86,7 +86,14 @@ $sampleHtml = <<<'HTML'
     <img src="playground-assets/sample-photo.jpg" width="120">
     <div class="info">
       <p class="day"><strong>Sarria</strong> — <em>Giorno 1</em></p>
-      <p class="data">Data: 19/09/2026 · Pernottamento a <u>Sarria</u></p>
+      <table class="data-table">
+        <thead>
+          <tr><th class="dt-cell">Data</th><th class="dt-cell">Km</th><th class="dt-cell">Pernottamento</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="dt-cell">19/09/2026</td><td class="dt-cell">—</td><td class="dt-cell">Sarria</td></tr>
+        </tbody>
+      </table>
       <p>Una volta arrivato a Sarria, ti consigliamo di visitare la città e di goderti
       i suoi monumenti e le sue strade, dove si respira già l'atmosfera del Cammino.
       Puoi <strong>prenotare online</strong> o scriverci — <em>siamo qui per aiutarti</em>.</p>
@@ -95,7 +102,14 @@ $sampleHtml = <<<'HTML'
 
   <div class="card">
     <p class="day"><strong>Da Sarria a Portomarín</strong> — Giorno 2</p>
-    <p class="data">Data: 20/09/2026 · 22,2 km · Pernottamento a Portomarín</p>
+    <table class="data-table">
+      <thead>
+        <tr><th class="dt-cell">Data</th><th class="dt-cell">Km</th><th class="dt-cell">Pernottamento</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="dt-cell">20/09/2026</td><td class="dt-cell">22,2</td><td class="dt-cell">Portomarín</td></tr>
+      </tbody>
+    </table>
     <p>Il tuo itinerario inizierà con questo tratto che si snoda lungo sentieri
     tranquilli tra questi secolari e granai storici.</p>
   </div>
@@ -113,7 +127,8 @@ h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .photo-card { display: flex; gap: 12px }
 .info { flex: 1 }
 .day { margin: 0 0 4px 0; font-size: 16px }
-.data { border: 1px solid #cccccc; padding: 6px; color: #555555; font-size: 12px; margin: 0 0 6px 0 }
+.data-table { border: 1px solid #999999; border-spacing: 2px; margin: 0 0 6px 0; font-size: 12px; color: #555555 }
+.dt-cell { border: 1px solid #cccccc; padding: 3px 6px }
 .price { text-align: right }
 p { line-height: 1.45 }
 @page {

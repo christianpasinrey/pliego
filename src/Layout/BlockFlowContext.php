@@ -7,7 +7,9 @@ namespace Pliego\Layout;
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
+use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
@@ -36,15 +38,30 @@ use Pliego\Text\FontCatalog;
  * público sigue existiendo por si un caller quiere inyectar una instancia propia (p.ej. un test
  * con un doble, o FlexFormattingContext conectando SU BlockFlowContext interno consigo mismo,
  * ver el docblock de esa clase) en vez de la autocreada.
+ *
+ * M5-T1 (housekeeping): $warnings (último parámetro, opcional, null = silencioso) es el mismo
+ * WarningCollector que Engine::render() comparte con BoxTreeBuilder/Paginator — esta clase no
+ * emite ningún warning propio todavía, pero DEBE reenviarlo al FlexFormattingContext que crea
+ * perezosamente en flexContext() (ver más abajo), para que un `display:flex` anidado a
+ * cualquier profundidad siga viendo el MISMO colector que el resto del pipeline, en vez de uno
+ * silencioso por accidente de wiring.
+ *
+ * M5-T4: mismo mecanismo de inyección perezosa que $flexContext, ahora también para
+ * TableFormattingContext (ver el docblock de esa clase, sección "RUPTURA DE CICLO") — un hijo
+ * TableBox se delega a $this->tableContext(), autocreada la primera vez que hace falta si nadie
+ * la wireó explícitamente (el caso normal: Engine construye `new BlockFlowContext(...)` a secas y
+ * el primer <table> que encuentra dispara la autocreación).
  */
 final class BlockFlowContext implements FormattingContext
 {
     private readonly InlineFlowContext $inline;
     private ?FlexFormattingContext $flexContext = null;
+    private ?TableFormattingContext $tableContext = null;
 
     public function __construct(
         private readonly TextMeasurer $measurer,
         private readonly FontCatalog $catalog,
+        private readonly ?WarningCollector $warnings = null,
     ) {
         $this->inline = new InlineFlowContext($measurer, $catalog);
     }
@@ -55,12 +72,41 @@ final class BlockFlowContext implements FormattingContext
         $this->flexContext = $flexContext;
     }
 
+    /**
+     * M5-T4: análogo a setFlexContext() — TableFormattingContext lo llama en SU propio
+     * constructor sobre el BlockFlowContext interno que crea para layoutear contenido de celda
+     * (ver el docblock "RUPTURA DE CICLO" de esa clase), así que esta instancia NUNCA pasa por la
+     * autocreación de tableContext() de más abajo.
+     */
+    public function setTableContext(TableFormattingContext $tableContext): void
+    {
+        $this->tableContext = $tableContext;
+    }
+
     private function flexContext(): FlexFormattingContext
     {
         if ($this->flexContext === null) {
-            $this->flexContext = new FlexFormattingContext($this->measurer, $this->catalog, new IntrinsicSizer($this->measurer, $this->catalog));
+            $this->flexContext = new FlexFormattingContext(
+                $this->measurer,
+                $this->catalog,
+                new IntrinsicSizer($this->measurer, $this->catalog),
+                $this->warnings,
+            );
         }
         return $this->flexContext;
+    }
+
+    private function tableContext(): TableFormattingContext
+    {
+        if ($this->tableContext === null) {
+            $this->tableContext = new TableFormattingContext(
+                $this->measurer,
+                $this->catalog,
+                new IntrinsicSizer($this->measurer, $this->catalog),
+                $this->warnings,
+            );
+        }
+        return $this->tableContext;
     }
 
     /**
@@ -151,6 +197,18 @@ final class BlockFlowContext implements FormattingContext
             $flushInline();
             if ($child instanceof ImageBox) {
                 $childFragment = $this->layoutImage($child, new Rect($contentX, $cursorY, $contentWidth, INF));
+                $children[] = $childFragment;
+                $contentBottom = $childFragment->rect->bottom();
+                $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
+                continue;
+            }
+            // M5-T4: una TableBox hija se delega ENTERA a TableFormattingContext (ver
+            // tableContext()/su docblock de clase) — reemplaza el skip de T3: el cursor SÍ avanza
+            // ahora (mismo patrón que ImageBox/display:flex justo arriba: fragmento + avance de
+            // cursor con el margin-bottom propio de la tabla, resuelto contra este mismo
+            // $contentWidth).
+            if ($child instanceof TableBox) {
+                $childFragment = $this->tableContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
                 $contentBottom = $childFragment->rect->bottom();
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);

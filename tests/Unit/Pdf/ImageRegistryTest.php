@@ -95,3 +95,49 @@ it('writes exactly one XObject definition even when the same imageKey is request
     });
     expect(substr_count($pdf, '/Subtype /Image'))->toBe(1);
 });
+
+it('dedups the same file reached via two different path spellings using realpath (M5-T1, deferred from M3)', function () {
+    // 'tiny.jpg' vs './tiny.jpg': different strings, same real file -- must share one XObject
+    // (resource name/objectId), not two, even though ImageFragment's own imageKey is never
+    // normalized itself (see the class docblock's "documented fallback").
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $registry = new ImageRegistry($writer, new ImageLoader());
+
+    $dotted = dirname(IMG_JPEG_FIXTURE) . '/./' . basename(IMG_JPEG_FIXTURE);
+    $plain = $registry->xobjectFor(IMG_JPEG_FIXTURE);
+    $viaDotted = $registry->xobjectFor($dotted);
+
+    expect($viaDotted)->toBe($plain);
+    expect($registry->pageResources())->toHaveCount(1);
+});
+
+it('serves the same XObject by ORIGINAL path spelling after deletion, even when raw path and realpath differ (M5-T1 regression)', function () {
+    // Same defect as ImageLoaderTest's junction regression test: reviewer reproduced it with an
+    // NTFS junction (raw path !== realpath at first xobjectFor() call). If the target is deleted
+    // before a LATER xobjectFor() call using the same raw spelling, a realpath-only dedup key
+    // fails to resolve and falls back to the raw key -- never stored -- causing a re-decode
+    // attempt instead of serving the cached XObject. Reproduced here via a './' path segment
+    // instead of an actual junction/symlink (no elevated Windows permissions required).
+    $dir = sys_get_temp_dir() . '/pliego-imgregistry-toctou-' . uniqid();
+    mkdir($dir);
+    copy(IMG_JPEG_FIXTURE, $dir . '/tiny.jpg');
+    $path = $dir . '/./tiny.jpg';
+
+    $stream = fopen('php://memory', 'r+b');
+    assert($stream !== false);
+    $writer = new PdfWriter($stream);
+    $writer->begin();
+    $registry = new ImageRegistry($writer, new ImageLoader());
+
+    $first = $registry->xobjectFor($path);
+    unlink($dir . '/tiny.jpg');
+
+    $second = $registry->xobjectFor($path); // same raw spelling as the first call
+    expect($second)->toBe($first);
+    expect($registry->pageResources())->toHaveCount(1);
+
+    rmdir($dir);
+});

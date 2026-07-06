@@ -404,10 +404,10 @@ it('expands "flex: auto" to grow 1, shrink 1, basis auto', function () {
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('expands a single unitless number "flex: N" to grow N, shrink 1, basis 0', function () {
+it('expands a single unitless number "flex: N" to grow N, shrink 1, basis 0% (M5-T1: §7.1.1 says 0%, not 0px)', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('flex', '2'))->toEqual([
-        'flex-grow' => 2.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::zero(),
+        'flex-grow' => 2.0, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::percent(0.0),
     ]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
@@ -420,10 +420,10 @@ it('expands a single width "flex: Npx" to grow 1, shrink 1, basis N', function (
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('expands two numbers "flex: N M" to grow N, shrink M, basis 0', function () {
+it('expands two numbers "flex: N M" to grow N, shrink M, basis 0% (M5-T1: §7.1.1 says 0%, not 0px)', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('flex', '2 3'))->toEqual([
-        'flex-grow' => 2.0, 'flex-shrink' => 3.0, 'flex-basis' => LengthPercentage::zero(),
+        'flex-grow' => 2.0, 'flex-shrink' => 3.0, 'flex-basis' => LengthPercentage::percent(0.0),
     ]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
@@ -453,6 +453,67 @@ it('warns on unsupported flex shorthand values', function () {
     foreach (['2 3 4 5', 'red', '2 red', '2 3 red', ''] as $value) {
         $parser = new DeclarationParser();
         $result = $parser->parse('flex', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+// --- M5-T2: display:table*, border-spacing, table-layout, vertical-align -----------------
+
+it('accepts the 5 table display keywords alongside block/none/flex', function () {
+    $parser = new DeclarationParser();
+    foreach (['table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group'] as $value) {
+        expect($parser->parse('display', $value))->toBe(['display' => $value]);
+    }
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses border-spacing as a single px length', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-spacing', '4px'))->toEqual(['border-spacing' => Length::px(4.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on a two-value border-spacing (only one value supported in M5)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-spacing', '4px 8px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns on a percentage or garbage border-spacing', function () {
+    foreach (['50%', 'auto', ''] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('border-spacing', $value);
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('rejects a negative border-spacing with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-spacing', '-4px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses table-layout auto/fixed and warns on unsupported values', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('table-layout', 'auto'))->toBe(['table-layout' => 'auto']);
+    expect($parser->parse('table-layout', 'fixed'))->toBe(['table-layout' => 'fixed']);
+    $result = $parser->parse('table-layout', 'bogus');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parses vertical-align top/middle/bottom and warns on baseline/sub/super/percentages', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('vertical-align', 'top'))->toBe(['vertical-align' => 'top']);
+    expect($parser->parse('vertical-align', 'middle'))->toBe(['vertical-align' => 'middle']);
+    expect($parser->parse('vertical-align', 'bottom'))->toBe(['vertical-align' => 'bottom']);
+    foreach (['baseline', 'sub', 'super', 'text-top', 'text-bottom', '50%'] as $value) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse('vertical-align', $value);
         expect($result)->toBe([]);
         expect($parser->drainWarnings())->not->toBeEmpty();
     }

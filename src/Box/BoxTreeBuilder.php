@@ -30,6 +30,28 @@ final class BoxTreeBuilder
     private function buildBlock(\Dom\Element $element, StyleMap $styles): BlockBox
     {
         $style = $styles->get($element);
+        $children = $this->collectChildren($element, $styles, $style);
+        if ($style->display === Display::Flex) {
+            $children = $this->wrapAnonymousFlexItems($children, $style);
+        }
+        return new BlockBox($style, $children, strtolower($element->tagName));
+    }
+
+    /**
+     * M5-T3: recorrido de hijos EXTRAÍDO de buildBlock() sin cambiar su comportamiento, para que
+     * buildTableCell() pueda reutilizarlo TAL CUAL (el brief exige "children normales — reutiliza
+     * el pipeline entero") sin pasar por el envoltorio BlockBox ni por wrapAnonymousFlexItems()
+     * (una celda no es, por sí misma, un contenedor flex salvo que declare su propio
+     * display:flex, caso en el que ComputedStyle ya la habría dejado de reconocer como
+     * Display::TableCell — ver docblock de collectTableRows()/buildTableRow(), fuera de alcance
+     * de esta tarea). Único cambio de comportamiento respecto al buildBlock() de M4: un hijo cuyo
+     * Display es Table construye un TableBox (buildTable()) en vez de recursar como BlockBox
+     * plano — ver buildChildBox().
+     *
+     * @return list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox>
+     */
+    private function collectChildren(\Dom\Element $element, StyleMap $styles, ComputedStyle $style): array
+    {
         $children = [];
         /**
          * @var list<TextRun|LineBreakRun|ImageBox> $pending secuencia inline pendiente de
@@ -53,7 +75,8 @@ final class BoxTreeBuilder
             if (!$node instanceof \Dom\Element) {
                 continue;
             }
-            if ($styles->get($node)->display === Display::None) {
+            $childStyle = $styles->get($node);
+            if ($childStyle->display === Display::None) {
                 continue;
             }
             $tag = strtolower($node->tagName);
@@ -63,7 +86,7 @@ final class BoxTreeBuilder
             }
             if ($tag === 'img') {
                 $flush();
-                $imageBox = $this->buildImage($node, $styles->get($node));
+                $imageBox = $this->buildImage($node, $childStyle);
                 if ($imageBox !== null) {
                     $children[] = $imageBox;
                 }
@@ -74,13 +97,241 @@ final class BoxTreeBuilder
                 continue;
             }
             $flush();
-            $children[] = $this->buildBlock($node, $styles);
+            $children[] = $this->buildChildBox($node, $styles, $childStyle);
         }
         $flush();
-        if ($style->display === Display::Flex) {
-            $children = $this->wrapAnonymousFlexItems($children, $style);
+        return $children;
+    }
+
+    /**
+     * M5-T3: dispatch por Display::Table entre TableBox y BlockBox — el ÚNICO punto donde
+     * collectChildren() (y, transitivamente, wrapElementInAnonymousRow()/buildTableRow() para un
+     * elemento "no-fila"/"no-celda" que resulta ser él mismo otra tabla) decide construir una
+     * TableBox en vez de recursar como bloque plano. $childStyle se recibe ya resuelto por el
+     * caller para no repetir el lookup en StyleMap.
+     */
+    private function buildChildBox(\Dom\Element $element, StyleMap $styles, ComputedStyle $childStyle): BlockBox|TableBox
+    {
+        return $childStyle->display === Display::Table
+            ? $this->buildTable($element, $styles)
+            : $this->buildBlock($element, $styles);
+    }
+
+    /**
+     * M5-T3 (css-tables-3 §2 / CSS 2.2 §17.2.1): elemento con Display::Table (típicamente
+     * <table>, UA default desde M5-T2 — ver ComputedStyle::TABLE_DISPLAY_BY_TAG). $rows llega ya
+     * APLANADA y con la estructura anónima MÍNIMA aplicada por collectTableRows() — ver el
+     * docblock de esa función para el detalle de qué se cubre y qué NO (documentado también más
+     * abajo, junto a wrapElementInAnonymousRow()).
+     */
+    private function buildTable(\Dom\Element $element, StyleMap $styles): TableBox
+    {
+        $style = $styles->get($element);
+        $rows = $this->collectTableRows($element, $styles, false);
+        return new TableBox($style, $rows, strtolower($element->tagName));
+    }
+
+    /**
+     * css-tables-3 §2: recorre los hijos DIRECTOS de $container —una <table> (llamada raíz, con
+     * $isHeader=false) o, recursivamente, uno de sus <thead>/<tbody> (Display::TableHeaderGroup/
+     * TableRowGroup)— devolviendo la lista APLANADA de TableRowBox que le corresponde.
+     * thead/tbody son TRANSPARENTES: no producen ningún nivel propio en el árbol de caja, sus
+     * filas (y cualquier contenido suelto que necesiten envolver, ver más abajo) se insertan
+     * DIRECTAMENTE en la lista que devuelve esta llamada, en el mismo orden de documento en que
+     * aparecen sus hijos. $isHeader se propaga a TODO lo que esta llamada concreta genere: true
+     * quiere decir "estamos recorriendo un <thead>" (así que tanto sus <tr> reales como cualquier
+     * fila anónima que genere por contenido suelto quedan marcadas isHeader=true); false cubre
+     * tanto la llamada raíz (nivel <table>) como un <tbody>.
+     *
+     * Variante MÍNIMA de generación de cajas anónimas (§17.2.1 reducido, adjudicación del brief
+     * M5-T3) — lo que SÍ cubre:
+     *   - Texto no-blanco suelto directamente en $container (después de colapsar whitespace
+     *     interno y recortar los extremos — texto puramente blanco NO genera ninguna caja, igual
+     *     que el whitespace-collapsing normal de CSS) → fila anónima con una única celda anónima
+     *     conteniendo un TextRun (ver wrapLooseContentInAnonymousRow()).
+     *   - Cualquier otro elemento hijo que NO sea <tr>/thead/tbody (p.ej. un <div>, un elemento
+     *     inline, u OTRA <table> anidada directamente sin pasar por una fila) → fila anónima con
+     *     una única celda anónima envolviendo su subárbol COMPLETO, construido con el pipeline
+     *     normal (buildChildBox(), ver wrapElementInAnonymousRow()).
+     *
+     * Lo que NO cubre (documentado, fuera del alcance "reducido" de esta tarea):
+     *   - NO fusiona hermanos sueltos ADYACENTES en una única caja anónima compartida — cada
+     *     tramo suelto (texto o elemento) genera su PROPIA fila anónima, a diferencia del
+     *     algoritmo completo de §17.2.1, que agruparía un tramo contiguo completo en un solo
+     *     anónimo (ver el test "does not merge adjacent loose siblings").
+     *   - <caption>/<col>/<colgroup>/<tfoot> no tienen ningún tratamiento especial (fuera de
+     *     alcance M5, ver plan de milestone): al no tener un Display de tabla propio (UA default
+     *     cae a Display::Block, igual que cualquier tag desconocido), un <caption> como hijo
+     *     directo de <table> caería en la rama "elemento no-fila" de más abajo — comportamiento
+     *     no equivalente al de un navegador real, pero consistente y sin excepción.
+     *   - Un elemento con Display::TableRow/TableCell/TableHeaderGroup/TableRowGroup que aparece
+     *     FUERA de un árbol de tabla (nunca alcanzado por buildTable()) no genera ninguna caja
+     *     anónima de tabla a su alrededor: simplemente fluye por collectChildren() como un
+     *     BlockBox genérico (mismo comportamiento que M5-T2 dejó documentado en su report).
+     *
+     * NOTA DE ALCANCE (verificado empíricamente, no una decisión de diseño): \Dom\HTMLDocument —
+     * la fuente real de DOM para cualquier documento que llega vía HtmlParser::parse() — ejecuta
+     * el algoritmo de construcción de árbol de HTML5 completo, que ya hace FOSTER PARENTING de
+     * cualquier texto no-blanco o elemento que no sea de estructura de tabla encontrado
+     * directamente dentro de <table>/<tr>: lo saca del todo (como hermano PRECEDENTE de la
+     * tabla), nunca llega a ser hijo real del elemento de tabla en el DOM. Por eso este método
+     * (y buildTableRow()) son en la práctica INALCANZABLES a través de HtmlParser::parse() sobre
+     * una cadena HTML — solo se ejercitan en los tests construyendo el DOM de forma imperativa
+     * (createElement()+appendChild(), que NO pasa por el algoritmo de inserción del parser) — el
+     * mismo tipo de árbol que produciría una fuente de DOM no-HTML5 (XML/XHTML, u otro
+     * Dom\HTMLDocument construido a mano). El código sigue siendo correcto y necesario: nada en
+     * BoxTreeBuilder asume que su entrada viene siempre de HtmlParser.
+     *
+     * @return list<TableRowBox>
+     */
+    private function collectTableRows(\Dom\Element $container, StyleMap $styles, bool $isHeader): array
+    {
+        $containerStyle = $styles->get($container);
+        $rows = [];
+        foreach ($container->childNodes as $node) {
+            if ($node instanceof \Dom\Text) {
+                $text = self::collapseAndTrim($node->textContent ?? '');
+                if ($text === '') {
+                    continue;
+                }
+                $rows[] = $this->wrapLooseContentInAnonymousRow($text, $containerStyle, $isHeader);
+                continue;
+            }
+            if (!$node instanceof \Dom\Element) {
+                continue;
+            }
+            $childStyle = $styles->get($node);
+            if ($childStyle->display === Display::None) {
+                continue;
+            }
+            if ($childStyle->display === Display::TableRow) {
+                $rows[] = $this->buildTableRow($node, $styles, $isHeader);
+                continue;
+            }
+            if ($childStyle->display === Display::TableHeaderGroup) {
+                foreach ($this->collectTableRows($node, $styles, true) as $row) {
+                    $rows[] = $row;
+                }
+                continue;
+            }
+            if ($childStyle->display === Display::TableRowGroup) {
+                foreach ($this->collectTableRows($node, $styles, false) as $row) {
+                    $rows[] = $row;
+                }
+                continue;
+            }
+            $rows[] = $this->wrapElementInAnonymousRow($node, $styles, $childStyle, $containerStyle, $isHeader);
         }
-        return new BlockBox($style, $children, strtolower($element->tagName));
+        return $rows;
+    }
+
+    /** Ver collectTableRows(): texto suelto directamente en table/thead/tbody → fila+celda
+     * anónimas propias. $textRun conserva $containerStyle (misma convención que un TextRun de
+     * texto suelto en collectChildren(): el nodo de texto en sí no tiene ComputedStyle propio,
+     * adopta el de su elemento contenedor). */
+    private function wrapLooseContentInAnonymousRow(string $text, ComputedStyle $containerStyle, bool $isHeader): TableRowBox
+    {
+        $cellStyle = ComputedStyle::compute([], $containerStyle, 'td');
+        $cell = new TableCellBox($cellStyle, [new TextRun($text, $containerStyle)], 1, 'anonymous');
+        $rowStyle = ComputedStyle::compute([], $containerStyle, 'tr');
+        return new TableRowBox($rowStyle, [$cell], $isHeader);
+    }
+
+    /** Ver collectTableRows(): un elemento no-fila directamente en table/thead/tbody → fila+celda
+     * anónimas propias, envolviendo el elemento ENTERO (su subárbol completo vía buildChildBox() —
+     * si el elemento resulta ser él mismo otra <table>, se construye como TableBox anidada, no
+     * como BlockBox). */
+    private function wrapElementInAnonymousRow(
+        \Dom\Element $element,
+        StyleMap $styles,
+        ComputedStyle $childStyle,
+        ComputedStyle $containerStyle,
+        bool $isHeader,
+    ): TableRowBox {
+        $cellStyle = ComputedStyle::compute([], $containerStyle, 'td');
+        $cell = new TableCellBox($cellStyle, [$this->buildChildBox($element, $styles, $childStyle)], 1, 'anonymous');
+        $rowStyle = ComputedStyle::compute([], $containerStyle, 'tr');
+        return new TableRowBox($rowStyle, [$cell], $isHeader);
+    }
+
+    /**
+     * css-tables-3 §2: una <tr> real (encontrada directamente, o ya aplanada desde un thead/tbody
+     * transparente por collectTableRows()). Recorre sus hijos DIRECTOS: td/th (Display::TableCell)
+     * se construyen con buildTableCell(); texto no-blanco suelto o cualquier otro elemento se
+     * envuelve en una celda anónima PROPIA (misma divergencia de no-fusión documentada en
+     * collectTableRows()) — a diferencia del nivel tabla, aquí NUNCA hace falta generar una fila
+     * anónima: la fila YA EXISTE, es este mismo <tr>.
+     */
+    private function buildTableRow(\Dom\Element $trElement, StyleMap $styles, bool $isHeader): TableRowBox
+    {
+        $trStyle = $styles->get($trElement);
+        $cells = [];
+        foreach ($trElement->childNodes as $node) {
+            if ($node instanceof \Dom\Text) {
+                $text = self::collapseAndTrim($node->textContent ?? '');
+                if ($text === '') {
+                    continue;
+                }
+                $cellStyle = ComputedStyle::compute([], $trStyle, 'td');
+                $cells[] = new TableCellBox($cellStyle, [new TextRun($text, $trStyle)], 1, 'anonymous');
+                continue;
+            }
+            if (!$node instanceof \Dom\Element) {
+                continue;
+            }
+            $childStyle = $styles->get($node);
+            if ($childStyle->display === Display::None) {
+                continue;
+            }
+            if ($childStyle->display === Display::TableCell) {
+                $cells[] = $this->buildTableCell($node, $styles);
+                continue;
+            }
+            $cellStyle = ComputedStyle::compute([], $trStyle, 'td');
+            $cells[] = new TableCellBox($cellStyle, [$this->buildChildBox($node, $styles, $childStyle)], 1, 'anonymous');
+        }
+        return new TableRowBox($trStyle, $cells, $isHeader);
+    }
+
+    /**
+     * css-tables-3 §2: celda real (<td>/<th>). $children reutiliza collectChildren() — el MISMO
+     * recorrido que un BlockBox normal (bloques/inline/imágenes/tabla anidada, ver
+     * buildChildBox()), documentado en el brief como "reutiliza el pipeline entero": la celda no
+     * impone ninguna regla de contenido propia. rowspan NO está soportado (M6): su sola PRESENCIA
+     * como atributo (cualquier valor, incluido "1") dispara un warning suave y la celda se trata
+     * como si no lo tuviera — nunca lanza una excepción.
+     */
+    private function buildTableCell(\Dom\Element $cellElement, StyleMap $styles): TableCellBox
+    {
+        $style = $styles->get($cellElement);
+        if ($cellElement->getAttribute('rowspan') !== null) {
+            $this->warnings->addWarning('rowspan not supported yet: treated as 1');
+        }
+        $children = $this->collectChildren($cellElement, $styles, $style);
+        return new TableCellBox($style, $children, self::parseColspan($cellElement), strtolower($cellElement->tagName));
+    }
+
+    /** colspan es un entero ≥1 (CSS 2.2 §17.2 / HTML): ausente, no puramente numérico ("abc",
+     * "2.5", con signo) o "0" cae al default 1 — nunca un warning (a diferencia de rowspan, un
+     * colspan inválido/ausente es indistinguible del caso normal "sin colspan"). */
+    private static function parseColspan(\Dom\Element $element): int
+    {
+        $value = $element->getAttribute('colspan');
+        if ($value === null || preg_match('/^\d+$/', $value) !== 1) {
+            return 1;
+        }
+        $number = (int) $value;
+        return $number >= 1 ? $number : 1;
+    }
+
+    /** Colapsa whitespace interno a un único espacio Y recorta los extremos — a diferencia de
+     * collapseInternalWhitespace() (usada para TextRun normales, donde el recorte de frontera lo
+     * decide collapse() mirando a los runs vecinos), aquí cada tramo suelto de tabla es
+     * INDEPENDIENTE (ver collectTableRows()/buildTableRow(): nunca se fusiona con un vecino), así
+     * que no hay frontera que negociar: se recorta por completo. */
+    private static function collapseAndTrim(string $raw): string
+    {
+        return trim(self::collapseInternalWhitespace($raw));
     }
 
     /**
@@ -89,11 +340,12 @@ final class BoxTreeBuilder
      * contenedor (BlockBox/ImageBox directos + TextRun/LineBreakRun ya colapsados por
      * collapse(), incluida cualquier ImageBox "hoisteada" desde un inline — ver collectInline()).
      * Un tramo CONTIGUO de TextRun|LineBreakRun se envuelve en un ÚNICO BlockBox anónimo (tag
-     * "anonymous") por tramo; BlockBox e ImageBox ya son items directos por sí mismos y NUNCA
-     * entran en el anónimo — una ImageBox es un replaced box (css-images-3), que en flexbox es
-     * su propio item directo igual que un BlockBox, así que corta el tramo de texto exactamente
-     * igual que ya hace un LineBreakRun (nunca lo hace un anónimo distinto por LineBreakRun: ese
-     * sigue siendo un separador DENTRO del tramo de texto, per brief M4-T2).
+     * "anonymous") por tramo; BlockBox, ImageBox y TableBox ya son items directos por sí mismos y
+     * NUNCA entran en el anónimo — una ImageBox es un replaced box (css-images-3) y una TableBox
+     * (M5-T3) es una caja de tabla, ambas son, en flexbox, su propio item directo igual que un
+     * BlockBox, así que cortan el tramo de texto exactamente igual que ya hace un LineBreakRun
+     * (nunca lo hace un anónimo distinto por LineBreakRun: ese sigue siendo un separador DENTRO
+     * del tramo de texto, per brief M4-T2).
      *
      * El estilo del anónimo es ComputedStyle::compute([], $containerStyle, 'div'): sin
      * declaraciones propias, así que cae al initial value de todo salvo las propiedades
@@ -102,8 +354,8 @@ final class BoxTreeBuilder
      * contenedor (M4-T1: ninguna de esas hereda), así que el anónimo nunca es él mismo un flex
      * container aunque su padre lo sea.
      *
-     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox> $children
-     * @return list<BlockBox|ImageBox>
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
+     * @return list<BlockBox|ImageBox|TableBox>
      */
     private function wrapAnonymousFlexItems(array $children, ComputedStyle $containerStyle): array
     {
@@ -202,8 +454,8 @@ final class BoxTreeBuilder
      * texto-antes → ImageBox → texto-después), reusando el mismo buildImage() con sus mismos
      * warnings de fallo suave (src remoto, fichero ausente, formato no soportado). `collapse()`
      * trata el token ImageBox como separador de secuencia (igual que un LineBreakRun): no se le
-     * aplica el whitespace-collapsing propio de texto, y no imprime a la caja padre bordes que
-     * espacio de frontera con el texto adyacente. SIEMPRE se añade un warning adicional
+     * aplica el whitespace-collapsing propio de texto, ni genera espacio de frontera con el
+     * texto adyacente. SIEMPRE se añade un warning adicional
      * (independiente del éxito/fallo de buildImage) para que la aproximación quede visible en
      * RenderReport — el consumidor del reporte necesita saber que el layout aquí no es fiel al
      * documento fuente.
@@ -231,9 +483,11 @@ final class BoxTreeBuilder
             }
             if ($tag === 'img') {
                 $src = $node->getAttribute('src') ?? '';
-                $this->warnings->addWarning(
-                    "inline image hoisted to block level (inline replaced boxes not supported yet): $src",
-                );
+                // M5-T1 (housekeeping): un src vacío ya no arrastra un "): " colgante y feo al
+                // final del mensaje -- el sufijo con el src solo se añade cuando hay algo que
+                // mostrar.
+                $message = 'inline image hoisted to block level (inline replaced boxes not supported yet)';
+                $this->warnings->addWarning($src === '' ? $message : "$message: $src");
                 $imageBox = $this->buildImage($node, $styles->get($node));
                 if ($imageBox !== null) {
                     $pending[] = $imageBox;

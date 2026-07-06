@@ -30,7 +30,12 @@ final class DeclarationParser
     private const array NON_NEGATIVE_PROPERTIES = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width'];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
-        'display' => ['block', 'none', 'flex'],
+        // css-tables-3 §2: los 5 display values de tabla soportados en M5 (grep OBLIGATORIO
+        // hecho en ComputedStyle/BoxTreeBuilder antes de añadirlos aquí — ver Display::Table).
+        'display' => [
+            'block', 'none', 'flex',
+            'table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group',
+        ],
         'font-family' => null,
         'box-sizing' => ['content-box', 'border-box'],
         // css-flexbox-1 §5.1/§5.2/§8.2/§8.3: *-reverse, wrap-reverse, space-around/evenly y
@@ -40,6 +45,9 @@ final class DeclarationParser
         'flex-wrap' => ['nowrap', 'wrap'],
         'justify-content' => ['flex-start', 'center', 'flex-end', 'space-between'],
         'align-items' => ['stretch', 'flex-start', 'center', 'flex-end'],
+        // CSS 2.2 §17.5.2: 'auto' (initial) y 'fixed' — M5-T4 consume $tableLayout, aquí solo
+        // se valida y parsea el keyword.
+        'table-layout' => ['auto', 'fixed'],
     ];
 
     /** css-flexbox-1 §7.1.1: N sin unidad en la forma "flex: N ..." nunca admite signo (grow y
@@ -138,6 +146,12 @@ final class DeclarationParser
         }
         if ($property === 'flex-basis') {
             return $this->parseFlexBasis($value);
+        }
+        if ($property === 'border-spacing') {
+            return $this->parseBorderSpacing($value);
+        }
+        if ($property === 'vertical-align') {
+            return $this->parseVerticalAlign($value);
         }
         return $this->warn("Unsupported property: $property");
     }
@@ -341,6 +355,53 @@ final class DeclarationParser
         };
     }
 
+    /**
+     * CSS 2.2 §17.6.1: `border-spacing: <length> <length>?` — el primer valor es horizontal, el
+     * segundo vertical. M5 solo soporta la forma de un único valor (mismo px para ambos ejes,
+     * como consume TableFormattingContext en M5-T4); dos valores son válidos en CSS pero fuera
+     * de alcance aquí, así que caen al warning genérico en vez de tomar solo el primero (evita
+     * fingir soporte de ejes independientes que el layout no respeta). Solo admite px (no %,
+     * igual que row-gap/column-gap en LENGTH_PROPERTIES) — Length::fromCss ya rechaza % de
+     * forma natural.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBorderSpacing(string $value): array
+    {
+        $tokens = preg_split('/\s+/', trim($value)) ?: [];
+        if (count($tokens) !== 1) {
+            return $this->warn("Unsupported border-spacing (single value only in M5): $value");
+        }
+        $length = Length::fromCss($tokens[0]);
+        if ($length === null) {
+            return $this->warn("Unsupported border-spacing: $value");
+        }
+        if ($length->px < 0.0) {
+            return $this->warn("Negative value not allowed for border-spacing: $value");
+        }
+        return ['border-spacing' => $length];
+    }
+
+    /**
+     * CSS 2.2 §10.8.1: vertical-align tiene una tabla larga de keywords (baseline, sub, super,
+     * text-top, text-bottom, middle, top, bottom) más <percentage>/<length>; M5 solo soporta
+     * top|middle|bottom (los que consume TableCellBox en M5-T4) — baseline (el initial value
+     * real), sub/super/text-top/text-bottom y cualquier percentage/length caen al warning
+     * genérico, documentado en VerticalAlign.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseVerticalAlign(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        return match ($keyword) {
+            'top' => ['vertical-align' => 'top'],
+            'middle' => ['vertical-align' => 'middle'],
+            'bottom' => ['vertical-align' => 'bottom'],
+            default => $this->warn("Unsupported vertical-align: $value"),
+        };
+    }
+
     /** @return array<string, mixed> */
     private function warn(string $message): array
     {
@@ -453,11 +514,18 @@ final class DeclarationParser
      *   none              → flex-grow:0    flex-shrink:0  flex-basis:auto
      *   initial           → flex-grow:0    flex-shrink:1  flex-basis:auto  (initial value)
      *   auto              → flex-grow:1    flex-shrink:1  flex-basis:auto
-     *   <N>               → flex-grow:N    flex-shrink:1  flex-basis:0
+     *   <N>               → flex-grow:N    flex-shrink:1  flex-basis:0%
      *   <width>           → flex-grow:1    flex-shrink:1  flex-basis:<width>
-     *   <N> <M>           → flex-grow:N    flex-shrink:M  flex-basis:0
+     *   <N> <M>           → flex-grow:N    flex-shrink:M  flex-basis:0%
      *   <N> <width>       → flex-grow:N    flex-shrink:1  flex-basis:<width>
      *   <N> <M> <width>   → flex-grow:N    flex-shrink:M  flex-basis:<width>
+     *
+     * M5-T1 (housekeeping): la basis omitida es `0%` (LengthPercentage::percent(0.0)), no `0px`
+     * (LengthPercentage::zero(), lo que este método usaba antes) — el propio texto del spec
+     * (§7.1.1: "flex: <positive-number>" expande a "flex-grow, 1, 0%") lo fija en porcentaje.
+     * Numéricamente resuelve idéntico (0% y 0px de CUALQUIER base dan 0px, ver
+     * LengthPercentage::resolve()), así que esta corrección no cambia ninguna geometría ya
+     * calculada — es una corrección de fidelidad al spec, no de comportamiento observable.
      *
      * @return array<string, mixed>
      */
@@ -489,7 +557,7 @@ final class DeclarationParser
     private function parseFlexOneValue(string $token, string $original): array
     {
         if (preg_match(self::FLEX_NUMBER_RE, $token) === 1) {
-            return ['flex-grow' => (float) $token, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::zero()];
+            return ['flex-grow' => (float) $token, 'flex-shrink' => 1.0, 'flex-basis' => LengthPercentage::percent(0.0)];
         }
         $basis = $this->flexBasisToken($token);
         if ($basis === null) {
@@ -506,7 +574,7 @@ final class DeclarationParser
         }
         $grow = (float) $first;
         if (preg_match(self::FLEX_NUMBER_RE, $second) === 1) {
-            return ['flex-grow' => $grow, 'flex-shrink' => (float) $second, 'flex-basis' => LengthPercentage::zero()];
+            return ['flex-grow' => $grow, 'flex-shrink' => (float) $second, 'flex-basis' => LengthPercentage::percent(0.0)];
         }
         $basis = $this->flexBasisToken($second);
         if ($basis === null) {
