@@ -8,6 +8,7 @@
     ],
     "background": null,
     "borders": null,
+    "atomic": false,
     "children": [
         {
             "type": "box",
@@ -19,6 +20,7 @@
             ],
             "background": null,
             "borders": null,
+            "atomic": false,
             "children": [
                 {
                     "type": "text",
@@ -45,6 +47,7 @@
             ],
             "background": null,
             "borders": null,
+            "atomic": false,
             "children": [
                 {
                     "type": "text",

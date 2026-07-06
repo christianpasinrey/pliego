@@ -226,6 +226,47 @@ it('skips border painting entirely when the box has no visible border side', fun
     expect($canvas->calls)->toBe([]);
 });
 
+it('recurses into a composite BoxFragment (M4-T6): background, then borders, then children, walking each nested level in the same order', function () {
+    // The Painter recursion path this exercises (paintFragment(), extracted in M4-T5 for exactly
+    // this purpose) was, until now, only reached indirectly through FlexFormattingContext's atomic
+    // fragments in E2E tests -- never with a dedicated Painter-level unit test asserting the
+    // painting ORDER of a composite fragment tree. Built here directly (no flex involved at all):
+    // an outer BoxFragment (background + border) containing an inner BoxFragment (its own,
+    // different background + border) containing a TextFragment -- three nesting levels, each with
+    // paintable content, so the RecordingCanvas call order proves bg->borders->children recurses
+    // correctly at every depth, not just one level.
+    $canvas = new RecordingCanvas();
+    $red = new Color(255, 0, 0);
+    $blue = new Color(0, 0, 255);
+    $black = new Color(0, 0, 0);
+    $outerBorder = new BorderSet(
+        new BorderSide(1.0, BorderStyle::Solid, $black),
+        BorderSet::none()->right,
+        BorderSet::none()->bottom,
+        BorderSet::none()->left,
+    );
+    $innerBorder = new BorderSet(
+        BorderSet::none()->top,
+        new BorderSide(2.0, BorderStyle::Solid, $black),
+        BorderSet::none()->bottom,
+        BorderSet::none()->left,
+    );
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, $black, 'default:400:normal', false);
+    $inner = new BoxFragment(new Rect(0, 0, 40, 30), $blue, [$innerText], $innerBorder);
+    $outer = new BoxFragment(new Rect(0, 0, 100, 50), $red, [$inner], $outerBorder, atomic: true);
+    $page = new Page(1, [$outer]);
+
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#ff0000)', // outer background
+        'rect(0.00,0.00,100.00,1.00,#000000)',  // outer top border (only visible side)
+        'rect(0.00,0.00,40.00,30.00,#0000ff)',  // inner background
+        'rect(38.00,0.00,2.00,30.00,#000000)',  // inner right border (only visible side)
+        'text(Hi)',                             // innermost leaf, last
+    ]);
+});
+
 it('paints an ImageFragment via Canvas::drawImage(), in document order between backgrounds and text (M3-T4)', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [

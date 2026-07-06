@@ -1,0 +1,100 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        200.0,
+        80.0
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                200.0,
+                80.0
+            ],
+            "background": null,
+            "borders": null,
+            "atomic": true,
+            "children": [
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        0.0,
+                        80.0,
+                        30.0
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "image",
+                            "rect": [
+                                0.0,
+                                0.0,
+                                80.0,
+                                30.0
+                            ],
+                            "imageKey": "tiny.jpg"
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        80.0,
+                        0.0,
+                        80.0,
+                        50.0
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "image",
+                            "rect": [
+                                80.0,
+                                0.0,
+                                80.0,
+                                50.0
+                            ],
+                            "imageKey": "tiny.jpg"
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "rect": [
+                        0.0,
+                        60.0,
+                        80.0,
+                        20.0
+                    ],
+                    "background": null,
+                    "borders": null,
+                    "atomic": false,
+                    "children": [
+                        {
+                            "type": "image",
+                            "rect": [
+                                0.0,
+                                60.0,
+                                80.0,
+                                20.0
+                            ],
+                            "imageKey": "tiny.jpg"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -351,6 +351,49 @@ it('column: stacks 3 items vertically with their own CSS heights and row-gap bet
     expect($frag->rect->height)->toBe(140.0);
 });
 
+it('column: items without an explicit height fall back to their NATURAL height, measured via a throwaway layout at the container content width (M4-T6)', function () {
+    // Untested branch flagged by the T5 report: layoutColumnContainer()'s base[] computation when
+    // NEITHER flex-basis NOR the item's own CSS height is set (§9.2 "auto" falling through to
+    // natural height, see its docblock) -- every prior column test declared an explicit height on
+    // every item. A short one-line item and a longer paragraph that wraps to several lines get
+    // DIFFERENT natural heights; the oracle is an INDEPENDENT plain BlockFlowContext layout at the
+    // very same content width (150px, no padding/border on the container) FlexFormattingContext's
+    // internal throwaway measurement pass uses -- not a tautological recomputation of the same
+    // code path, since it goes through a fresh BlockFlowContext instance instead.
+    $childStyle = flexStyle();
+    $shortText = new TextRun('Corto', $childStyle);
+    $longText = new TextRun(
+        'Un paragrafo abbastanza lungo da avvolgersi su più righe dentro la larghezza del contenitore.',
+        $childStyle,
+    );
+    $a = new BlockBox($childStyle, [$shortText], 'div');
+    $b = new BlockBox($childStyle, [$longText], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(150.0), 'flex-direction' => 'column', 'row-gap' => Length::px(5.0)]),
+        [$a, $b],
+        'div',
+    );
+
+    $blockFlow = new BlockFlowContext($this->measurer, $this->catalog);
+    $expectedAHeight = $blockFlow->layout(new BlockBox($childStyle, [$shortText], 'div'), new Rect(0.0, 0.0, 150.0, INF))->rect->height;
+    $expectedBHeight = $blockFlow->layout(new BlockBox($childStyle, [$longText], 'div'), new Rect(0.0, 0.0, 150.0, INF))->rect->height;
+    // Sanity: the long paragraph actually wraps to more lines than the short one, so this test
+    // exercises a REAL difference in natural height, not two items that happen to match by luck.
+    expect($expectedBHeight)->toBeGreaterThan($expectedAHeight);
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 500.0, INF));
+    [$aFrag, $bFrag] = $frag->children;
+    assert($aFrag instanceof BoxFragment && $bFrag instanceof BoxFragment);
+
+    expect($aFrag->rect->height)->toBe($expectedAHeight);
+    expect($aFrag->rect->y)->toBe(0.0);
+    expect($bFrag->rect->height)->toBe($expectedBHeight);
+    expect($bFrag->rect->y)->toBe($expectedAHeight + 5.0); // row-gap after A's natural height
+
+    // Auto container height hugs both natural heights plus the single row-gap between them.
+    expect($frag->rect->height)->toBe($expectedAHeight + $expectedBHeight + 5.0);
+});
+
 it('column: align-items stretch widens an auto-width item but leaves one with its own declared width untouched', function () {
     $auto = new BlockBox(flexStyle(['height' => Length::px(20.0)]), [], 'div');
     $ownWidth = new BlockBox(flexStyle(['height' => Length::px(20.0), 'width' => LengthPercentage::px(100.0)]), [], 'div');
