@@ -18,6 +18,18 @@ it('maps codepoints to glyphs via cmap format 4', function () {
     expect($this->font->glyphId(0xF1))->toBeGreaterThan(0);   // 'ñ'
     expect($this->font->glyphId(0x10FFFD))->toBe(0);          // fuera de BMP => .notdef
 });
+
+// M7-T3 (css-lists-3 §3, "marker glyph availability probe" del brief): verifica QUE DejaVuSans
+// (la cara 'default' registrada por FontCatalog::withDefaults(), usada para el marcador de un
+// <li> con estilo por defecto) tiene glifos reales para los 3 símbolos de bullet que
+// Layout\BlockFlowContext::listMarkerFragment() emite -- disc U+2022, circle U+25E6, square
+// U+25AA -- confirmando que la adjudicación del brief ("si falta, fallback documentado a U+00B7")
+// nunca se activa en la práctica con esta fuente: los 3 glyphId son > 0 (nunca .notdef/0).
+it('has real glyphs (not .notdef) for the 3 list-item marker bullets used by BlockFlowContext', function () {
+    expect($this->font->glyphId(0x2022))->toBeGreaterThan(0); // disc •
+    expect($this->font->glyphId(0x25E6))->toBeGreaterThan(0); // circle ◦
+    expect($this->font->glyphId(0x25AA))->toBeGreaterThan(0); // square ▪
+});
 it('exposes wider advances for wider glyphs', function () {
     $narrow = $this->font->advanceOf($this->font->glyphId(0x69)); // 'i'
     $wide = $this->font->advanceOf($this->font->glyphId(0x57));   // 'W'

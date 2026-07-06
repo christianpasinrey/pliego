@@ -502,3 +502,142 @@ it('delegates a TableBox child to TableFormattingContext end-to-end, advancing t
     // No overlap: the paragraph starts exactly where the table's border-box ends.
     expect($after->rect->y)->toBe($table->rect->bottom());
 });
+
+// --- M7-T3: list-item markers (css-lists-3 §3, reducido) ---------------------------------------
+// Convención de estos tests: listMarkerFragment() SIEMPRE añade el marcador como ÚLTIMO hijo del
+// BoxFragment del <li> (después de todo su contenido normal, ver BlockFlowContext::layout()) --
+// `$li->children[count($li->children) - 1]` es, por tanto, siempre el marcador cuando existe.
+
+function markerOf(BoxFragment $li): TextFragment
+{
+    $marker = $li->children[count($li->children) - 1];
+    assert($marker instanceof TextFragment);
+    return $marker;
+}
+
+it('emits a disc bullet (U+2022) for a plain <ul><li>', function () {
+    $frag = layoutHtml('<body><ul><li>a</li></ul></body>', '');
+    $ul = $frag->children[0];
+    assert($ul instanceof BoxFragment);
+    $li = $ul->children[0];
+    assert($li instanceof BoxFragment);
+    expect(markerOf($li)->text)->toBe("\u{2022}");
+});
+
+it('emits a decimal marker ("1.") for a plain <ol><li>', function () {
+    $frag = layoutHtml('<body><ol><li>a</li></ol></body>', '');
+    $ol = $frag->children[0];
+    assert($ol instanceof BoxFragment);
+    $li = $ol->children[0];
+    assert($li instanceof BoxFragment);
+    expect(markerOf($li)->text)->toBe('1.');
+});
+
+it('cycles disc -> circle -> square per ul nesting level via the UA stylesheet combinators', function () {
+    $frag = layoutHtml('<body><ul><li>a<ul><li>b<ul><li>c</li></ul></li></ul></li></ul></body>', '');
+    $ul1 = $frag->children[0];
+    assert($ul1 instanceof BoxFragment);
+    $li1 = $ul1->children[0];
+    assert($li1 instanceof BoxFragment);
+    expect(markerOf($li1)->text)->toBe("\u{2022}"); // disc, depth 1
+
+    $ul2 = $li1->children[1];
+    assert($ul2 instanceof BoxFragment);
+    $li2 = $ul2->children[0];
+    assert($li2 instanceof BoxFragment);
+    expect(markerOf($li2)->text)->toBe("\u{25E6}"); // circle, depth 2
+
+    $ul3 = $li2->children[1];
+    assert($ul3 instanceof BoxFragment);
+    $li3 = $ul3->children[0];
+    assert($li3 instanceof BoxFragment);
+    expect(markerOf($li3)->text)->toBe("\u{25AA}"); // square, depth 3
+});
+
+it('numbers ol siblings sequentially and right-aligns the markers despite differing digit widths', function () {
+    $items = str_repeat('<li>x</li>', 10); // 10 <li> -> markers "1." .. "10."
+    $frag = layoutHtml("<body><ol>$items</ol></body>", '');
+    $ol = $frag->children[0];
+    assert($ol instanceof BoxFragment);
+    $first = $ol->children[0];
+    $last = $ol->children[9];
+    assert($first instanceof BoxFragment && $last instanceof BoxFragment);
+
+    $firstMarker = markerOf($first);
+    $lastMarker = markerOf($last);
+    expect($firstMarker->text)->toBe('1.');
+    expect($lastMarker->text)->toBe('10.');
+    // "10." is wider than "1." -- right-aligned means the RIGHT edge stays put (same gap from the
+    // li's content box) while the LEFT edge moves further left for the wider marker.
+    expect($lastMarker->rect->width)->toBeGreaterThan($firstMarker->rect->width);
+    expect($lastMarker->rect->right())->toEqualWithDelta($firstMarker->rect->right(), 0.001);
+    expect($lastMarker->rect->x)->toBeLessThan($firstMarker->rect->x);
+});
+
+it('honours <ol start="5">, numbering the first <li> "5."', function () {
+    $frag = layoutHtml('<body><ol start="5"><li>a</li><li>b</li></ol></body>', '');
+    $ol = $frag->children[0];
+    assert($ol instanceof BoxFragment);
+    [$li1, $li2] = $ol->children;
+    assert($li1 instanceof BoxFragment && $li2 instanceof BoxFragment);
+    expect(markerOf($li1)->text)->toBe('5.');
+    expect(markerOf($li2)->text)->toBe('6.');
+});
+
+it('emits no marker fragment at all for list-style-type: none', function () {
+    $frag = layoutHtml('<body><ul><li>x</li></ul></body>', 'ul { list-style-type: none }');
+    $ul = $frag->children[0];
+    assert($ul instanceof BoxFragment);
+    $li = $ul->children[0];
+    assert($li instanceof BoxFragment);
+    // Solo el TextFragment del contenido "x" -- ningún marcador extra al final.
+    expect($li->children)->toHaveCount(1);
+    expect($li->children[0])->toBeInstanceOf(TextFragment::class);
+});
+
+it('shares the baseline of only the FIRST line when the <li> wraps onto multiple lines', function () {
+    $frag = layoutHtml(
+        '<body><ul><li>uno dos tres cuatro cinco seis siete ocho nueve diez</li></ul></body>',
+        '',
+        80.0,
+    );
+    $ul = $frag->children[0];
+    assert($ul instanceof BoxFragment);
+    $li = $ul->children[0];
+    assert($li instanceof BoxFragment);
+    $lines = textFragments($li);
+    expect(count($lines))->toBeGreaterThan(1); // confirms the wrap actually happened
+    $marker = markerOf($li);
+    expect($marker->baselineY)->toBe($lines[0]->baselineY);
+    expect($marker->baselineY)->not->toBe($lines[1]->baselineY);
+});
+
+it('restarts the decimal counter for a nested <ol>, independent of the outer <ul> position', function () {
+    $frag = layoutHtml('<body><ul><li>a<ol><li>x</li><li>y</li></ol></li><li>b</li></ul></body>', '');
+    $ul = $frag->children[0];
+    assert($ul instanceof BoxFragment);
+    [$li1, $li2] = $ul->children;
+    assert($li1 instanceof BoxFragment && $li2 instanceof BoxFragment);
+
+    $innerOl = $li1->children[1];
+    assert($innerOl instanceof BoxFragment);
+    [$innerLi1, $innerLi2] = $innerOl->children;
+    assert($innerLi1 instanceof BoxFragment && $innerLi2 instanceof BoxFragment);
+
+    expect(markerOf($innerLi1)->text)->toBe('1.'); // restarts at 1, not "2" (after outer li "a")
+    expect(markerOf($innerLi2)->text)->toBe('2.');
+    expect(markerOf($li1)->text)->toBe("\u{2022}"); // outer <ul> stays disc, unaffected by nesting
+    expect(markerOf($li2)->text)->toBe("\u{2022}");
+});
+
+it('aligns an empty <li> marker to its content-box top + ascent (documented fallback, no text present)', function () {
+    $frag = layoutHtml('<body><ul><li></li></ul></body>', '');
+    $ul = $frag->children[0];
+    assert($ul instanceof BoxFragment);
+    $li = $ul->children[0];
+    assert($li instanceof BoxFragment);
+    // No content at all: the marker is the ONLY child.
+    expect($li->children)->toHaveCount(1);
+    $marker = markerOf($li);
+    expect($marker->baselineY)->toBeGreaterThan($li->rect->y);
+});

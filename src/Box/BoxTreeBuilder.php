@@ -43,7 +43,21 @@ final class BoxTreeBuilder
         if ($style->display === Display::Flex) {
             $children = $this->wrapAnonymousFlexItems($children, $style);
         }
-        return new BlockBox($style, $children, strtolower($element->tagName));
+        return new BlockBox($style, $children, strtolower($element->tagName), self::parseListStart($element));
+    }
+
+    /** M7-T3 (css-lists-3 §3, atributo HTML `start` de <ol>): entero con signo opcional; ausente
+     * o no puramente numérico -> null (= "empieza en 1", el default real per HTML). No se gatea
+     * por tag (leerlo en cualquier elemento es inocuo: solo el BlockBox de un <ol> real llega a
+     * consultarse para esto, ver BlockFlowContext) — mismo criterio de permisividad que
+     * parseColspan(), a diferencia de rowspan (que sí avisa por su sola presencia). */
+    private static function parseListStart(\Dom\Element $element): ?int
+    {
+        $value = $element->getAttribute('start');
+        if ($value === null || preg_match('/^-?\d+$/', trim($value)) !== 1) {
+            return null;
+        }
+        return (int) trim($value);
     }
 
     /**

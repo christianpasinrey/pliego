@@ -57,6 +57,10 @@ final class DeclarationParser
         'display' => [
             'block', 'none', 'flex',
             'table', 'table-row', 'table-cell', 'table-header-group', 'table-row-group',
+            // M7-T3 (css-lists-3 §3): Display::ListItem (ver su docblock) -- UserAgentStylesheet
+            // lo usa vía `li { display: list-item }`, un autor puede declararlo/pisarlo igual que
+            // cualquier otro valor de esta lista.
+            'list-item',
         ],
         'box-sizing' => ['content-box', 'border-box'],
         // css-flexbox-1 §5.1/§5.2/§8.2/§8.3: *-reverse, wrap-reverse, space-around/evenly y
@@ -75,6 +79,20 @@ final class DeclarationParser
         // 'nowrap'/'pre-wrap'/'pre-line' son válidos en CSS pero fuera de alcance M7 -- caen al
         // warning genérico de KEYWORD_PROPERTIES, igual que cualquier otro keyword no soportado.
         'white-space' => ['normal', 'pre'],
+        // M7-T3 (css-lists-3 §3): los 5 valores soportados — ver Style\ListStyleType. Reutilizado
+        // (mismos 5 literales) en parseListStyleShorthand() más abajo; no se referencia esta
+        // constante desde ahí para no acoplar el shorthand a la forma exacta de este mapa.
+        'list-style-type' => ['disc', 'circle', 'square', 'decimal', 'none'],
+        // M7-T3 (css-lists-3 §3, reducido): 'outside' es el ÚNICO valor soportado -- y, a
+        // diferencia de cualquier otro miembro de este mapa, NO produce ninguna propiedad
+        // consumible en ComputedStyle (no existe un campo $listStylePosition: M7 solo implementa
+        // el comportamiento "outside", hardcoded en BlockFlowContext, así que no hay nada que
+        // diferenciar en tiempo de layout). Se valida/acepta aquí de todas formas (en vez de
+        // ignorar la propiedad entera) para que 'inside' -- fuera de alcance M7, ver RESTRICCIONES
+        // GLOBALES -- caiga al warning genérico de este mismo bloque ("Unsupported keyword for
+        // list-style-position: inside"), cumpliendo la disciplina de warnings del milestone
+        // (TODO lo excluido avisa) sin necesitar una rama dedicada.
+        'list-style-position' => ['outside'],
     ];
 
     /** css-flexbox-1 §7.1.1: N sin unidad en la forma "flex: N ..." nunca admite signo (grow y
@@ -103,6 +121,9 @@ final class DeclarationParser
         }
         if ($property === 'border' || in_array($property, ['border-top', 'border-right', 'border-bottom', 'border-left'], true)) {
             return $this->expandBorderShorthand($property, $value);
+        }
+        if ($property === 'list-style') {
+            return $this->parseListStyleShorthand($value);
         }
         if ($this->isBorderLonghand($property, 'width')) {
             return $this->parseBorderWidth($property, $value);
@@ -505,6 +526,53 @@ final class DeclarationParser
             }
         }
         return $result;
+    }
+
+    /**
+     * M7-T3 (css-lists-3 §3, reducido): `list-style: <type> || <position> || <image>` — los tres
+     * componentes son opcionales y pueden aparecer en cualquier orden (igual convención que
+     * expandBorderShorthand()). M7 solo expande a 'list-style-type': un token 'outside' se acepta
+     * y se descarta en silencio (comportamiento único soportado, ver KEYWORD_PROPERTIES['list-
+     * style-position']); un token 'inside' o cualquier valor de list-style-image (url(...), o
+     * cualquier token no reconocido) tira TODO el shorthand con un único warning — mismo criterio
+     * "todo o nada" que expandBorderShorthand() ante un componente duplicado/inválido, en vez de
+     * aplicar parcialmente el type encontrado antes del componente problemático.
+     *
+     * Simplificación documentada: 'none' es AMBIGUO en CSS real (puede anular list-style-type O
+     * list-style-image) — este parser SIEMPRE lo interpreta como list-style-type:none (el uso
+     * observable de "list-style: none" en la práctica, y list-style-image no está soportado en M7
+     * de todas formas — ver RESTRICCIONES GLOBALES, "Excluidos M7 con warning").
+     *
+     * @return array<string, mixed>
+     */
+    private function parseListStyleShorthand(string $value): array
+    {
+        $tokens = self::splitTopLevel(trim($value));
+        if ($tokens === []) {
+            return $this->warn("Unsupported shorthand for list-style: $value");
+        }
+        $type = null;
+        foreach ($tokens as $token) {
+            $keyword = strtolower($token);
+            if (in_array($keyword, ['disc', 'circle', 'square', 'decimal', 'none'], true)) {
+                if ($type !== null) {
+                    return $this->warn("Duplicate list-style-type component for list-style: $value");
+                }
+                $type = $keyword;
+                continue;
+            }
+            if ($keyword === 'outside') {
+                continue;
+            }
+            if ($keyword === 'inside') {
+                return $this->warn("Unsupported list-style-position (inside not supported in M7): $value");
+            }
+            return $this->warn("Unsupported list-style component (list-style-image not supported in M7): $token");
+        }
+        if ($type === null) {
+            return $this->warn("Unsupported shorthand for list-style: $value");
+        }
+        return ['list-style-type' => $type];
     }
 
     /**

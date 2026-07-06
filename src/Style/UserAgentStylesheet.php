@@ -56,6 +56,31 @@ use Pliego\Css\StylesheetParser;
  *   - sub/sup NO se declaran aquí (vertical-align sub/super es M8) — BoxTreeBuilder avisa
  *     explícitamente al encontrarlos (ver su docblock), esta hoja no necesita suprimir el warning
  *     con una regla que no podría cumplir de todas formas.
+ *
+ * M7-T3 (css-lists-3 §3, reducido) — reglas nuevas de esta tarea:
+ *   - `li { display: list-item }`: el ÚNICO sitio que fija este default — antes de esta tarea un
+ *     <li> sin CSS propio caía al default genérico Display::Block de ComputedStyle::compute()
+ *     (ningún tag lo hacía list-item). BlockFlowContext trata Display::ListItem como un bloque
+ *     normal MÁS un marcador (ver su docblock de clase) — un autor SIEMPRE puede pisar este
+ *     default con su propio `li { display: block }` (o incluso :none), igual que cualquier otra
+ *     regla de esta hoja.
+ *   - `ul { list-style-type: disc }` / `ol { list-style-type: decimal }`: redundante con el
+ *     initial value real de la propiedad (ComputedStyle::root() ya fija 'disc') pero documenta la
+ *     intención explícitamente, igual que el resto de esta hoja — y le da a `ol` un valor DISTINTO
+ *     del initial value sin necesitar ninguna tabla hardcoded por tag (a diferencia de
+ *     TABLE_DISPLAY_BY_TAG, ver ComputedStyle).
+ *   - `ul ul { list-style-type: circle }` / `ul ul ul { list-style-type: square }`: adjudicación
+ *     "per navegadores" del brief M7-T3 — un <ul> anidado a 2 niveles de profundidad (con un
+ *     ancestro <ul> que a su vez tiene otro ancestro <ul>) usa circle; a 3+ niveles, square. Estas
+ *     dos reglas combinator (descendant, funcionan desde M6) tienen especificidad (0,0,2) y
+ *     (0,0,3) respectivamente — un <ul> de profundidad ≥3 coincide con AMBAS, y la de mayor
+ *     especificidad (`ul ul ul`) gana, así que la progresión se queda en square para cualquier
+ *     profundidad ≥3 (nunca vuelve a disc/circle, a diferencia de algunos navegadores reales que
+ *     ciclan disc→circle→square→circle...; divergencia documentada, exactamente lo que pide el
+ *     brief: solo dos niveles de reglas). `ol` NO tiene equivalente anidado: decimal se queda
+ *     decimal a cualquier profundidad, igual que en cualquier navegador real (el contador, no el
+ *     glifo, es lo que distingue cada nivel — ver BlockFlowContext, que reinicia el contador POR
+ *     CONTENEDOR, nunca por profundidad).
  */
 final class UserAgentStylesheet
 {
@@ -74,6 +99,11 @@ final class UserAgentStylesheet
         p, ul, ol, dl { margin: 1em 0; }
         blockquote, figure { margin: 1em 40px; }
         ul, ol { padding-left: 40px; }
+        li { display: list-item; }
+        ul { list-style-type: disc; }
+        ol { list-style-type: decimal; }
+        ul ul { list-style-type: circle; }
+        ul ul ul { list-style-type: square; }
         pre { font-family: monospace; margin: 1em 0; white-space: pre; }
         code, kbd, samp { font-family: monospace; }
         hr { border-top: 1px solid; margin: .5em 0; }

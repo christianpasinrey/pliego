@@ -27,4 +27,13 @@ enum Display: string
     case TableCell = 'table-cell';
     case TableHeaderGroup = 'table-header-group';
     case TableRowGroup = 'table-row-group';
+    // M7-T3 (css-lists-3 §3 / CSS 2.2 §12.5.1): <li> es UA default (Style\UserAgentStylesheet,
+    // `li { display: list-item }`) — un elemento con este display genera una caja de bloque
+    // NORMAL en el flujo (BlockFlowContext::layout() la trata exactamente como Display::Block,
+    // mismo grep-verificado que Display::Flex/Table de arriba: ningún consumidor de Display hace
+    // un match exhaustivo) MÁS un marcador sintético emitido por BlockFlowContext cuando detecta
+    // este display en el hijo que está layouteando (ver su docblock de clase) — el marcador nunca
+    // vive en el árbol de caja (Box\BlockBox no gana ninguna subclase "ListItemBox"), solo en el
+    // fragment tree de Layout.
+    case ListItem = 'list-item';
 }

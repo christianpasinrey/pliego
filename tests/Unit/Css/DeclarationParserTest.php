@@ -807,3 +807,60 @@ it('warns on an unsupported white-space keyword (nowrap/pre-wrap/pre-line out of
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M7-T3: list-style-type / list-style-position / list-style shorthand (css-lists-3 §3) -----
+
+it('parses all 5 supported list-style-type keywords', function () {
+    $parser = new DeclarationParser();
+    foreach (['disc', 'circle', 'square', 'decimal', 'none'] as $keyword) {
+        expect($parser->parse('list-style-type', $keyword))->toBe(['list-style-type' => $keyword]);
+    }
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported list-style-type keyword', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style-type', 'georgian');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('accepts list-style-position: outside silently (no warning; the value is never consumed by ComputedStyle)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('list-style-position', 'outside'))->toBe(['list-style-position' => 'outside']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on list-style-position: inside (unsupported in M7)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style-position', 'inside');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('expands the list-style shorthand to list-style-type when only a type keyword is given', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('list-style', 'square'))->toBe(['list-style-type' => 'square']);
+    expect($parser->parse('list-style', 'none'))->toBe(['list-style-type' => 'none']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts "outside" alongside a type in the list-style shorthand (default position, no-op)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('list-style', 'square outside'))->toBe(['list-style-type' => 'square']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and drops the whole list-style shorthand when "inside" is present (position unsupported)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style', 'square inside');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns and drops the whole list-style shorthand on a list-style-image value (unsupported in M7)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('list-style', 'url(bullet.png)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

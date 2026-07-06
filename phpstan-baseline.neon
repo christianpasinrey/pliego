@@ -217,6 +217,12 @@ parameters:
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
+			message: '#^Cannot access property \$baselineY on mixed\.$#'
+			identifier: property.nonObject
+			count: 2
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
 			message: '#^Cannot access property \$height on mixed\.$#'
 			identifier: property.nonObject
 			count: 5
@@ -951,11 +957,17 @@ parameters:
 		-
 			message: '#^Cannot access offset 0 on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
-			count: 1
+			count: 2
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access offset 1 on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 2
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access offset 2 on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
 			count: 1
 			path: tests/Unit/Style/StyleResolverTest.php
@@ -1023,7 +1035,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$display on mixed\.$#'
 			identifier: property.nonObject
-			count: 13
+			count: 14
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1108,6 +1120,12 @@ parameters:
 			message: '#^Cannot access property \$lineHeightPx on mixed\.$#'
 			identifier: property.nonObject
 			count: 6
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$listStyleType on mixed\.$#'
+			identifier: property.nonObject
+			count: 9
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1215,19 +1233,19 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 117
+			count: 127
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 106
+			count: 113
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelectorAll\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 3
+			count: 4
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1245,7 +1263,7 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$font\.$#'
 			identifier: property.notFound
-			count: 13
+			count: 16
 			path: tests/Unit/Text/TtfFontTest.php
 
 		-
@@ -1275,7 +1293,7 @@ parameters:
 		-
 			message: '#^Cannot call method glyphId\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 5
+			count: 8
 			path: tests/Unit/Text/TtfFontTest.php
 
 		-

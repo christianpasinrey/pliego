@@ -732,3 +732,42 @@ it('warns exactly once per <sub>/<sup> occurrence and still renders their text i
     expect($subWarnings)->toHaveCount(1);
     expect($supWarnings)->toHaveCount(1);
 });
+
+// --- M7-T3: <li> display:list-item + <ol start> ------------------------------------------------
+
+it('gives <li> a Display::ListItem BlockBox via the UA stylesheet default', function () {
+    $root = buildTree('<body><ul><li>a</li></ul></body>');
+    $ul = $root->children[0];
+    assert($ul instanceof BlockBox);
+    $li = $ul->children[0];
+    assert($li instanceof BlockBox);
+    expect($li->style->display)->toBe(Display::ListItem);
+});
+
+it('leaves BlockBox::$listStart null for an <ol> without a start attribute', function () {
+    $root = buildTree('<body><ol><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBeNull();
+});
+
+it('parses a numeric start attribute on <ol> into BlockBox::$listStart', function () {
+    $root = buildTree('<body><ol start="5"><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBe(5);
+});
+
+it('parses a negative start attribute on <ol>', function () {
+    $root = buildTree('<body><ol start="-3"><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBe(-3);
+});
+
+it('treats a non-numeric start attribute on <ol> as absent (null)', function () {
+    $root = buildTree('<body><ol start="abc"><li>a</li></ol></body>');
+    $ol = $root->children[0];
+    assert($ol instanceof BlockBox);
+    expect($ol->listStart)->toBeNull();
+});

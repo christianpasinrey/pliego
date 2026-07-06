@@ -12,10 +12,17 @@ use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
+use Pliego\Layout\Fragment\Fragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
+use Pliego\Layout\Text\FontFamilyResolver;
+use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
+use Pliego\Style\FontStyle;
+use Pliego\Style\ListStyleType;
 use Pliego\Text\FontCatalog;
+use Pliego\Text\FontFace;
 
 /**
  * CSS 2.2 §9.4.1 (block formatting) + §10.3.3 (anchos) simplificado para M0:
@@ -51,12 +58,37 @@ use Pliego\Text\FontCatalog;
  * TableBox se delega a $this->tableContext(), autocreada la primera vez que hace falta si nadie
  * la wireó explícitamente (el caso normal: Engine construye `new BlockFlowContext(...)` a secas y
  * el primer <table> que encuentra dispara la autocreación).
+ *
+ * M7-T3 (css-lists-3 §3, reducido): un hijo Display::ListItem (típicamente <li>, ver
+ * Style\Display::ListItem) se layoutea como un BLOQUE NORMAL (misma rama de código que cualquier
+ * otro hijo bloque, sin FormattingContext dedicado) MÁS un marcador sintético — ver
+ * listMarkerFragment(), llamado desde el final de layout() cuando $style->display es ListItem. El
+ * marcador NUNCA vive en Box\BlockBox (no hay ::marker real, ni una "MarkerBox" en el árbol de
+ * caja — Box: [Dom, Style, Css, Vendor, Image] en deptrac.yaml tampoco lo permitiría sin más
+ * fricción de la necesaria): es puramente un TextFragment generado en Layout, hijo del propio
+ * BoxFragment del li. El contador decimal ("1.", "2."...) es "por lista" — $nextListItemNumber en
+ * el bucle de layout() se reinicia a $box->listStart (o 1) en CADA llamada a layout(), así que una
+ * lista anidada dentro de un <li> reinicia su propio contador automáticamente (es una caja/
+ * llamada distinta) — ver el docblock de $nextListItemNumber en layout(). disc/circle/square por
+ * nivel de anidamiento (ul ul/ul ul ul) NO necesita ningún código aquí: ya lo resuelve el cascade
+ * normal vía UserAgentStylesheet (combinators descendientes, funcionan desde M6) sobre
+ * ComputedStyle::$listStyleType (heredado, ver esa clase) — este contexto solo LEE el valor ya
+ * resuelto.
  */
 final class BlockFlowContext implements FormattingContext
 {
+    /** M7-T3 (css-lists-3 §3, marcador de list-item): 0.5em de separación entre el borde derecho
+     * del marcador y el borde izquierdo del content box del li — ver listMarkerFragment(). */
+    private const float MARKER_GAP_EM = 0.5;
+
     private readonly InlineFlowContext $inline;
     private ?FlexFormattingContext $flexContext = null;
     private ?TableFormattingContext $tableContext = null;
+    /** M7-T3: mismo colaborador que InlineFlowContext usa para resolver font-family -> cara
+     * concreta del catálogo — el marcador de list-item usa la MISMA cara/tamaño que el propio li
+     * (ver docblock de listMarkerFragment()), así que esta clase necesita el mismo mecanismo de
+     * resolución, sin duplicar GENERIC_FAMILIES aquí (ver Layout\Text\FontFamilyResolver). */
+    private readonly FontFamilyResolver $fontFamilyResolver;
 
     public function __construct(
         private readonly TextMeasurer $measurer,
@@ -64,6 +96,7 @@ final class BlockFlowContext implements FormattingContext
         private readonly ?WarningCollector $warnings = null,
     ) {
         $this->inline = new InlineFlowContext($measurer, $catalog, $warnings);
+        $this->fontFamilyResolver = new FontFamilyResolver($catalog, $warnings);
     }
 
     /** Ver docblock de clase: wiring explícito opcional del delegado flex (por defecto, perezoso). */
@@ -120,8 +153,19 @@ final class BlockFlowContext implements FormattingContext
      * abajo (auto o declarado, box-sizing incluido: el valor ya llega en convención border-box
      * uniforme, ver el docblock de adjudicación en FlexFormattingContext) — el resto del método
      * (posición, hijos, altura de contenido) no cambia en absoluto.
+     *
+     * M7-T3 (css-lists-3 §3): $listItemOrdinal, cuando no es null, es el número 1-based de ESTE
+     * <li> dentro de la secuencia de hijos Display::ListItem de SU padre (ol/ul) — el ÚNICO
+     * llamador que lo pasa es este mismo método, en la rama genérica del bucle de más abajo,
+     * donde SÍ conoce esa posición (cuenta sus propios hijos ListItem según los recorre, ver
+     * $nextListItemNumber). Ausente (null, el caso normal para CUALQUIER caja que no sea un <li>,
+     * y también un <li> alcanzado por cualquier otro camino: FlexFormattingContext/
+     * TableFormattingContext NUNCA lo pasan) cae a 1 dentro de listMarkerFragment() — mismo
+     * comportamiento que un navegador real para un <li> "huérfano" (sin ol/ul ancestro): se
+     * numera como si fuera el primero. Ignorado por completo si $style->display no es
+     * Display::ListItem (ver el final de este método).
      */
-    public function layout(BlockBox $box, Rect $containingBlock, ?float $usedWidthOverride = null): BoxFragment
+    public function layout(BlockBox $box, Rect $containingBlock, ?float $usedWidthOverride = null, ?int $listItemOrdinal = null): BoxFragment
     {
         $style = $box->style;
         // CSS 2.2 §10.2/§10.3.3/§8.3: todo porcentaje de width/margin-*/padding-* se resuelve
@@ -173,6 +217,11 @@ final class BlockFlowContext implements FormattingContext
         $contentX = $x + $borderLeft + $paddingLeft;
         $cursorY = $y + $borderTop + $paddingTop;
         $contentBottom = $cursorY;
+        // M7-T3: instantánea INMUTABLE del content-top de ESTA caja — $cursorY se muta por el
+        // resto del método a medida que se layoutean los hijos; listMarkerFragment() necesita el
+        // valor ORIGINAL (top del content box) para el caso "li sin texto" (ver su docblock),
+        // mucho después de que $cursorY ya haya avanzado.
+        $contentTop = $cursorY;
 
         $children = [];
         /** @var list<TextRun|LineBreakRun> $pendingRuns secuencia inline contigua pendiente de layout */
@@ -188,6 +237,17 @@ final class BlockFlowContext implements FormattingContext
             $contentBottom = $cursorY;
             $pendingRuns = [];
         };
+
+        // M7-T3 (css-lists-3 §3, contador decimal "por lista"): 1-based, incrementado SOLO al
+        // encontrar un hijo directo Display::ListItem (nunca por cualquier otro tipo de hijo —
+        // texto/imagen/tabla/flex/bloque normal intercalado NO cuenta) — así que un <li> anidado
+        // dentro de OTRO <li> (una lista anidada) nunca ve el contador de su abuelo: ese <ol>/<ul>
+        // hijo es él mismo una caja distinta, con su PROPIA llamada a layout() y, por tanto, su
+        // propio $nextListItemNumber reiniciado a 1 (o a $box->listStart si trae `start`, ver
+        // BoxTreeBuilder::parseListStart()) — "nested lists restart" del brief queda satisfecho
+        // sin ningún caso especial. Inerte (nunca se lee) para cualquier caja que no tenga hijos
+        // Display::ListItem.
+        $nextListItemNumber = $box->listStart ?? 1;
 
         foreach ($box->children as $child) {
             if ($child instanceof TextRun || $child instanceof LineBreakRun) {
@@ -228,6 +288,25 @@ final class BlockFlowContext implements FormattingContext
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
                 continue;
             }
+            // M7-T3: un hijo Display::ListItem (típicamente <li>, UA default -- ver Display::
+            // ListItem) recibe su ordinal 1-based ANTES de recursar -- listMarkerFragment(),
+            // llamado desde DENTRO de esa recursión (ver el final de este método), es quien
+            // traduce el ordinal a texto de marcador ("3." para decimal, ignorado para disc/
+            // circle/square/none). El resto de este bloque (avance de cursor con el margin-bottom
+            // del hijo) es IDÉNTICO al caso genérico de más abajo -- ListItem sigue siendo, por lo
+            // demás, un bloque normal en el flujo (ver docblock de Display::ListItem).
+            if ($child->style->display === Display::ListItem) {
+                $childFragment = $this->layout(
+                    $child,
+                    new Rect($contentX, $cursorY, $contentWidth, INF),
+                    listItemOrdinal: $nextListItemNumber,
+                );
+                $nextListItemNumber++;
+                $children[] = $childFragment;
+                $contentBottom = $childFragment->rect->bottom();
+                $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
+                continue;
+            }
             $childFragment = $this->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
             $children[] = $childFragment;
             // CSS 2.2 §10.6.3: la altura de contenido llega hasta el border-box de la
@@ -240,6 +319,19 @@ final class BlockFlowContext implements FormattingContext
         }
         $flushInline();
 
+        // M7-T3 (css-lists-3 §3): el marcador se emite AQUÍ, sobre el $children YA COMPLETO de
+        // ESTA caja (después de flushInline(), así que cualquier línea de texto propia del <li>
+        // ya está presente) — se AÑADE como último hijo del BoxFragment que construye este mismo
+        // método, nunca como hijo de su padre (ver listMarkerFragment(), "por qué vive aquí y no
+        // en el bucle del padre"). Un <li> con display:none nunca llega a esta rama (BoxTreeBuilder
+        // lo poda antes de construir su BlockBox), así que no hace falta guardarlo aparte.
+        if ($style->display === Display::ListItem) {
+            $marker = $this->listMarkerFragment($style, $listItemOrdinal ?? 1, $contentX, $contentTop, $children);
+            if ($marker !== null) {
+                $children[] = $marker;
+            }
+        }
+
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
         return new BoxFragment(
             new Rect($x, $y, $borderBoxWidth, $height),
@@ -248,6 +340,132 @@ final class BlockFlowContext implements FormattingContext
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
         );
+    }
+
+    /**
+     * M7-T3 (css-lists-3 §3, marcador de list-item): genera el TextFragment sintético del
+     * marcador de ESTE <li> (o null si list-style-type:none) — glifo fijo para disc/circle/square
+     * (•/◦/▪, verificados con glyphId > 0 en DejaVuSans.ttf, ver report de esta tarea: "marker
+     * glyph availability probe") o "{ordinal}." para decimal. Face/tamaño = el ComputedStyle
+     * PROPIO del li (ninguna propiedad de marcador dedicada existe en este motor — M7 no
+     * introduce ::marker ni sus propiedades heredables específicas, css-lists-3 §7).
+     *
+     * POR QUÉ VIVE AQUÍ (en el propio layout() del li) Y NO EN EL BUCLE DE SU PADRE: el marcador
+     * debe terminar como HIJO del BoxFragment del li (para que Paginator lo desplace junto al
+     * resto del li al reubicarse entre páginas, ver relocateChildren()) — el único sitio donde
+     * $children (los hijos YA layouteados del li) está disponible ANTES de construir ese
+     * BoxFragment es al final de la llamada recursiva que layoutea al li, nunca en el padre (que
+     * solo ve el BoxFragment ya cerrado). Matiz de paginación (verificado contra Paginator::
+     * flatten()): un BoxFragment NO atómico (el caso normal de un <li>, a diferencia del
+     * contenedor de un FlexFormattingContext) se APLANA recursivamente — el marcador acaba como
+     * hoja HERMANA de la primera línea de texto en la lista plana de Page::$fragments, no como
+     * descendiente anidado. Esto sigue siendo observacionalmente "se mueve con la página": este
+     * método le da al marcador el MISMO rect->y/height que la primera línea de texto (ver más
+     * abajo), así que Paginator::paginate() toma la MISMA decisión de push-down para ambos.
+     *
+     * POSICIÓN (CSS 2.2 §12.5.1, list-style-position:outside — el único soportado en M7): el
+     * marcador se right-aligns en la banda de padding a la IZQUIERDA del content box del li (con
+     * MARKER_GAP_EM de separación respecto al borde de contenido) — normalmente la banda que deja
+     * el `padding-left: 40px` del ol/ul contenedor (ver UserAgentStylesheet), nunca la del propio
+     * li (que no tiene padding propio por defecto). Puede desbordar hacia la izquierda de esa
+     * banda con un ordinal decimal ancho (p.ej. "10.") — comportamiento observable normal, mismo
+     * que un navegador real, sin clipping especial en este motor (M7 no introduce overflow para
+     * este caso).
+     *
+     * BASELINE: comparte la línea base de la PRIMERA línea de texto del li (recursivo: puede
+     * venir de un descendiente anidado, p.ej. un <li><p>texto</p></li>, ver firstTextFragment()).
+     * Un <li> SIN texto en absoluto (vacío, o solo con una imagen/tabla) cae al fallback
+     * documentado en el brief: "alineado a li top + ascent" — mismo cálculo de línea forzada
+     * vacía que InlineFlowContext::closeLine() usa para un <br> sin contenido (mismo lineHeight/
+     * ascent/centrado vertical), para que el resultado sea indistinguible de una primera línea
+     * real si el li tuviera texto invisible.
+     *
+     * @param list<Fragment> $children hijos YA layouteados del li (líneas de texto/bloques
+     *     anidados/imágenes/tablas) — se busca ahí, NUNCA se muta.
+     */
+    private function listMarkerFragment(
+        ComputedStyle $style,
+        int $ordinal,
+        float $contentX,
+        float $contentTop,
+        array $children,
+    ): ?TextFragment {
+        $markerText = match ($style->listStyleType) {
+            ListStyleType::Disc => "\u{2022}",   // •
+            ListStyleType::Circle => "\u{25E6}", // ◦
+            ListStyleType::Square => "\u{25AA}", // ▪
+            ListStyleType::Decimal => $ordinal . '.',
+            ListStyleType::None => null,
+        };
+        if ($markerText === null) {
+            return null;
+        }
+
+        $face = $this->faceFor($style);
+        $fontSize = $style->fontSizePx;
+        $markerWidth = $this->measurer->widthOf($markerText, $face, $fontSize);
+        $markerRight = $contentX - self::MARKER_GAP_EM * $fontSize;
+        $markerLeft = $markerRight - $markerWidth;
+
+        $firstLine = self::firstTextFragment($children);
+        if ($firstLine !== null) {
+            $rect = new Rect($markerLeft, $firstLine->rect->y, $markerWidth, $firstLine->rect->height);
+            $baselineY = $firstLine->baselineY;
+        } else {
+            // Mismo cálculo que InlineFlowContext::closeLine() para una línea forzada vacía
+            // (ver su docblock) -- centrado vertical del glifo/número dentro del lineHeight,
+            // partiendo de $contentTop (el top del content box de ESTE li, no de $cursorY ya
+            // avanzado).
+            $lineHeight = max($style->lineHeightPx ?? 0.0, $this->measurer->lineHeight($fontSize));
+            $ascent = $this->measurer->ascent($face, $fontSize);
+            $rect = new Rect($markerLeft, $contentTop, $markerWidth, $lineHeight);
+            $baselineY = $contentTop + ($lineHeight - $fontSize) / 2 + $ascent;
+        }
+
+        // underline: false siempre -- un marcador de lista nunca hereda text-decoration (no hay
+        // ::marker real en este motor, ver docblock de clase; un underline en el li se aplicaría
+        // a su TEXTO, nunca al glifo/número sintético del marcador).
+        return new TextFragment($rect, $markerText, $baselineY, $fontSize, $style->color, $face->key, false, $style->opacity);
+    }
+
+    /**
+     * Búsqueda recursiva, en ORDEN DE DOCUMENTO, del primer TextFragment no vacío dentro de
+     * $fragments (hijos YA layouteados de un li) — desciende a través de BoxFragment (bloques
+     * anidados, p.ej. <li><p>texto</p></li>) pero nunca "entra" en un ImageFragment/otro
+     * TextFragment (hojas sin hijos). Un TextFragment con text==='' (la línea vacía forzada que
+     * InlineFlowContext::closeLine() emite para un <br> sin contenido, ver ahí) se salta -- no
+     * cuenta como "primera línea real" a efectos de compartir baseline.
+     *
+     * @param list<Fragment> $fragments
+     */
+    private static function firstTextFragment(array $fragments): ?TextFragment
+    {
+        foreach ($fragments as $fragment) {
+            if ($fragment instanceof TextFragment) {
+                if ($fragment->text !== '') {
+                    return $fragment;
+                }
+                continue;
+            }
+            if ($fragment instanceof BoxFragment) {
+                $found = self::firstTextFragment($fragment->children);
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** M7-T3: mismo patrón que InlineFlowContext::faceFor() (ComputedStyle::$fontFamily es una
+     * lista de fallback -- ver su docblock -- resuelta a una familia concreta antes de pedirle la
+     * cara a FontCatalog); duplicado aquí (en vez de exponer el privado de InlineFlowContext)
+     * porque ambas clases ya comparten el colaborador real (FontFamilyResolver), que es donde vive
+     * la lógica no trivial -- esto es solo la llamada de una línea a $catalog->select(). */
+    private function faceFor(ComputedStyle $style): FontFace
+    {
+        $family = $this->fontFamilyResolver->resolve($style->fontFamily);
+        return $this->catalog->select($family, $style->fontWeight, $style->fontStyle === FontStyle::Italic);
     }
 
     /**

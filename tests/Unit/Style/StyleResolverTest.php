@@ -13,6 +13,7 @@ use Pliego\Style\FlexDirection;
 use Pliego\Style\FlexWrap;
 use Pliego\Style\FontStyle;
 use Pliego\Style\JustifyContent;
+use Pliego\Style\ListStyleType;
 use Pliego\Style\StyleResolver;
 use Pliego\Style\TextAlign;
 use Pliego\Style\VerticalAlign;
@@ -963,7 +964,7 @@ it('gives p/ul/ol/dl a 1em 0 margin and blockquote/figure a 1em 40px margin', fu
     }
 });
 
-it('gives ul/ol a 40px left padding (markers themselves are M8-out-of-scope, only the padding lands now)', function () {
+it('gives ul/ol a 40px left padding (M7-T2; the padding is what fits the M7-T3 marker into later)', function () {
     [$doc, $map] = resolveDoc('', '<body><ul><li>x</li></ul></body>');
     $ul = $doc->querySelector('ul');
     assert($ul !== null);
@@ -1035,4 +1036,63 @@ it('an author rule can override display:none for a normally-hidden UA tag (head/
     $head = $doc->querySelector('head');
     assert($head !== null);
     expect($map->get($head)->display)->toBe(Display::Block);
+});
+
+// --- M7-T3: css-lists-3 §3 -- <li> display:list-item + list-style-type UA defaults/inheritance --
+
+it('gives li a Display::ListItem via the UA stylesheet default', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul><li>x</li></ul></body>');
+    $li = $doc->querySelector('li');
+    assert($li !== null);
+    expect($map->get($li)->display)->toBe(Display::ListItem);
+});
+
+it('defaults ul to list-style-type:disc and ol to :decimal via the UA stylesheet', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul>u</ul><ol>o</ol></body>');
+    $ul = $doc->querySelector('ul');
+    $ol = $doc->querySelector('ol');
+    assert($ul !== null && $ol !== null);
+    expect($map->get($ul)->listStyleType)->toBe(ListStyleType::Disc);
+    expect($map->get($ol)->listStyleType)->toBe(ListStyleType::Decimal);
+});
+
+it('inherits list-style-type from the ul/ol ancestor down onto its li children', function () {
+    [$doc, $map] = resolveDoc('', '<body><ol><li>x</li></ol></body>');
+    $li = $doc->querySelector('li');
+    assert($li !== null);
+    expect($map->get($li)->listStyleType)->toBe(ListStyleType::Decimal);
+});
+
+it('cycles disc -> circle -> square for ul nesting depth via UA descendant combinators', function () {
+    [$doc, $map] = resolveDoc('', '<body><ul><li><ul><li><ul><li>x</li></ul></li></ul></li></ul></body>');
+    $lis = $doc->querySelectorAll('li');
+    $depth1 = $lis[0];
+    $depth2 = $lis[1];
+    $depth3 = $lis[2];
+    expect($map->get($depth1)->listStyleType)->toBe(ListStyleType::Disc);
+    expect($map->get($depth2)->listStyleType)->toBe(ListStyleType::Circle);
+    expect($map->get($depth3)->listStyleType)->toBe(ListStyleType::Square);
+});
+
+it('lets an author rule override the UA list-style-type default (cascade)', function () {
+    [$doc, $map] = resolveDoc('ul { list-style-type: square }', '<body><ul><li>x</li></ul></body>');
+    $ul = $doc->querySelector('ul');
+    assert($ul !== null);
+    expect($map->get($ul)->listStyleType)->toBe(ListStyleType::Square);
+});
+
+it('resolves the list-style shorthand end to end through DeclarationParser + ComputedStyle', function () {
+    [$doc, $map] = resolveDoc('ul { list-style: none }', '<body><ul><li>x</li></ul></body>');
+    $ul = $doc->querySelector('ul');
+    assert($ul !== null);
+    expect($map->get($ul)->listStyleType)->toBe(ListStyleType::None);
+});
+
+it('defaults the root (documentElement) list-style-type to the spec initial value disc', function () {
+    // Ningún <ul>/<ol> en el documento -- verifica que el INITIAL VALUE real de css-lists-3 §3
+    // (disc) es el que ComputedStyle::root() fija, no un valor arbitrario tipo None.
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->listStyleType)->toBe(ListStyleType::Disc);
 });

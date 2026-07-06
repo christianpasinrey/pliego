@@ -117,6 +117,10 @@ final readonly class ComputedStyle
         public float $borderSpacingPx,
         public string $tableLayout,
         public VerticalAlign $verticalAlign,
+        // M7-T3 (css-lists-3 §3): list-style-type SÍ hereda (a diferencia de vertical-align justo
+        // arriba, y de la mayoría de propiedades de este constructor) — ver ListStyleType para el
+        // razonamiento completo y el initial value real ('disc').
+        public ListStyleType $listStyleType,
         // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
         // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
         // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
@@ -230,6 +234,9 @@ final readonly class ComputedStyle
             0.0,
             'auto',
             VerticalAlign::Top,
+            // css-lists-3 §3: initial value real de list-style-type es 'disc' — ver docblock del
+            // nuevo parámetro del constructor.
+            ListStyleType::Disc,
         );
     }
 
@@ -291,6 +298,10 @@ final readonly class ComputedStyle
             'table-cell' => Display::TableCell,
             'table-header-group' => Display::TableHeaderGroup,
             'table-row-group' => Display::TableRowGroup,
+            // M7-T3 (css-lists-3 §3): <li> UA default (Style\UserAgentStylesheet) — ver
+            // Display::ListItem para por qué no necesita ninguna tabla de defaults-por-tag aquí
+            // (a diferencia de TABLE_DISPLAY_BY_TAG, que sí sigue siendo hardcoded).
+            'list-item' => Display::ListItem,
             default => $display,
         };
         // M6-T3: font-size se resuelve ANTES que cualquier otra propiedad porque su resultado
@@ -577,6 +588,22 @@ final readonly class ComputedStyle
             default => VerticalAlign::Top,
         };
 
+        // M7-T3 (css-lists-3 §3): list-style-type SÍ hereda — cae a $parent->listStyleType
+        // (nunca al initial value directamente) cuando no hay declaración propia, mismo patrón
+        // que $textAlign/$underline/$whiteSpace más arriba (todas heredadas). El keyword ya llega
+        // validado por DeclarationParser::parseListStyleType()/parseListStyleShorthand() — un
+        // valor ausente (más común: ningún selector UA/autor coincidió, p.ej. un <li> huérfano
+        // sin <ul>/<ol> ancestro) simplemente hereda, resolviendo en última instancia al initial
+        // value 'disc' fijado en ComputedStyle::root().
+        $listStyleType = match ($declarations['list-style-type'] ?? null) {
+            'disc' => ListStyleType::Disc,
+            'circle' => ListStyleType::Circle,
+            'square' => ListStyleType::Square,
+            'decimal' => ListStyleType::Decimal,
+            'none' => ListStyleType::None,
+            default => $parent->listStyleType,
+        };
+
         // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
         // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
         // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
@@ -638,6 +665,7 @@ final readonly class ComputedStyle
             $borderSpacingPx,
             $tableLayout,
             $verticalAlign,
+            $listStyleType,
             $opacity,
             $customProperties,
         );
