@@ -68,3 +68,27 @@ it('serves the cached instance even if the file is deleted after the first load 
     $second = $this->loader->load($path);
     expect($second)->toBe($first);
 });
+
+it('serves the cached instance by ORIGINAL path spelling after deletion, even when raw path and realpath differ (M5-T1 regression)', function () {
+    // Reviewer reproduced the original defect with an NTFS junction: load an image through a path
+    // that resolves via a junction/symlink (raw path !== realpath), delete the underlying target,
+    // then reload through the SAME raw spelling. With a realpath-ONLY cache key, the first load
+    // stores the DecodedImage under the RESOLVED key; once the target is gone, realpath() fails
+    // and the lookup falls back to the raw path -- a key that was never written -- so it's a
+    // cache miss and ImageException is thrown, breaking the documented TOCTOU guarantee (the
+    // cached instance should be served instead). Junctions/symlinks need elevated permissions on
+    // Windows CI, so this test reproduces the identical "raw path !== realpath" condition with a
+    // plain './' path segment instead -- no OS-specific setup required, same defect.
+    $dir = sys_get_temp_dir() . '/pliego-imgloader-toctou-' . uniqid();
+    mkdir($dir);
+    copy(__DIR__ . '/../../../resources/images/tiny.jpg', $dir . '/tiny.jpg');
+    $path = $dir . '/./tiny.jpg'; // raw path differs from its own realpath() (the './' collapses)
+
+    $first = $this->loader->load($path);
+    unlink($dir . '/tiny.jpg');
+
+    $second = $this->loader->load($path); // same raw spelling as the first call
+    expect($second)->toBe($first);
+
+    rmdir($dir);
+});

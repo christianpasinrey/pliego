@@ -135,13 +135,13 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$loader\.$#'
 			identifier: property.notFound
-			count: 13
+			count: 15
 			path: tests/Unit/Image/ImageLoaderTest.php
 
 		-
 			message: '#^Cannot call method load\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 12
+			count: 14
 			path: tests/Unit/Image/ImageLoaderTest.php
 
 		-

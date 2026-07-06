@@ -269,6 +269,20 @@ it('hoists a failing inline image (nested in <span>): no ImageBox, both warnings
     expect($warnings[1])->toContain('Could not load image');
 });
 
+// M5-T1 (Minor, deferred from review): an <img> without a src attribute has nothing to append
+// after the hoist message, so the warning must NOT carry a dangling "$message: " with an empty
+// tail -- it should read as a clean sentence with no trailing ": ".
+it('hoists an inline image without a src attribute (nested in <span>): warning has no trailing ": "', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><span><img></span></body>',
+        IMAGE_FIXTURES_DIR,
+    );
+    expect($root->children)->toHaveCount(0);
+    expect($warnings)->toHaveCount(2); // hoist warning + buildImage()'s own "no src" warning
+    expect($warnings[0])->toContain('inline image hoisted to block level');
+    expect($warnings[0])->not->toEndWith(': ');
+});
+
 // M4-T2: css-flexbox-1 §4 — un contenedor flex convierte cada hijo en un "flex item". Un tramo
 // contiguo de TextRun|LineBreakRun se envuelve en un ÚNICO BlockBox anónimo ("anonymous", estilo
 // heredado del contenedor vía ComputedStyle::compute([], $containerStyle, 'div')); BlockBox e
