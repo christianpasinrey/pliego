@@ -11,6 +11,7 @@ use Pliego\Image\ImageException;
 use Pliego\Image\ImageLoader;
 use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
+use Pliego\Style\Position;
 use Pliego\Style\StyleMap;
 
 /**
@@ -131,6 +132,7 @@ final class BoxTreeBuilder
             }
             if ($childStyle->display === Display::Inline) {
                 $this->warnIfUnsupportedSubOrSup($tag);
+                $this->warnIfFloatOrPositionOnInline($childStyle);
                 $hasBox = self::hasVisibleInlineBox($childStyle);
                 if ($hasBox) {
                     $pending[] = new InlineBoxStart($childStyle, $tag);
@@ -607,6 +609,9 @@ final class BoxTreeBuilder
                 continue;
             }
             $this->warnIfUnsupportedSubOrSup($tag);
+            if ($childStyle->display === Display::Inline) {
+                $this->warnIfFloatOrPositionOnInline($childStyle);
+            }
             $hasBox = $childStyle->display === Display::Inline && self::hasVisibleInlineBox($childStyle);
             if ($hasBox) {
                 $pending[] = new InlineBoxStart($childStyle, $tag);
@@ -627,6 +632,37 @@ final class BoxTreeBuilder
         if ($tag === 'sub' || $tag === 'sup') {
             $this->warnings->addWarning(
                 "<$tag> rendered as plain inline text (vertical-align: sub/super not supported yet, M8)",
+            );
+        }
+    }
+
+    /**
+     * M7 final-review Finding D: `float` y/o `position: relative|absolute` declarados en un
+     * elemento Display::Inline no tienen NINGÚN efecto en este motor -- InlineFlowContext nunca
+     * examina ComputedStyle::$float/$position de un run/InlineBoxStart (solo BlockFlowContext lo
+     * hace, y únicamente para sus hijos de BLOQUE directos, ver el bucle de su layout()); un
+     * `<span style="float:left">`/`<a style="position:relative;top:10px">` simplemente se aplana
+     * como texto inline normal, sin sacarse de flujo ni desplazarse -- antes de esta tarea, ese
+     * "no-op" era completamente silencioso. Se avisa UNA SOLA VEZ por causa (WarningCollector::
+     * addWarningOnce(), no una vez por elemento/aparición -- a diferencia del warning de sub/sup
+     * de arriba, que SÍ es por-ocurrencia, M7-T2, sin tocar aquí) durante la vida del colector
+     * compartido, para que RenderReport deje constancia de la aproximación sin inundar de mensajes
+     * repetidos un documento con muchos `<span>` flotantes/posicionados. Llamado desde AMBOS
+     * dispatch points de un elemento Inline (collectChildren() para el hijo directo,
+     * collectInline() para un descendiente anidado a cualquier profundidad).
+     */
+    private function warnIfFloatOrPositionOnInline(ComputedStyle $childStyle): void
+    {
+        if ($childStyle->float !== null) {
+            $this->warnings->addWarningOnce(
+                'float-on-inline',
+                'float on an inline-level element has no effect (not supported yet): the element stays in normal inline flow',
+            );
+        }
+        if ($childStyle->position !== Position::Static) {
+            $this->warnings->addWarningOnce(
+                'position-on-inline',
+                'position:relative/absolute on an inline-level element has no effect (not supported yet): no offset is applied',
             );
         }
     }

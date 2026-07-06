@@ -733,6 +733,78 @@ it('warns exactly once per <sub>/<sup> occurrence and still renders their text i
     expect($supWarnings)->toHaveCount(1);
 });
 
+// --- M7 final-review Finding D: float/position on an inline element warn (no behavioral change) -
+
+it('Finding D: float on an inline element (direct child) warns once and still flattens to plain inline text', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span class="floaty">middle</span> after</p></body>',
+        __DIR__,
+        '.floaty { float: left }',
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    // No behavioral change: still flattens to plain TextRun(s), float never applies to an inline
+    // element in this engine (InlineFlowContext never looks at $style->float).
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on an inline-level element')));
+    expect($floatWarnings)->toHaveCount(1);
+});
+
+it('Finding D: float on a NESTED inline element (descendant, via collectInline()) warns once too', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><span>outer <strong class="floaty">inner</strong></span></p></body>',
+        __DIR__,
+        '.floaty { float: left }',
+    );
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on an inline-level element')));
+    expect($floatWarnings)->toHaveCount(1);
+});
+
+it('Finding D: position:relative on an inline element warns once and applies no offset (no behavioral change)', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span class="rel">middle</span> after</p></body>',
+        __DIR__,
+        '.rel { position: relative; top: 50px; left: 50px }',
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    foreach ($p->children as $child) {
+        expect($child)->toBeInstanceOf(TextRun::class);
+    }
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on an inline-level element')));
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: position:absolute on an inline element warns once too', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span class="abs">middle</span> after</p></body>',
+        __DIR__,
+        '.abs { position: absolute; top: 10px }',
+    );
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on an inline-level element')));
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: float/position on an inline element only warn ONCE each even with multiple occurrences (addWarningOnce dedup)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><span class="a">one</span> <span class="b">two</span> <span class="c">three</span></p></body>',
+        __DIR__,
+        '.a { float: left } .b { float: right } .c { position: relative; top: 5px }',
+    );
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on an inline-level element')));
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:relative/absolute on an inline-level element')));
+    expect($floatWarnings)->toHaveCount(1);
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: a plain inline element with neither float nor position emits neither warning (no false positive)', function () {
+    [, $warnings] = buildTreeCollectingWarnings('<body><p>before <span>middle</span> after</p></body>', __DIR__);
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline-level element'));
+    expect($relevant)->toBeEmpty();
+});
+
 // --- M7-T3: <li> display:list-item + <ol start> ------------------------------------------------
 
 it('gives <li> a Display::ListItem BlockBox via the UA stylesheet default', function () {

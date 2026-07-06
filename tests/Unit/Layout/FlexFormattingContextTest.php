@@ -151,6 +151,68 @@ it('clamps a shrinking item at its min-content and redistributes the remaining d
     expect($aFrag->rect->width + $bFrag->rect->width)->toEqualWithDelta($containerWidth, 0.001);
 });
 
+// --- M7 final-review Finding A (css-flexbox-1 §9.7): freeze-on-violation, row --------------
+
+it('Finding A grow repro: a max-width violator freezes, the leftover regrows into the other item', function () {
+    // 600px container; A{basis:100,max-width:150,grow:1} + B{basis:100,grow:1}. free = 600-200 =
+    // 400, split evenly (200 each) -> A's candidate (300) violates its max-width(150): frozen at
+    // 150, consuming only 50 of its 200 share. The other 150 flows back into the pot: remaining
+    // = 400-50 = 350, all absorbed by B alone (the only unfrozen item) -> B = 100+350 = 450.
+    // Conserves exactly: 150+450 = 600, no gaps.
+    $a = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(100.0), 'max-width' => LengthPercentage::px(150.0), 'flex-grow' => 1.0]), [], 'div');
+    $b = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(100.0), 'flex-grow' => 1.0]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(600.0)]), [$a, $b], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 700.0, INF));
+    [$aFrag, $bFrag] = $frag->children;
+    assert($aFrag instanceof BoxFragment && $bFrag instanceof BoxFragment);
+
+    expect($aFrag->rect->width)->toBe(150.0);
+    expect($bFrag->rect->width)->toBe(450.0);
+});
+
+it('Finding A shrink repro: a min-width violator freezes, the deficit is absorbed by the other item (min-width coexists with the min-content floor)', function () {
+    // 300px container; A{basis:300,min-width:250} + B{basis:300}, both shrink:1 (initial). free =
+    // 300-600 = -300 (deficit 300). Naive 50/50 share would take 150 off each -> A's candidate
+    // (150) violates its min-width(250, and A has no text so its min-content is 0, min-width
+    // wins): frozen at 250, "using up" only 50 of deficit. Remaining deficit = 300-50 = 250, all
+    // absorbed by B alone -> B = 300-250 = 50. Conserves exactly: 250+50 = 300.
+    $a = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(300.0), 'min-width' => LengthPercentage::px(250.0)]), [], 'div');
+    $b = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(300.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(300.0)]), [$a, $b], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 400.0, INF));
+    [$aFrag, $bFrag] = $frag->children;
+    assert($aFrag instanceof BoxFragment && $bFrag instanceof BoxFragment);
+
+    expect($aFrag->rect->width)->toBe(250.0);
+    expect($bFrag->rect->width)->toBe(50.0);
+});
+
+it('Finding A 3-item cascade: freezing the first violator can push a second past ITS OWN bound, needing a second freeze round', function () {
+    // 200px container; X{basis:100,min-width:90}, Y{basis:100,min-width:60}, Z{basis:100}, all
+    // shrink:1 (initial). Total base = 300, deficit = 100.
+    // Round 0: equal shares (100/3 = 33.33 each) -> X candidate 66.67 < 90 -> freeze X at 90
+    //   (consumes 10 of the 100 deficit). Y candidate 66.67 >= 60 (not yet violated this round).
+    // Round 1 (deficit remaining 90, only Y/Z unfrozen, 50/50): Y candidate 55 < 60 -> freeze Y at
+    //   60 (consumes 40 more, total consumed 50). Z candidate 55 (not violated, but not applied
+    //   yet since Y froze this round).
+    // Round 2 (deficit remaining 50, only Z unfrozen): Z = 100-50 = 50, no violation -> accepted.
+    // Final: X=90, Y=60, Z=50 -- sums to exactly 200, TWO separate freeze rounds (X then Y).
+    $x = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(100.0), 'min-width' => LengthPercentage::px(90.0)]), [], 'div');
+    $y = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(100.0), 'min-width' => LengthPercentage::px(60.0)]), [], 'div');
+    $z = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(100.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(200.0)]), [$x, $y, $z], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 300.0, INF));
+    [$xFrag, $yFrag, $zFrag] = $frag->children;
+    assert($xFrag instanceof BoxFragment && $yFrag instanceof BoxFragment && $zFrag instanceof BoxFragment);
+
+    expect($xFrag->rect->width)->toBe(90.0);
+    expect($yFrag->rect->width)->toBe(60.0);
+    expect($zFrag->rect->width)->toBe(50.0);
+});
+
 // --- justify-content: center / space-between, hand-computed -------------------------------
 
 it('justify-content: center centers three fixed-width items around the leftover space', function () {
@@ -565,6 +627,58 @@ it('column: align-items stretch subtracts the item\'s own horizontal margins fro
 });
 
 // --- M5-T1: warning channel (column justify-content ignored without a declared height) ---------
+
+// --- M7 final-review Finding B (css-flexbox-1 §9.7, column): min/max-height base clamp + freeze -
+
+it('Finding B: a max-height violator freezes in column, the leftover regrows into the other item (conserves the declared height exactly)', function () {
+    // 400px declared height column; A{basis:50,max-height:80,grow:1} + B{basis:50,grow:1},
+    // row-gap:0. free = 400-100 = 300, split evenly (150 each) -> A's candidate (200) violates
+    // its max-height(80): frozen at 80, consuming only 30 of its 150 share. Remaining free =
+    // 300-30 = 270, all absorbed by B alone (the only unfrozen item) -> B = 50+270 = 320.
+    // Conserves exactly: 80+320 = 400, no gaps (row-gap:0 declared explicitly).
+    $a = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(50.0), 'max-height' => Length::px(80.0), 'flex-grow' => 1.0]), [], 'div');
+    $b = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(50.0), 'flex-grow' => 1.0]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'height' => Length::px(400.0), 'flex-direction' => 'column', 'row-gap' => Length::px(0.0)]),
+        [$a, $b],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 300.0, INF));
+    [$aFrag, $bFrag] = $frag->children;
+    assert($aFrag instanceof BoxFragment && $bFrag instanceof BoxFragment);
+
+    expect($aFrag->rect->height)->toBe(80.0);
+    expect($bFrag->rect->height)->toBe(320.0);
+});
+
+it('Finding B: min-height floors the column base itself (no grow to redistribute), same criterion as row', function () {
+    $item = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(20.0), 'min-height' => Length::px(90.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'flex-direction' => 'column']),
+        [$item],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 300.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+    expect($itemFrag->rect->height)->toBe(90.0);
+});
+
+it('Finding B: max-height caps the column base itself (no grow to redistribute)', function () {
+    $item = new BlockBox(flexStyle(['flex-basis' => LengthPercentage::px(200.0), 'max-height' => Length::px(60.0)]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(200.0), 'flex-direction' => 'column']),
+        [$item],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 300.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+    expect($itemFrag->rect->height)->toBe(60.0);
+});
 
 it('warns exactly once when column justify-content has no effect because the container has auto height', function () {
     $warnings = new WarningCollector();

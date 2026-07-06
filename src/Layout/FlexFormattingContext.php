@@ -554,13 +554,22 @@ final readonly class FlexFormattingContext implements FormattingContext
      * css-flexbox-1 §9.7 (resolver longitudes flexibles), una sola línea: libre = contentWidth −
      * Σ(base + márgenes horizontales del item) − columnGap×(n−1). libre>0 con Σgrow>0 reparte el
      * sobrante proporcional al grow de cada item (items con grow:0, el default, no se mueven).
-     * libre<0 con Σ(shrink×base)>0 encoge proporcional a ese factor escalado; cualquier item cuyo
-     * candidato caiga por debajo de su min-content (IntrinsicSizer::minContentWidth) se CONGELA en
-     * su min-content, y se hace UNA sola re-pasada extra repartiendo el déficit restante entre los
-     * items NO congelados (documentado: el bucle completo del spec, que congelaría iterativamente
-     * hasta estabilizar, se simplifica aquí a 2 iteraciones como máximo — brief M4-T4/T5). Sin
-     * items con grow>0 (o shrink>0) el/los item(s) simplemente se quedan en su base — overflow
-     * permitido, sin min/max-width que limite más allá del min-content.
+     * libre<0 con Σ(shrink×base)>0 encoge proporcional a ese factor escalado. Sin items con
+     * grow>0 (o shrink>0) el/los item(s) simplemente se quedan en su base — overflow permitido.
+     *
+     * M7 final-review Finding A (§9.7 "freeze on violation", ambos lados): cualquier item cuyo
+     * candidato de ESTA distribución viole su propio min/max-width se CONGELA en ese límite
+     * (clampado) y el espacio libre/déficit restante se reparte de nuevo SOLO entre los items aún
+     * no congelados — bucle ACOTADO (ver freezeLoop()) en vez del "2 pasadas fijas" que esta clase
+     * usaba antes de esta tarea (que dejaba sin cubrir una segunda violación en cascada cuando
+     * congelar el primer item empujaba a un SEGUNDO por encima/debajo de SU propio límite — ver el
+     * repro de 3 items del test). Lado grow: el techo es max-width (creciendo, un item nunca cae
+     * por debajo de su min-width porque solo aumenta desde una base que hypotheticalMainSize() ya
+     * clampó — ver su docblock, así que min-width no puede violarse creciendo). Lado shrink: el
+     * suelo es max(min-content, min-width en border-box) — el min-content YA se aplicaba antes de
+     * esta tarea (M4-T4/T5); min-width del item ahora TAMBIÉN participa como suelo alternativo,
+     * "min gana" (coexisten, css-flexbox-1 §9.7 + CSS 2.2 §10.4) — un item nunca EXCEDE su
+     * max-width encogiendo, por el mismo argumento de base ya clampada.
      *
      * NOTA (finding 4 del review final M4, solo documentación — no se toca el comportamiento): el
      * $marginsX que devuelve este método, resuelto contra $contentWidth, alimenta DOS usos con
@@ -612,9 +621,11 @@ final readonly class FlexFormattingContext implements FormattingContext
         if ($free > 0.0) {
             $sumGrow = array_sum($grow);
             if ($sumGrow > 0.0) {
+                $maxBound = [];
                 foreach ($items as $i => $item) {
-                    $resolvedMain[$i] = $base[$i] + $free * ($grow[$i] / $sumGrow);
+                    $maxBound[$i] = $this->maxWidthBound($item, $contentWidth);
                 }
+                $resolvedMain = self::freezeLoop($base, $grow, $maxBound, $free, growing: true);
             }
             return [$resolvedMain, $marginsX];
         }
@@ -630,42 +641,137 @@ final readonly class FlexFormattingContext implements FormattingContext
                 return [$resolvedMain, $marginsX];
             }
 
-            $deficit = abs($free);
-            $frozen = [];
+            $minBound = [];
             foreach ($items as $i => $item) {
-                $candidate = $base[$i] - $deficit * ($scaledFactor[$i] / $sumScaled);
-                $minContent = $this->sizer->minContentWidth($item);
-                if ($candidate < $minContent) {
-                    $resolvedMain[$i] = $minContent;
-                    $frozen[$i] = true;
-                } else {
-                    $resolvedMain[$i] = $candidate;
-                    $frozen[$i] = false;
-                }
+                $minBound[$i] = $this->minWidthBound($item, $contentWidth);
             }
-
-            if (in_array(true, $frozen, true)) {
-                $consumedByFrozen = 0.0;
-                $sumUnfrozenScaled = 0.0;
-                foreach ($items as $i => $item) {
-                    if ($frozen[$i]) {
-                        $consumedByFrozen += $base[$i] - $resolvedMain[$i];
-                    } else {
-                        $sumUnfrozenScaled += $scaledFactor[$i];
-                    }
-                }
-                $remainingDeficit = $deficit - $consumedByFrozen;
-                if ($remainingDeficit > 0.0 && $sumUnfrozenScaled > 0.0) {
-                    foreach ($items as $i => $item) {
-                        if (!$frozen[$i]) {
-                            $resolvedMain[$i] = $base[$i] - $remainingDeficit * ($scaledFactor[$i] / $sumUnfrozenScaled);
-                        }
-                    }
-                }
-            }
+            $resolvedMain = self::freezeLoop($base, $scaledFactor, $minBound, $free, growing: false);
         }
 
         return [$resolvedMain, $marginsX];
+    }
+
+    /**
+     * M7 final-review Finding A: techo de crecimiento de un item en el eje ancho (row) — su propio
+     * max-width, convertido a border-box (mismo criterio "toBorderBox" que hypotheticalMainSize()),
+     * o null si no hay max-width declarado (sin techo, el item puede crecer indefinidamente vía
+     * flex-grow).
+     */
+    private function maxWidthBound(BlockBox|ImageBox $item, float $contentWidth): ?float
+    {
+        $style = $item->style;
+        $maxWidthPx = $style->maxWidth?->resolve($contentWidth);
+        if ($maxWidthPx === null) {
+            return null;
+        }
+        $paddingH = $style->paddingLeft->resolve($contentWidth) + $style->paddingRight->resolve($contentWidth);
+        $borderH = $style->borderLeft->widthPx + $style->borderRight->widthPx;
+        return $style->boxSizing === 'border-box' ? $maxWidthPx : $maxWidthPx + $paddingH + $borderH;
+    }
+
+    /**
+     * M7 final-review Finding A: suelo de encogimiento de un item en el eje ancho (row) —
+     * max(min-content, min-width propio en border-box). min-content ya se aplicaba antes de esta
+     * tarea (M4-T4/T5, IntrinsicSizer::minContentWidth()); min-width ahora TAMBIÉN participa como
+     * suelo alternativo — "min gana" cuando ambos aplican (coexisten, nunca se excluyen entre sí).
+     */
+    private function minWidthBound(BlockBox|ImageBox $item, float $contentWidth): float
+    {
+        $minContent = $this->sizer->minContentWidth($item);
+        $style = $item->style;
+        $minWidthPx = $style->minWidth?->resolve($contentWidth);
+        if ($minWidthPx === null) {
+            return $minContent;
+        }
+        $paddingH = $style->paddingLeft->resolve($contentWidth) + $style->paddingRight->resolve($contentWidth);
+        $borderH = $style->borderLeft->widthPx + $style->borderRight->widthPx;
+        $minWidthBorderBox = $style->boxSizing === 'border-box' ? $minWidthPx : $minWidthPx + $paddingH + $borderH;
+        return max($minContent, $minWidthBorderBox);
+    }
+
+    /**
+     * css-flexbox-1 §9.7 paso 6 ("resolve the flexible lengths"), simplificado a un bucle
+     * iterativo ACOTADO: como mucho count($base) rondas — cada ronda o bien congela AL MENOS un
+     * item nuevo (sale del reparto, ver $frozen), o termina sin ninguna violación nueva (acepta los
+     * candidatos de esa ronda y sale) — con n items, tras n rondas todos están congelados o el
+     * bucle ya salió antes por falta de violaciones, así que NUNCA itera más de count($base) veces
+     * (cota documentada, según pide el brief M7 final-review Finding A/B, en vez del "2 pasadas
+     * fijas" de versiones anteriores de este método — insuficiente para una CASCADA de 2+
+     * violaciones sucesivas, ver el repro de 3 items del test: congelar el primer item por su
+     * propio límite puede empujar a un SEGUNDO por encima/debajo del SUYO, que solo una ronda
+     * adicional detecta).
+     *
+     * Reutilizado IDÉNTICO por resolveMainSizes() (row, eje ancho) y layoutColumnContainer()
+     * (column, eje alto) — el algoritmo es agnóstico al eje: solo necesita $base/$factor/$bound/
+     * $freeOrDeficit en la unidad que sea (px de ancho o de alto) y la dirección ($growing).
+     *
+     * @param array<int, float> $base tamaño hipotético/base de cada item, mismo índice que $factor/$bound
+     * @param array<int, float> $factor factor de reparto de ESTA ronda: grow[i] si $growing=true,
+     *     o el "scaled flex shrink factor" shrink[i]×base[i] si $growing=false (css-flexbox-1 §9.7)
+     * @param array<int, float|null> $bound techo (creciendo: max-width/height) o suelo (encogiendo:
+     *     el suelo YA combinado por el caller, ver minWidthBound()) de cada item; null = sin límite
+     * @param float $freeOrDeficit espacio libre (positivo, $growing=true) o negativo (déficit,
+     *     $growing=false) — mismo $free que el caller ya calculó
+     * @return array<int, float> tamaño final resuelto de cada item, mismo índice que $base
+     */
+    private static function freezeLoop(array $base, array $factor, array $bound, float $freeOrDeficit, bool $growing): array
+    {
+        $resolved = $base;
+        $frozen = array_fill_keys(array_keys($base), false);
+        $totalBudget = $growing ? $freeOrDeficit : abs($freeOrDeficit);
+        $remaining = $totalBudget;
+        $rounds = count($base);
+
+        for ($round = 0; $round < $rounds; $round++) {
+            $sumFactor = 0.0;
+            foreach (array_keys($base) as $i) {
+                if (!$frozen[$i]) {
+                    $sumFactor += $factor[$i];
+                }
+            }
+            if ($sumFactor <= 0.0) {
+                break;
+            }
+
+            $newlyFrozen = false;
+            $candidates = [];
+            foreach ($base as $i => $b) {
+                if ($frozen[$i]) {
+                    continue;
+                }
+                $share = $remaining * ($factor[$i] / $sumFactor);
+                $candidate = $growing ? $b + $share : $b - $share;
+                $limit = $bound[$i];
+                $violates = $limit !== null && ($growing ? $candidate > $limit : $candidate < $limit);
+                if ($violates) {
+                    $resolved[$i] = $limit;
+                    $frozen[$i] = true;
+                    $newlyFrozen = true;
+                    continue;
+                }
+                $candidates[$i] = $candidate;
+            }
+
+            if (!$newlyFrozen) {
+                foreach ($candidates as $i => $c) {
+                    $resolved[$i] = $c;
+                }
+                break;
+            }
+
+            $consumed = 0.0;
+            foreach ($base as $i => $b) {
+                if ($frozen[$i]) {
+                    $consumed += $growing ? ($resolved[$i] - $b) : ($b - $resolved[$i]);
+                }
+            }
+            $remaining = $totalBudget - $consumed;
+            if ($remaining <= 0.0) {
+                break;
+            }
+        }
+
+        return $resolved;
     }
 
     /**
@@ -727,13 +833,22 @@ final readonly class FlexFormattingContext implements FormattingContext
      * altura NATURAL: layoutear con el content width del contenedor y medir (mismo patrón que la
      * medición de cross size en row, pero en el eje principal).
      *
-     * §9.7 (grow/shrink): sin CLAMP a un "min-content de bloque" (a diferencia de row: no hay
-     * concepto de min-content-height en este motor, css-flexbox-1 §4.5 lo definiría como el alto
-     * natural mismo, pero clampar+redistribuir en dos pasadas no lo ejercita ningún test
-     * requerido — overflow permitido, documentado, igual criterio "soft" que el resto del motor).
-     * Sin altura DECLARADA en el contenedor, el main size es indefinido: ni grow/shrink ni
-     * justify-content tienen sentido (huecos libres = 0 por construcción, la columna se limita a
-     * apilar las bases con el gap — "hugs content", brief).
+     * §9.7 (grow/shrink) + M7 final-review Finding B: min/max-height del ITEM clampan el BASE
+     * (mismo criterio "max primero, min después" que hypotheticalMainSize() en row, ver su
+     * docblock) y, tras grow/shrink, cualquier candidato que viole su propio min/max-height se
+     * CONGELA en ese límite y el libre/déficit restante se reparte de nuevo entre los items aún no
+     * congelados — MISMO bucle acotado que row (freezeLoop(), reutilizado tal cual, ver su
+     * docblock). A diferencia de row, no hay concepto de "min-content de bloque" en este motor
+     * (css-flexbox-1 §4.5 lo definiría como el alto natural mismo — simplificación ya documentada,
+     * fuera de alcance): el suelo de encogimiento es min-height si se declaró, o 0.0 en su defecto
+     * (preserva el "nunca negativo" que esta rama ya garantizaba ANTES de esta tarea, ver el
+     * `max(0.0, ...)` que este método tenía). Sin altura DECLARADA en el contenedor, el main size
+     * sigue indefinido: ni grow/shrink ni justify-content tienen sentido (huecos libres = 0 por
+     * construcción, la columna se limita a apilar las bases —YA clampadas por su propio min/
+     * max-height— con el gap — "hugs content", brief); % en min-height/max-height NO existen en
+     * este motor (ComputedStyle::$minHeight/$maxHeight son PX-ONLY, ver su docblock — cualquier %
+     * ya fue rechazado con warning por DeclarationParser antes de llegar aquí, "warning+ignore" es
+     * el comportamiento YA existente que esta tarea no toca).
      *
      * Gap: el eje principal en column usa row-gap (roles intercambiados respecto a row, ver
      * columnAxisPositions()). Cross axis (horizontal): stretch (default) estira los items sin
@@ -761,6 +876,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         $marginsY = [];
         $grow = [];
         $shrink = [];
+        $minBoundH = [];
+        $maxBoundH = [];
         foreach ($items as $i => $item) {
             $itemStyle = $item->style;
             $marginsY[$i] = $itemStyle->marginTop->resolve($contentWidth) + $itemStyle->marginBottom->resolve($contentWidth);
@@ -769,18 +886,32 @@ final readonly class FlexFormattingContext implements FormattingContext
 
             if ($itemStyle->flexBasis !== null) {
                 $base[$i] = $itemStyle->flexBasis->resolve($declaredContentHeight ?? 0.0);
-                continue;
-            }
-            $ownHeightPx = $itemStyle->height?->px;
-            if ($ownHeightPx !== null) {
+            } elseif (($ownHeightPx = $itemStyle->height?->px) !== null) {
                 $base[$i] = $ownHeightPx;
-                continue;
+            } else {
+                // Altura natural: layout con el content width del contenedor (el cross size fija
+                // el ancho, el alto queda libre) — SOLO se usa para medir, se descarta (la
+                // posición final de este item se resuelve en una segunda pasada, ver más abajo,
+                // una vez conocido su finalY — el mismo patrón "dos pasadas" que row usa para su
+                // cross size).
+                $base[$i] = $this->layoutItem($item, new Rect($contentX, 0.0, $contentWidth, INF))->rect->height;
             }
-            // Altura natural: layout con el content width del contenedor (el cross size fija el
-            // ancho, el alto queda libre) — SOLO se usa para medir, se descarta (la posición
-            // final de este item se resuelve en una segunda pasada, ver más abajo, una vez
-            // conocido su finalY — el mismo patrón "dos pasadas" que row usa para su cross size).
-            $base[$i] = $this->layoutItem($item, new Rect($contentX, 0.0, $contentWidth, INF))->rect->height;
+
+            // M7 final-review Finding B (§9.2 análogo al de hypotheticalMainSize() en row): el
+            // BASE de altura, sea cual sea su fuente (flex-basis/height propio/natural, las 3
+            // ramas de arriba), se clampa a min/max-height -- max PRIMERO, min DESPUÉS (CSS 2.2
+            // §10.4: si el min resultante excede el max, el min gana). Sin conversión de
+            // box-sizing (simplificación documentada, consistente con el trato YA existente de
+            // $ownHeightPx arriba, que tampoco distingue box-sizing para la altura declarada de un
+            // item flex column).
+            $maxBoundH[$i] = $itemStyle->maxHeight?->px;
+            if ($maxBoundH[$i] !== null) {
+                $base[$i] = min($base[$i], $maxBoundH[$i]);
+            }
+            $minBoundH[$i] = $itemStyle->minHeight?->px;
+            if ($minBoundH[$i] !== null) {
+                $base[$i] = max($base[$i], $minBoundH[$i]);
+            }
         }
 
         $gapsTotal = $n > 1 ? $style->rowGapPx * ($n - 1) : 0.0;
@@ -792,20 +923,23 @@ final readonly class FlexFormattingContext implements FormattingContext
             if ($free > 0.0) {
                 $sumGrow = array_sum($grow);
                 if ($sumGrow > 0.0) {
-                    foreach ($items as $i => $item) {
-                        $resolvedMain[$i] = $base[$i] + $free * ($grow[$i] / $sumGrow);
-                    }
+                    $resolvedMain = self::freezeLoop($base, $grow, $maxBoundH, $free, growing: true);
                 }
             } elseif ($free < 0.0) {
-                $sumShrinkBase = 0.0;
+                $scaledFactor = [];
                 foreach ($items as $i => $item) {
-                    $sumShrinkBase += $shrink[$i] * $base[$i];
+                    $scaledFactor[$i] = $shrink[$i] * $base[$i];
                 }
+                $sumShrinkBase = array_sum($scaledFactor);
                 if ($sumShrinkBase > 0.0) {
-                    $deficit = abs($free);
-                    foreach ($items as $i => $item) {
-                        $resolvedMain[$i] = max(0.0, $base[$i] - $deficit * (($shrink[$i] * $base[$i]) / $sumShrinkBase));
+                    // M7 final-review Finding B: el suelo de encogimiento es min-height si se
+                    // declaró, o 0.0 (nunca negativo -- preserva el `max(0.0, ...)` que este
+                    // método ya aplicaba ANTES de esta tarea para el caso sin min-height propio).
+                    $shrinkFloor = [];
+                    foreach ($minBoundH as $i => $bound) {
+                        $shrinkFloor[$i] = $bound ?? 0.0;
                     }
+                    $resolvedMain = self::freezeLoop($base, $scaledFactor, $shrinkFloor, $free, growing: false);
                 }
             }
         }

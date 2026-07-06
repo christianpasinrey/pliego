@@ -261,7 +261,7 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$ctx\.$#'
 			identifier: property.notFound
-			count: 30
+			count: 36
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -297,7 +297,7 @@ parameters:
 		-
 			message: '#^Cannot access offset 0 on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
-			count: 11
+			count: 13
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -321,7 +321,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$children on mixed\.$#'
 			identifier: property.nonObject
-			count: 30
+			count: 36
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -351,7 +351,7 @@ parameters:
 		-
 			message: '#^Cannot call method layout\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 29
+			count: 35
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-
@@ -375,7 +375,7 @@ parameters:
 		-
 			message: '#^Cannot use array destructuring on mixed\.$#'
 			identifier: offsetAccess.nonArray
-			count: 13
+			count: 17
 			path: tests/Unit/Layout/FlexFormattingContextTest.php
 
 		-

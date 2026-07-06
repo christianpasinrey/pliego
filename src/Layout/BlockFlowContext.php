@@ -418,6 +418,18 @@ final class BlockFlowContext implements FormattingContext
             // cursor con el margin-bottom propio de la tabla, resuelto contra este mismo
             // $contentWidth).
             if ($child instanceof TableBox) {
+                // M7 final-review Finding D: el chequeo de float de más arriba está restringido a
+                // BlockBox|ImageBox (ver su docblock) -- una TableBox con `float` propio NUNCA
+                // pasa por layoutFloatChild(), cae aquí, y se layoutea en flujo normal como si
+                // float no existiera. Antes de esta tarea ese "no-op" era silencioso; se avisa UNA
+                // SOLA VEZ (WarningCollector::addWarningOnce(), no una vez por tabla) sin cambiar
+                // el comportamiento (la tabla sigue en flujo normal).
+                if ($child->style->float !== null) {
+                    $this->warnings?->addWarningOnce(
+                        'float-on-table',
+                        'float on a <table> has no effect (not supported yet): the table stays in normal flow',
+                    );
+                }
                 $childFragment = $this->tableContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
                 $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
@@ -793,8 +805,20 @@ final class BlockFlowContext implements FormattingContext
      * box-sizing:content-box) gana; si no, min(max-content, $availableWidth) -- MISMO criterio
      * que InlineFlowContext::layoutInlineBlockAtomic() para un inline-block (duplicado aquí en vez
      * de compartir código entre clases, mismo criterio "sin trait" ya documentado en
-     * FlexFormattingContext). min/max-width NO se clampan aquí -- BlockFlowContext::layout() ya lo
-     * hace internamente sobre el $usedWidthOverride resultante (mismo mecanismo que un item flex).
+     * FlexFormattingContext).
+     *
+     * Bugfix (M7 final-review Finding C): el docblock de este método afirmaba que min/max-width
+     * NO se clampan aquí porque "BlockFlowContext::layout() ya lo hace internamente sobre el
+     * $usedWidthOverride resultante" -- FALSO. layout() solo aplica ese clamp dentro de la rama SIN
+     * override (ver su docblock M7-T5, "Se aplica solo en la rama SIN override"); CUALQUIER valor
+     * que llegue vía $usedWidthOverride (que es exactamente lo que devuelve este método a sus DOS
+     * callers, layoutFloatChild()/layoutAbsoluteChild()) se usa TAL CUAL, sin pasar nunca por ese
+     * clamp -- un float o position:absolute con min/max-width propio los veía completamente
+     * ignorados (repro: `float{width:300px;max-width:100px}` renderizaba a 300px, no 100px). El
+     * clamp se aplica aquí, DESPUÉS de resolver el ancho usado por CUALQUIER camino (declarado o
+     * shrink-to-fit) -- mismo patrón "min(max(minW, fit), maxW)" que
+     * InlineFlowContext::layoutInlineBlockAtomic() ya usa para un inline-block (max primero, min
+     * después: CSS 2.2 §10.4, "si el min resultante excede el max, el min gana").
      */
     private function shrinkToFitWidth(BlockBox $box, float $availableWidth): float
     {
@@ -802,16 +826,34 @@ final class BlockFlowContext implements FormattingContext
         $declaredWidthPx = $style->width?->resolve($availableWidth);
         if ($declaredWidthPx !== null) {
             if ($style->boxSizing === 'border-box') {
-                return max(0.0, $declaredWidthPx);
+                $usedWidth = max(0.0, $declaredWidthPx);
+            } else {
+                $paddingLeft = $style->paddingLeft->resolve($availableWidth);
+                $paddingRight = $style->paddingRight->resolve($availableWidth);
+                $borderLeft = $style->borderLeft->widthPx;
+                $borderRight = $style->borderRight->widthPx;
+                $usedWidth = max(0.0, $declaredWidthPx + $paddingLeft + $paddingRight + $borderLeft + $borderRight);
             }
-            $paddingLeft = $style->paddingLeft->resolve($availableWidth);
-            $paddingRight = $style->paddingRight->resolve($availableWidth);
-            $borderLeft = $style->borderLeft->widthPx;
-            $borderRight = $style->borderRight->widthPx;
-            return max(0.0, $declaredWidthPx + $paddingLeft + $paddingRight + $borderLeft + $borderRight);
+        } else {
+            $maxContent = $this->intrinsicSizer()->maxContentWidth($box);
+            $usedWidth = max(0.0, min($maxContent, $availableWidth));
         }
-        $maxContent = $this->intrinsicSizer()->maxContentWidth($box);
-        return max(0.0, min($maxContent, $availableWidth));
+
+        $minWidthPx = $style->minWidth?->resolve($availableWidth);
+        $maxWidthPx = $style->maxWidth?->resolve($availableWidth);
+        if ($minWidthPx === null && $maxWidthPx === null) {
+            return $usedWidth;
+        }
+        $paddingH = $style->paddingLeft->resolve($availableWidth) + $style->paddingRight->resolve($availableWidth);
+        $borderH = $style->borderLeft->widthPx + $style->borderRight->widthPx;
+        $toBorderBox = static fn(float $px): float => $style->boxSizing === 'border-box' ? $px : $px + $paddingH + $borderH;
+        if ($maxWidthPx !== null) {
+            $usedWidth = min($usedWidth, $toBorderBox($maxWidthPx));
+        }
+        if ($minWidthPx !== null) {
+            $usedWidth = max($usedWidth, $toBorderBox($minWidthPx));
+        }
+        return $usedWidth;
     }
 
     private function intrinsicSizer(): IntrinsicSizer
@@ -1067,6 +1109,18 @@ final class BlockFlowContext implements FormattingContext
     private function resolveReplacedSize(ImageBox $box, float $cbWidth, ?float $usedWidthOverride = null): array
     {
         $style = $box->style;
+        // M7 final-review Finding E: min/max-height en un replaced element (<img>) NUNCA se
+        // aplican en este motor (ver el comentario más abajo, junto al clamp de min/max-WIDTH, que
+        // documenta el porqué) -- antes de esta tarea ese "no-op" era silencioso; ahora se avisa
+        // UNA SOLA VEZ (WarningCollector::addWarningOnce(), no una vez por <img>) sin cambiar el
+        // comportamiento (min/max-height siguen ignorados, min/max-width siguen siendo los únicos
+        // que clampan).
+        if ($style->minHeight !== null || $style->maxHeight !== null) {
+            $this->warnings?->addWarningOnce(
+                'min-max-height-on-replaced',
+                'min/max-height on replaced elements not supported yet',
+            );
+        }
         $intrinsicWidth = (float) $box->intrinsicWidth;
         $intrinsicHeight = (float) $box->intrinsicHeight;
         $ratio = $intrinsicWidth > 0.0 ? $intrinsicHeight / $intrinsicWidth : 0.0;
@@ -1128,8 +1182,10 @@ final class BlockFlowContext implements FormattingContext
         // mismo mecanismo que la rama "$height === null" de arriba, aplicado una segunda vez tras
         // el clamp. min/max-HEIGHT en un replaced element NO se aplican en absoluto en esta tarea
         // (divergencia documentada: fuera del alcance reducido de M7-T5 -- un <img> con min/
-        // max-height propio simplemente los ignora, sin warning, igual criterio "soft" que otras
-        // simplificaciones ya documentadas en este método). Esta rama solo se alcanza SIN override
+        // max-height propio simplemente los ignora, igual criterio "soft" que otras
+        // simplificaciones ya documentadas en este método; M7 final-review Finding E: este no-op
+        // avisa ahora una vez por render, ver el inicio del método -- el comportamiento en sí
+        // sigue sin cambiar). Esta rama solo se alcanza SIN override
         // (la rama con $usedWidthOverride ya retornó arriba -- mismo criterio que
         // BlockFlowContext::layout(): un item flex ya negocia su propio ancho en
         // FlexFormattingContext).

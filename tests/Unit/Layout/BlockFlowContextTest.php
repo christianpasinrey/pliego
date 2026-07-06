@@ -38,6 +38,25 @@ function layoutImageHtml(string $html, string $css, float $width = 500.0): BoxFr
     return layoutHtml($html, $css, $width, BLOCK_FLOW_IMAGE_FIXTURES_DIR);
 }
 
+/** @return array{0: BoxFragment, 1: list<string>} */
+function layoutHtmlCollectingWarnings(string $html, string $css, float $width = 500.0, string $basePath = __DIR__): array
+{
+    $collector = new WarningCollector();
+    $doc = HtmlParser::parse($html);
+    $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
+    $root = new BoxTreeBuilder(new ImageLoader(), $collector, $basePath)->build($doc, $map);
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    $frag = new BlockFlowContext($measurer, $catalog, $collector)->layout($root, new Rect(0.0, 0.0, $width, INF));
+    return [$frag, $collector->drain()];
+}
+
+/** @return array{0: BoxFragment, 1: list<string>} */
+function layoutImageHtmlCollectingWarnings(string $html, string $css, float $width = 500.0): array
+{
+    return layoutHtmlCollectingWarnings($html, $css, $width, BLOCK_FLOW_IMAGE_FIXTURES_DIR);
+}
+
 /** @return list<TextFragment> */
 function textFragments(BoxFragment $box): array
 {
@@ -417,6 +436,55 @@ it('does NOT rederive height when height was explicitly declared (only auto heig
     assert($content instanceof ImageFragment);
     expect($content->rect->width)->toBe(100.0); // clamped
     expect($content->rect->height)->toBe(50.0); // untouched: height was explicit, not auto
+});
+
+// --- M7 final-review Finding E: min/max-height on a replaced element now warns (behavior unchanged) -
+
+it('Finding E: min-height on an <img> warns once and still has no effect on the resolved height', function () {
+    [$frag, $warnings] = layoutImageHtmlCollectingWarnings(
+        '<body><img src="tiny.jpg" width="40" height="30"></body>',
+        'img { min-height: 500px }',
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    // No behavioral change: min-height is still ignored, the declared height (30) wins as before.
+    expect($content->rect->height)->toBe(30.0);
+    $relevant = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'min/max-height on replaced elements not supported yet')));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('Finding E: max-height on an <img> warns once too, no effect on the resolved height', function () {
+    [$frag, $warnings] = layoutImageHtmlCollectingWarnings(
+        '<body><img src="tiny.jpg" width="40" height="30"></body>',
+        'img { max-height: 5px }',
+    );
+    $img = $frag->children[0];
+    assert($img instanceof BoxFragment);
+    $content = $img->children[0];
+    assert($content instanceof ImageFragment);
+    expect($content->rect->height)->toBe(30.0);
+    $relevant = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'min/max-height on replaced elements not supported yet')));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('Finding E: min/max-height together on an <img> only warn ONCE (addWarningOnce dedup)', function () {
+    [, $warnings] = layoutImageHtmlCollectingWarnings(
+        '<body><img src="tiny.jpg" width="40" height="30"></body>',
+        'img { min-height: 5px; max-height: 500px }',
+    );
+    $relevant = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'min/max-height on replaced elements not supported yet')));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('Finding E: an <img> with no min/max-height at all emits no such warning (no false positive)', function () {
+    [, $warnings] = layoutImageHtmlCollectingWarnings(
+        '<body><img src="tiny.jpg" width="40" height="30"></body>',
+        'img { min-width: 10px; max-width: 200px }',
+    );
+    $relevant = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'min/max-height on replaced elements')));
+    expect($relevant)->toBeEmpty();
 });
 
 it('applies margin/border/padding to the image using the normal box model', function () {
@@ -1477,4 +1545,100 @@ it('M7-T6 fix: position:relative on a list-item (ListItem branch) does not leak 
     expect($sib->rect->y)->toBe(20.0);
     // The relatively-positioned <li>'s OWN painted position DOES still move (+50) -- preserved.
     expect($rel->rect->y)->toBe(50.0);
+});
+
+// --- M7 final-review Finding C: min/max-width was silently dropped on floats/absolutes ---------
+// shrinkToFitWidth()'s docblock claimed layout() clamps the $usedWidthOverride it returns -- FALSE:
+// layout() only applies that clamp in the NO-override branch (see its M7-T5 docblock). Any float or
+// position:absolute box, which ALWAYS goes through the override, silently ignored its own
+// min/max-width entirely before this fix.
+
+it('Finding C: a float with a declared width beyond its max-width is clamped to the max-width (declared-width path)', function () {
+    $frag = layoutHtml(
+        '<body><div class="float-box"></div></body>',
+        '.float-box { float: left; width: 300px; max-width: 100px; min-height: 10px }',
+        500.0,
+    );
+    $floatBox = $frag->children[0];
+    assert($floatBox instanceof BoxFragment);
+    expect($floatBox->rect->width)->toBe(100.0);
+});
+
+it('Finding C: a float with no declared width but wide content is clamped to its max-width (shrink-to-fit path)', function () {
+    $frag = layoutHtml(
+        '<body><div class="float-box">a very long line of text that would otherwise shrink-to-fit far wider than one hundred pixels</div></body>',
+        '.float-box { float: left; max-width: 100px }',
+        500.0,
+    );
+    $floatBox = $frag->children[0];
+    assert($floatBox instanceof BoxFragment);
+    expect($floatBox->rect->width)->toBe(100.0);
+});
+
+it('Finding C: a position:absolute box with a declared width beyond its max-width is clamped (declared-width path)', function () {
+    $frag = layoutHtml(
+        '<body><div class="abs"></div></body>',
+        '.abs { position: absolute; width: 300px; max-width: 100px; min-height: 10px }',
+        500.0,
+    );
+    $abs = $frag->children[0];
+    assert($abs instanceof BoxFragment);
+    expect($abs->rect->width)->toBe(100.0);
+});
+
+it('Finding C: a position:absolute box with no declared width but wide content is clamped to its max-width (shrink-to-fit path)', function () {
+    $frag = layoutHtml(
+        '<body><div class="abs">a very long line of text that would otherwise shrink-to-fit far wider than one hundred pixels</div></body>',
+        '.abs { position: absolute; max-width: 100px }',
+        500.0,
+    );
+    $abs = $frag->children[0];
+    assert($abs instanceof BoxFragment);
+    expect($abs->rect->width)->toBe(100.0);
+});
+
+it('Finding C: a min-width floors a float narrower than it (declared-width path), same criterion as a normal block', function () {
+    $frag = layoutHtml(
+        '<body><div class="float-box"></div></body>',
+        '.float-box { float: left; width: 50px; min-width: 150px; min-height: 10px }',
+        500.0,
+    );
+    $floatBox = $frag->children[0];
+    assert($floatBox instanceof BoxFragment);
+    expect($floatBox->rect->width)->toBe(150.0);
+});
+
+it('Finding C control: a normal block (no float/absolute) still honours min/max-width exactly as before (regression guard)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 300px; max-width: 100px }');
+    $block = $frag->children[0];
+    assert($block instanceof BoxFragment);
+    expect($block->rect->width)->toBe(100.0);
+});
+
+// --- M7 final-review Finding D: warning discipline for float/position no-ops -------------------
+
+it('Finding D: float on a <table> warns exactly once and leaves the table in normal flow (no behavioral change)', function () {
+    [$frag, $warnings] = layoutHtmlCollectingWarnings(
+        '<body><table class="t"><tr><td>x</td></tr></table><div class="sibling">sibling</div></body>',
+        '.t { float: left; width: 100px }',
+    );
+    expect($warnings)->toHaveCount(1);
+    expect($warnings[0])->toContain('float on a <table> has no effect');
+
+    $sibling = $frag->children[1];
+    assert($sibling instanceof BoxFragment);
+    // Normal flow: the table's own content height (not zero, it has one row) advances the
+    // cursor exactly as if float didn't exist -- the sibling starts AFTER it, not at y=0.
+    $table = $frag->children[0];
+    assert($table instanceof BoxFragment);
+    expect($sibling->rect->y)->toBeGreaterThan(0.0);
+    expect($sibling->rect->y)->toBe($table->rect->height);
+});
+
+it('Finding D: float on a <table> only warns ONCE even with two floated tables (addWarningOnce dedup)', function () {
+    [, $warnings] = layoutHtmlCollectingWarnings(
+        '<body><table class="t"><tr><td>x</td></tr></table><table class="t"><tr><td>y</td></tr></table></body>',
+        '.t { float: left; width: 100px }',
+    );
+    expect($warnings)->toHaveCount(1);
 });
