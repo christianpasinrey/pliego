@@ -175,6 +175,12 @@ parameters:
 			path: tests/Unit/Layout/BlockFlowContextTest.php
 
 		-
+			message: '#^Cannot access property \$text on mixed\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: tests/Unit/Layout/BlockFlowContextTest.php
+
+		-
 			message: '#^Cannot access property \$width on mixed\.$#'
 			identifier: property.nonObject
 			count: 4
@@ -525,7 +531,7 @@ parameters:
 		-
 			message: '#^Access to an undefined property Pest\\PendingCalls\\TestCall\:\:\$sizer\.$#'
 			identifier: property.notFound
-			count: 26
+			count: 30
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
@@ -549,13 +555,13 @@ parameters:
 		-
 			message: '#^Cannot call method maxContentWidth\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 16
+			count: 18
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-
 			message: '#^Cannot call method minContentWidth\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 9
+			count: 11
 			path: tests/Unit/Layout/IntrinsicSizerTest.php
 
 		-

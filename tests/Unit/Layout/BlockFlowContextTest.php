@@ -471,3 +471,16 @@ it('BlockFlowContext delegates a display:flex child to FlexFormattingContext end
     expect($b->rect->width)->toBe(100.0);
     expect($b->rect->x)->toBe($a->rect->right());
 });
+
+// M5-T3: TableBox no tiene layout todavía (M5-T4 lo consume) — BlockFlowContext debe SALTARLA sin
+// crashear (mismo patrón "skip, documented" ya verificado para otros huecos temporales de este
+// motor). Ningún fragmento se emite para la tabla; el hermano siguiente sigue layouteando con
+// normalidad.
+it('skips a TableBox child without crashing, rendering the sibling after it (M5-T4 not implemented yet)', function () {
+    $frag = layoutHtml('<body><table><tr><td>a</td></tr></table><p>after</p></body>', '');
+    expect($frag->children)->toHaveCount(1);
+    $only = $frag->children[0];
+    assert($only instanceof BoxFragment);
+    $text = textFragments($only)[0];
+    expect($text->text)->toBe('after');
+});

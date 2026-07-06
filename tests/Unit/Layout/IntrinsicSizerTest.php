@@ -6,6 +6,7 @@ declare(strict_types=1);
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Length;
@@ -255,4 +256,18 @@ it('adds an image child intrinsic width plus its margins into the parent max-con
     ], 'div');
 
     expect($this->sizer->maxContentWidth($box))->toBe(96.0);
+});
+
+// M5-T3: una TableBox hija (M5-T4 lo consume, no tiene min/max-content todavía) debe ser
+// IGNORADA por sizeBlock() sin crashear -- mismo patrón "skip, documented" verificado también en
+// BlockFlowContext. Se contrasta el resultado con y sin la tabla para probar que su presencia no
+// cambia el número (contribución 0, no un error de tipo).
+it('skips a TableBox child without crashing (M5-T4 not implemented yet)', function () {
+    $style = sizerStyle();
+    $table = new TableBox($style, [], 'table');
+    $withTable = new BlockBox($style, [new TextRun('abc', $style), $table], 'div');
+    $withoutTable = new BlockBox($style, [new TextRun('abc', $style)], 'div');
+
+    expect($this->sizer->maxContentWidth($withTable))->toBe($this->sizer->maxContentWidth($withoutTable));
+    expect($this->sizer->minContentWidth($withTable))->toBe($this->sizer->minContentWidth($withoutTable));
 });

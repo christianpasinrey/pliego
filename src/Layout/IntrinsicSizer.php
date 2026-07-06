@@ -7,6 +7,7 @@ namespace Pliego\Layout;
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Layout\Text\BreakFinder;
 use Pliego\Style\ComputedStyle;
@@ -162,6 +163,12 @@ final class IntrinsicSizer
                 continue;
             }
             $flush();
+            // M5-T3: una TableBox hija (M5-T4 lo consume) no tiene todavía un min/max-content
+            // definido — se ignora, sin contribuir nada a este máximo, mismo patrón "skip,
+            // documented, no crash" que BlockFlowContext aplica en su bucle de layout.
+            if ($child instanceof TableBox) {
+                continue;
+            }
             $best = max($best, $this->maxContentWidth($child) + $this->marginsX($child->style));
         }
         $flush();
@@ -180,6 +187,10 @@ final class IntrinsicSizer
             if ($child instanceof LineBreakRun) {
                 // min-content ignora los saltos forzados: solo cuenta la palabra más larga por
                 // run (ver docblock de clase), y un <br> no es un TextRun.
+                continue;
+            }
+            // M5-T3: ver el comentario análogo en maxContentOfChildren().
+            if ($child instanceof TableBox) {
                 continue;
             }
             $best = max($best, $this->minContentWidth($child) + $this->marginsX($child->style));

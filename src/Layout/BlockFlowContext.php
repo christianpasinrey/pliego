@@ -7,6 +7,7 @@ namespace Pliego\Layout;
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
@@ -168,6 +169,15 @@ final class BlockFlowContext implements FormattingContext
                 $children[] = $childFragment;
                 $contentBottom = $childFragment->rect->bottom();
                 $cursorY = $contentBottom + $child->style->marginBottom->resolve($contentWidth);
+                continue;
+            }
+            // M5-T3: una TableBox (M5-T4 lo consume, TableFormattingContext no existe todavía) se
+            // SALTA por completo — ni fragmento ni avance de cursor — el mismo patrón "skip,
+            // documented, no crash" ya aplicado a otros huecos temporales de este motor (nunca una
+            // excepción). Conocido/aceptado hasta T4: el hermano siguiente a una tabla puede
+            // solaparse verticalmente con donde la tabla habría caído, ya que su altura no se
+            // contabiliza aquí.
+            if ($child instanceof TableBox) {
                 continue;
             }
             // M4-T4: un hijo bloque con display:flex se layoutea ENTERO con FlexFormattingContext

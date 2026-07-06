@@ -6,6 +6,7 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\BoxTreeBuilder;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\StylesheetParser;
 use Pliego\Css\WarningCollector;
@@ -31,6 +32,35 @@ function buildTreeCollectingWarnings(string $html, string $basePath, string $css
     $collector = new WarningCollector();
     $tree = buildTree($html, $css, $collector, $basePath);
     return [$tree, $collector->drain()];
+}
+
+/**
+ * M5-T3: \Dom\HTMLDocument::createFromString() runs the FULL WHATWG HTML5 tree-construction
+ * algorithm, which FOSTER-PARENTS any non-whitespace text or non-table-structure element found
+ * directly inside <table>/<tr> — it is moved OUT, as a preceding sibling of the table, never
+ * becomes an actual child (verified empirically: parsing '<table>loose</table>' yields a body
+ * with a #text "loose" sibling BEFORE an empty <table>). This is real browser behavior, but it
+ * means the "minimal anonymous structure" code path (BoxTreeBuilder::collectTableRows()/
+ * buildTableRow()) is UNREACHABLE through HtmlParser::parse() on an HTML string — there is no
+ * markup that survives parsing with that shape. Imperative DOM construction (createElement +
+ * appendChild), used below, bypasses the parser's insertion-mode state machine entirely (it is
+ * parsing-time-only behavior, not a tree invariant), so it CAN build the shape CSS 2.2 §17.2.1
+ * anonymous-box generation is written against — the same shape a non-HTML5 DOM source (XML,
+ * XHTML, or a future non-parser Dom\* producer) could hand to BoxTreeBuilder.
+ */
+function domBuild(\Closure $build): \Dom\HTMLDocument
+{
+    $doc = HtmlParser::parse('<!doctype html><body></body>');
+    $body = $doc->body;
+    assert($body instanceof \Dom\Element);
+    $build($doc, $body);
+    return $doc;
+}
+
+function buildTreeFromDoc(\Dom\HTMLDocument $doc, string $css = ''): BlockBox
+{
+    $map = new StyleResolver([new CssStyleSource(new StylesheetParser()->parse($css))])->resolve($doc);
+    return new BoxTreeBuilder(new ImageLoader(), new WarningCollector(), __DIR__)->build($doc, $map);
 }
 
 it('builds nested block boxes with text runs', function () {
@@ -379,4 +409,237 @@ it('recurses into a nested flex container, each level with its own anonymous ite
     expect($innerAnon->tag)->toBe('anonymous');
     expect($innerAnon->children[0])->toBeInstanceOf(TextRun::class);
     expect($innerBlock->tag)->toBe('div');
+});
+
+// M5-T3: css-tables-3 §2 — un elemento con Display::Table (UA default para <table>, ver
+// ComputedStyle::TABLE_DISPLAY_BY_TAG del M5-T2) construye un TableBox en vez de un BlockBox
+// plano; sus filas <tr> reales construyen TableCellBox por cada td/th. thead/tbody son
+// TRANSPARENTES: sus <tr> se aplanan en TableBox::$rows marcados isHeader. colspan es un entero
+// ≥1 (default 1, inválido/0 cae a 1); rowspan solo dispara un warning (no soportado, tratado
+// como 1). La variante MÍNIMA de estructura anónima (§17.2.1 reducido) envuelve texto suelto y
+// elementos no-fila/no-celda en filas/celdas anónimas propias, sin fusionar hermanos adyacentes.
+
+it('builds a full table into TableBox/TableRowBox/TableCellBox', function () {
+    $root = buildTree('<body><table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table></body>');
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->tag)->toBe('table');
+    expect($table->rows)->toHaveCount(2);
+    foreach ($table->rows as $row) {
+        expect($row->isHeader)->toBeFalse();
+        expect($row->cells)->toHaveCount(2);
+        foreach ($row->cells as $cell) {
+            expect($cell->tag)->toBe('td');
+            expect($cell->colspan)->toBe(1);
+        }
+    }
+    $firstCellText = $table->rows[0]->cells[0]->children[0];
+    assert($firstCellText instanceof TextRun);
+    expect($firstCellText->text)->toBe('a');
+});
+
+it('flattens thead/tbody rows into the table row list, marking thead rows as header', function () {
+    $root = buildTree(
+        '<body><table><thead><tr><th>H1</th></tr></thead><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table></body>',
+    );
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(3);
+    [$header, $rowA, $rowB] = $table->rows;
+    expect($header->isHeader)->toBeTrue();
+    expect($rowA->isHeader)->toBeFalse();
+    expect($rowB->isHeader)->toBeFalse();
+    expect($header->cells[0]->tag)->toBe('th');
+    expect($rowA->cells[0]->tag)->toBe('td');
+});
+
+it('parses colspan as an int >= 1, falling back to 1 when invalid/0/absent', function () {
+    $root = buildTree(
+        '<body><table><tr><td colspan="3">wide</td><td>x</td><td colspan="0">z</td><td colspan="abc">w</td></tr></table></body>',
+    );
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    [$wide, $plain, $zero, $garbage] = $table->rows[0]->cells;
+    expect($wide->colspan)->toBe(3);
+    expect($plain->colspan)->toBe(1);
+    expect($zero->colspan)->toBe(1);
+    expect($garbage->colspan)->toBe(1);
+});
+
+it('warns and treats rowspan as 1 when the attribute is present', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings('<body><table><tr><td rowspan="2">a</td></tr></table></body>', __DIR__);
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    $cell = $table->rows[0]->cells[0];
+    expect($cell->colspan)->toBe(1);
+    expect($warnings)->toHaveCount(1);
+    expect($warnings[0])->toBe('rowspan not supported yet: treated as 1');
+});
+
+it('wraps loose text directly in <table> in an anonymous row and cell', function () {
+    $doc = domBuild(function (\Dom\HTMLDocument $doc, \Dom\Element $body): void {
+        $table = $doc->createElement('table');
+        $table->appendChild($doc->createTextNode('loose'));
+        $body->appendChild($table);
+    });
+    $root = buildTreeFromDoc($doc);
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(1);
+    $row = $table->rows[0];
+    expect($row->isHeader)->toBeFalse();
+    expect($row->cells)->toHaveCount(1);
+    $cell = $row->cells[0];
+    expect($cell->tag)->toBe('anonymous');
+    $text = $cell->children[0];
+    assert($text instanceof TextRun);
+    expect($text->text)->toBe('loose');
+});
+
+it('wraps loose text directly in <tr> in an anonymous cell only (row already exists)', function () {
+    $doc = domBuild(function (\Dom\HTMLDocument $doc, \Dom\Element $body): void {
+        $table = $doc->createElement('table');
+        $tr = $doc->createElement('tr');
+        $tr->appendChild($doc->createTextNode('loose'));
+        $table->appendChild($tr);
+        $body->appendChild($table);
+    });
+    $root = buildTreeFromDoc($doc);
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(1);
+    $row = $table->rows[0];
+    expect($row->cells)->toHaveCount(1);
+    $cell = $row->cells[0];
+    expect($cell->tag)->toBe('anonymous');
+    $text = $cell->children[0];
+    assert($text instanceof TextRun);
+    expect($text->text)->toBe('loose');
+});
+
+it('wraps a non-row element child of table in its own anonymous row+cell', function () {
+    $doc = domBuild(function (\Dom\HTMLDocument $doc, \Dom\Element $body): void {
+        $table = $doc->createElement('table');
+        $div = $doc->createElement('div');
+        $div->appendChild($doc->createTextNode('Bloque'));
+        $table->appendChild($div);
+        $body->appendChild($table);
+    });
+    $root = buildTreeFromDoc($doc);
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(1);
+    $cell = $table->rows[0]->cells[0];
+    expect($cell->tag)->toBe('anonymous');
+    $div = $cell->children[0];
+    assert($div instanceof BlockBox);
+    expect($div->tag)->toBe('div');
+    $text = $div->children[0];
+    assert($text instanceof TextRun);
+    expect($text->text)->toBe('Bloque');
+});
+
+it('wraps a non-cell element child of tr in its own anonymous cell', function () {
+    $doc = domBuild(function (\Dom\HTMLDocument $doc, \Dom\Element $body): void {
+        $table = $doc->createElement('table');
+        $tr = $doc->createElement('tr');
+        $div = $doc->createElement('div');
+        $div->appendChild($doc->createTextNode('Bloque'));
+        $tr->appendChild($div);
+        $table->appendChild($tr);
+        $body->appendChild($table);
+    });
+    $root = buildTreeFromDoc($doc);
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    $row = $table->rows[0];
+    expect($row->cells)->toHaveCount(1);
+    $cell = $row->cells[0];
+    expect($cell->tag)->toBe('anonymous');
+    $div = $cell->children[0];
+    assert($div instanceof BlockBox);
+    expect($div->tag)->toBe('div');
+});
+
+it('does not merge adjacent loose siblings: each gets its own anonymous row (documented minimal-variant divergence)', function () {
+    $doc = domBuild(function (\Dom\HTMLDocument $doc, \Dom\Element $body): void {
+        $table = $doc->createElement('table');
+        $table->appendChild($doc->createTextNode('foo'));
+        $div = $doc->createElement('div');
+        $div->appendChild($doc->createTextNode('bar'));
+        $table->appendChild($div);
+        $body->appendChild($table);
+    });
+    $root = buildTreeFromDoc($doc);
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(2);
+});
+
+it('ignores whitespace-only text between table/tr/thead/tbody children', function () {
+    $root = buildTree("<body><table>\n  <thead>\n    <tr><th>H</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>a</td></tr>\n  </tbody>\n</table></body>");
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(2);
+});
+
+it('prunes a display:none tr, and a display:none td within a surviving tr', function () {
+    $root = buildTree(
+        '<body><table><tr class="hidden"><td>a</td></tr><tr><td class="hidden">b</td><td>c</td></tr></table></body>',
+        '.hidden { display: none }',
+    );
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    expect($table->rows)->toHaveCount(1);
+    $row = $table->rows[0];
+    expect($row->cells)->toHaveCount(1);
+    $text = $row->cells[0]->children[0];
+    assert($text instanceof TextRun);
+    expect($text->text)->toBe('c');
+});
+
+it('prunes an entire display:none table', function () {
+    $root = buildTree('<body><table class="hidden"><tr><td>a</td></tr></table></body>', '.hidden { display: none }');
+    expect($root->children)->toHaveCount(0);
+});
+
+it('builds cell content via the normal pipeline: blocks, inline styling and images all work inside a cell', function () {
+    $root = buildTree(
+        '<body><table><tr><td><p>Hi <b>there</b></p><img src="tiny.jpg"></td></tr></table></body>',
+        '',
+        null,
+        IMAGE_FIXTURES_DIR,
+    );
+    $table = $root->children[0];
+    assert($table instanceof TableBox);
+    $cell = $table->rows[0]->cells[0];
+    expect($cell->children)->toHaveCount(2);
+    [$p, $img] = $cell->children;
+    assert($p instanceof BlockBox && $img instanceof ImageBox);
+    expect($p->tag)->toBe('p');
+    [$plain, $bold] = $p->children;
+    assert($plain instanceof TextRun && $bold instanceof TextRun);
+    expect($bold->style->fontWeight)->toBe(700);
+});
+
+it('builds a nested table inside a cell as a TableBox (not a plain BlockBox)', function () {
+    $root = buildTree('<body><table><tr><td><table><tr><td>inner</td></tr></table></td></tr></table></body>');
+    $outer = $root->children[0];
+    assert($outer instanceof TableBox);
+    $innerTable = $outer->rows[0]->cells[0]->children[0];
+    assert($innerTable instanceof TableBox);
+    $innerText = $innerTable->rows[0]->cells[0]->children[0];
+    assert($innerText instanceof TextRun);
+    expect($innerText->text)->toBe('inner');
+});
+
+it('treats a table as a direct flex item, never merged into the anonymous text-run wrapper', function () {
+    $root = buildTree(
+        '<body><div class="flex"><table><tr><td>a</td></tr></table></div></body>',
+        '.flex { display: flex }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(1);
+    expect($flex->children[0])->toBeInstanceOf(TableBox::class);
 });

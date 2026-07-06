@@ -7,6 +7,7 @@ namespace Pliego\Layout;
 use Pliego\Box\BlockBox;
 use Pliego\Box\ImageBox;
 use Pliego\Box\LineBreakRun;
+use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderSet;
@@ -414,7 +415,14 @@ final readonly class FlexFormattingContext implements FormattingContext
      * a mano sin pasar por el builder (p.ej. un test) — mismo espíritu "soft, documented" que el
      * resto del motor, no una excepción.
      *
-     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox> $children
+     * M5-T3: $children puede incluir TableBox (una tabla es, ella misma, un flex item DIRECTO —
+     * ver BlockBox::$children y wrapAnonymousFlexItems()). El filtro whitelist de abajo (solo
+     * BlockBox|ImageBox) ya la excluye SIN cambios: hasta M5-T4 una TableBox como item flex
+     * simplemente desaparece de $items (mismo patrón "skip, documented, no crash" que
+     * BlockFlowContext/IntrinsicSizer aplican en sus propios recorridos de hijos) — no participa
+     * del layout de línea ni del cálculo de tamaños, pero tampoco crashea.
+     *
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
      * @return list<BlockBox|ImageBox>
      */
     private static function flexItems(array $children): array

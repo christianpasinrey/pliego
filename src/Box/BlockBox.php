@@ -8,7 +8,15 @@ use Pliego\Style\ComputedStyle;
 
 final readonly class BlockBox
 {
-    /** @param list<BlockBox|TextRun|LineBreakRun|ImageBox> $children */
+    /**
+     * M5-T3: += TableBox — una <table> aparece como hijo directo de un bloque normal exactamente
+     * igual que cualquier otro BlockBox|ImageBox (incluido dentro de un contenedor flex: es un
+     * flex item DIRECTO por sí misma, ver BoxTreeBuilder::wrapAnonymousFlexItems() — el mismo
+     * mecanismo que ya trataba a ImageBox como item directo sin cambios). Los consumidores de
+     * layout (BlockFlowContext/FlexFormattingContext/IntrinsicSizer) todavía la SALTAN
+     * explícitamente hasta M5-T4.
+     * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox> $children
+     */
     public function __construct(
         public ComputedStyle $style,
         public array $children,
