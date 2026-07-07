@@ -786,7 +786,7 @@ final class DeclarationParser
     private function parseBackgroundImageValue(string $value): array
     {
         if (strtolower(trim($value)) === 'none') {
-            return [];
+            return ['background-gradient' => null];
         }
         $trimmed = $this->firstBackgroundLayer($value);
         if ($this->isGradientFunction($trimmed)) {

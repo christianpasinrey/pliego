@@ -927,7 +927,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$backgroundGradient on mixed\.$#'
 			identifier: property.nonObject
-			count: 3
+			count: 5
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1209,13 +1209,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 134
+			count: 136
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 120
+			count: 122
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

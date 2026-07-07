@@ -1208,3 +1208,27 @@ it('does NOT let the background-color LONGHAND reset a cascaded gradient (only t
         new GradientStop(new Color(0, 0, 255), 100.0),
     ]));
 });
+
+// M8-T3 fix: background-image: none is an explicit declaration of the initial value
+// and must win the cascade over a less-specific gradient
+it('lets background-image: none reset a less-specific cascaded gradient (cascade-win test)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background-image: linear-gradient(red, blue); } .box.override { background-image: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+});
+
+it('lets background-image: none reset a less-specific cascaded gradient from background shorthand', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background-image: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+});

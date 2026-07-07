@@ -1243,9 +1243,9 @@ it('warns that url() images are not supported yet, in both "background" and "bac
     expect($parser->drainWarnings())->toHaveCount(1);
 });
 
-it('treats background-image: none as "no declaration", without a warning', function () {
+it('treats background-image: none as an explicit declaration that wins the cascade (clears gradients)', function () {
     $parser = new DeclarationParser();
-    expect($parser->parse('background-image', 'none'))->toBe([]);
+    expect($parser->parse('background-image', 'none'))->toBe(['background-gradient' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
