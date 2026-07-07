@@ -672,6 +672,68 @@ it('Finding 1: a LAST slice (left side suppressed to None) still paints via the 
     expect($warnings->drain())->toBe([]);
 });
 
+// --- M8-T2 fix (Reviewer, Important): an AUTHOR-DECLARED partial border (e.g.
+// `border-bottom: 8px solid; border-radius: 15px`) must NOT reuse the slice-relaxed
+// bordersUniform() path -- unlike an InlineFlowContext slice (which always pre-zeroes the
+// radius on any corner touching a suppressed side, see buildInlineBoxFragment() at
+// InlineFlowContext.php:793-799: `$isFirstSlice ? $rawRadius->tl : 0.0` etc.), a BoxFragment's
+// BorderSet/BorderRadius pair carries NO such guarantee -- ComputedStyle can produce a single
+// styled side with a full-corner radius with nothing enforcing "every corner with radius>0 has
+// both adjacent sides styled". Before this fix, bordersUniform() only compared the STYLED sides
+// to each other (trivially equal when there's only one), so a lone bottom border sailed through
+// as "uniform" and painted a full annular ring using ALL FOUR outer corners -- phantom curved
+// ink at the top-left/top-right corners, where NO border was declared, and the "mixed border
+// widths" warning that should have fired for this heterogeneity never did.
+
+it('a border-bottom-only side with radius on ALL corners falls back to flat painting + warning instead of a ring with phantom top-corner ink', function () {
+    $canvas = new RecordingCanvas();
+    $warnings = new WarningCollector();
+    $black = new Color(0, 0, 0);
+    $none = new BorderSide(0.0, BorderStyle::None, null);
+    $bottom = new BorderSide(8.0, BorderStyle::Solid, $black);
+    $borders = new BorderSet($none, $none, $bottom, $none);
+    // border-radius: 15px shorthand -- ALL 4 corners, including tl/tr whose adjacent sides
+    // (top+left, top+right) are BOTH None. Those are exactly the corners where the old ring path
+    // painted a curved crescent with no author-declared border underneath.
+    $radius = new BorderRadius(15.0, 15.0, 15.0, 15.0);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: $radius);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    // Flat painting: only the bottom side is Solid && width>0 -- the same paintBordersFlat() as
+    // always, radius ignored entirely (no roundedRing(...) call anywhere in $canvas->calls, no
+    // curved corners of any kind).
+    expect($canvas->calls)->toBe([
+        'rect(0.00,42.00,100.00,8.00,#000000)', // bottom only (height 50 - bottomW 8 = y 42)
+    ]);
+    expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
+});
+
+it('edge case: radius restricted to ONLY the bottom corners (border-bottom-left/right-radius) still falls back -- each bottom corner adjoins one None side (left/right)', function () {
+    // Narrower declaration than the test above: border-radius only on bl/br (top radii stay 0,
+    // as if the author wrote border-bottom-left-radius/border-bottom-right-radius alone). One
+    // might expect this to be "safe" since the radius no longer touches the fully-unstyled top
+    // corners -- but bottom-left adjoins BOTTOM (styled) AND LEFT (None), and bottom-right
+    // adjoins BOTTOM (styled) AND RIGHT (None): each still has one unstyled adjacent side, so a
+    // ring there would paint a crescent on the LEFT/RIGHT edge of that corner where no border
+    // was declared either. The guard correctly fires here too -- flat + warning, not a ring.
+    $canvas = new RecordingCanvas();
+    $warnings = new WarningCollector();
+    $black = new Color(0, 0, 0);
+    $none = new BorderSide(0.0, BorderStyle::None, null);
+    $bottom = new BorderSide(8.0, BorderStyle::Solid, $black);
+    $borders = new BorderSet($none, $none, $bottom, $none);
+    $radius = new BorderRadius(0.0, 0.0, 15.0, 15.0); // tl=0, tr=0, br=15, bl=15
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: $radius);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,42.00,100.00,8.00,#000000)',
+    ]);
+    expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
+});
+
 it('Finding 1 regression guard: GENUINELY mixed declared border widths (no None side involved) still warn and fall back to flat painting', function () {
     // Same shape as the pre-existing "falls back... MIXED" test above, restated here next to the
     // slice fix as an explicit regression guard: a real user-declared width mismatch (2px vs 4px,

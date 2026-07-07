@@ -198,10 +198,15 @@ final readonly class Painter
      *     un slice con un lateral suprimido caía siempre en la rama "mixed" de abajo (esquinas
      *     rectas + warning falso, aunque el borde declarado fuera uniforme). El radio interior
      *     por esquina sigue reduciéndose por el ancho COMÚN de los lados visibles (mismo $bw que
-     *     antes) porque, por construcción de InlineFlowContext, toda esquina con radio > 0
-     *     siempre tiene AMBOS lados adyacentes visibles (las esquinas tocadas por un lado
-     *     suprimido ya llegan con radio 0 desde el slicing, ver su docblock) -- nunca hace falta
-     *     mezclar dos anchos distintos en la resta de un mismo corner.
+     *     antes) porque, para cuando se llega aquí, bordersUniform() YA garantizó que toda
+     *     esquina con radio > 0 tiene AMBOS lados adyacentes visibles -- por construcción para un
+     *     slice de InlineFlowContext (las esquinas tocadas por un lado suprimido ya llegan con
+     *     radio 0 desde el slicing, ver su docblock), pero por una GUARDA EXPLÍCITA en
+     *     bordersUniform() para cualquier otro BoxFragment/InlineBoxFragment (M8-T2 fix, Reviewer
+     *     Important: un borde AUTOR-declarado parcial, p.ej. `border-bottom: 8px solid;
+     *     border-radius: 15px`, no tiene ninguna garantía estructural de eso -- ver el docblock de
+     *     bordersUniform()) -- nunca hace falta mezclar dos anchos distintos en la resta de un
+     *     mismo corner.
      *   - los lados VISIBLES NO son idénticos entre sí (ancho/color/estilo heterogéneo, esto es
      *     heterogeneidad REAL declarada por el usuario, no una supresión de slice): la geometría
      *     anular de un solo color no representa un borde con lados distintos -- aproximación
@@ -222,7 +227,7 @@ final readonly class Painter
             $this->paintBordersFlat($rect, $borders, $opacity, $canvas);
             return;
         }
-        $uniform = $this->bordersUniform($borders);
+        $uniform = $this->bordersUniform($borders, $radius);
         if ($uniform === null) {
             $this->warnings?->addWarningOnce(
                 'mixed-border-widths-with-radius',
@@ -273,12 +278,31 @@ final readonly class Painter
      * BorderSide::Solid siempre -- perdiendo el path anular Y emitiendo el warning de "mixed" de
      * forma FALSA (el borde declarado era uniforme; solo el slicing suprimió un lado).
      *
-     * Devuelve `null` (heterogeneidad REAL, declarada por el usuario) solo cuando dos lados
-     * visibles difieren entre sí; si TODOS los lados fueran None, paintBorders() nunca llega
-     * aquí (ya cortó antes vía `!$borders->isVisible()`), así que $styled siempre trae al menos
-     * un elemento cuando este método se invoca desde el pipeline real.
+     * Devuelve `null` (heterogeneidad REAL, declarada por el usuario) cuando dos lados visibles
+     * difieren entre sí; si TODOS los lados fueran None, paintBorders() nunca llega aquí (ya
+     * cortó antes vía `!$borders->isVisible()`), así que $styled siempre trae al menos un
+     * elemento cuando este método se invoca desde el pipeline real.
+     *
+     * M8-T2 fix (Reviewer, Important): además, devuelve `null` cuando CUALQUIER esquina con
+     * radio > 0 tiene un lado adyacente con estilo None -- guarda que el relajo de arriba
+     * necesitaba y no tenía. Ese relajo asumía "toda esquina con radio>0 tiene ambos lados
+     * adyacentes visibles", pero esa invariante SOLO la garantiza InlineFlowContext::
+     * buildInlineBoxFragment() por construcción para sus slices (pone a 0 tl/bl en toda slice que
+     * no sea la primera y tr/br en toda slice que no sea la última -- exactamente las esquinas que
+     * tocan el lado lateral que ese mismo método acaba de suprimir a None, ver
+     * InlineFlowContext.php:793-799); NADA fuerza esa misma correspondencia para un BoxFragment
+     * "normal" armado por BlockFlowContext a partir de ComputedStyle -- un autor puede declarar
+     * perfectamente `border-bottom: 8px solid; border-radius: 15px` (un solo lado styled, radio en
+     * las 4 esquinas), que es heterogeneidad real (3 lados sin borde) aunque $styled solo tenga UN
+     * elemento y por tanto pase trivialmente el bucle de arriba. Sin esta guarda, ese caso pintaba
+     * un anillo completo de 4 esquinas curvas usando el ancho del único lado styled -- tinta
+     * fantasma en las esquinas superiores, donde el autor no declaró borde alguno, y sin el aviso
+     * de "mixed" que debería haber saltado. La esquina bottom-left/bottom-right de un radio
+     * declarado SOLO en las esquinas inferiores (border-bottom-{left,right}-radius) también cae
+     * aquí -- cada una toca left/right (None), así que el mismo defecto (medialuna en el lado
+     * lateral de esa esquina) se produciría igual; ver el test "edge case" en PainterTest.
      */
-    private function bordersUniform(BorderSet $borders): ?BorderSide
+    private function bordersUniform(BorderSet $borders, BorderRadius $radius): ?BorderSide
     {
         $styled = array_values(array_filter(
             [$borders->top, $borders->right, $borders->bottom, $borders->left],
@@ -290,6 +314,17 @@ final readonly class Painter
         $first = $styled[0];
         foreach ($styled as $side) {
             if ($side != $first) {
+                return null;
+            }
+        }
+        $corners = [
+            [$radius->tl, $borders->top, $borders->left],
+            [$radius->tr, $borders->top, $borders->right],
+            [$radius->br, $borders->bottom, $borders->right],
+            [$radius->bl, $borders->bottom, $borders->left],
+        ];
+        foreach ($corners as [$cornerRadius, $sideA, $sideB]) {
+            if ($cornerRadius > 0.0 && ($sideA->style === BorderStyle::None || $sideB->style === BorderStyle::None)) {
                 return null;
             }
         }
