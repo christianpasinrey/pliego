@@ -113,6 +113,18 @@ final class StylesheetParser
         // (one per animatable custom property, e.g. every `--tw-rotate-x`/`--tw-gradient-from`),
         // and they are all the same kind of gap, not 40 distinct ones worth reading individually.
         [$css, $propertyBodies] = $this->extractAtRuleBlocks($css, 'property');
+        // M10-T6 (css-conditional-5, out of scope, container queries): found while auditing the
+        // milestone's own "excluded WITH warning" list -- unlike @property/@media/color-mix()/
+        // :has() (all confirmed to warn honestly), an unextracted @container was silently
+        // swallowing its OWN body AND every rule that came AFTER it in the same stylesheet
+        // (sabberworm's at-rule dispatcher doesn't recurse into it -- the same mishandling class
+        // @layer had pre-M10-T3, see resolveLayers()'s own docblock -- but nobody had extracted
+        // @container the way @property/@page/@font-face already are): zero rules, zero warnings,
+        // real silent document-wide data loss, not just "container queries aren't supported".
+        // Extracted with the SAME brace-matcher + one-aggregated-warning shape as @property right
+        // above (no evaluation of the container query itself -- a real container's inline size
+        // isn't knowable at this static, paginated-print stage the way @media's page width is).
+        [$css, $containerBodies] = $this->extractAtRuleBlocks($css, 'container');
         [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
         $fontFaceRules = [];
         $fontFaceWarnings = [];
@@ -154,6 +166,11 @@ final class StylesheetParser
         if ($propertyBodies !== []) {
             $propertySkippedCount = count($propertyBodies);
             $warnings[] = "$propertySkippedCount @property rule blocks skipped (not supported)";
+        }
+        // M10-T6: same aggregated shape as @property's own warning immediately above.
+        if ($containerBodies !== []) {
+            $containerSkippedCount = count($containerBodies);
+            $warnings[] = "$containerSkippedCount @container rule blocks skipped (not supported)";
         }
         // M10-T3 (css-cascade-5 §4.4, reduced -- see resolveLayers()'s docblock): a real cross-
         // layer !important INVERTS layer order (an !important in an earlier-declared layer beats

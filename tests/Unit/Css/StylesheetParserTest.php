@@ -675,3 +675,39 @@ it('drops @property rules found inside a @layer block too (layer resolution runs
     expect($result->rules)->toHaveCount(1);
     expect($result->warnings)->toBe(['1 @property rule blocks skipped (not supported)']);
 });
+
+// --- M10-T6 (css-conditional-5, out of scope): @container -- parse-skip + ONE aggregated warning ---
+// Found while auditing the milestone's own "excluded WITH warning" list (RESTRICCIONES GLOBALES):
+// unlike @property/@media/color-mix()/:has(), an unextracted @container was silently swallowing its
+// OWN body AND every rule that came after it in the same stylesheet (sabberworm's at-rule dispatcher
+// doesn't recurse into it, same mishandling class @layer had pre-M10-T3, but nobody had extracted
+// @container the way @property/@page/@font-face already are) -- zero rules, zero warnings, not just
+// "container queries aren't supported" but real, silent document-wide data loss. Same
+// extractAtRuleBlocks() brace-matcher + aggregated-count warning shape as @property above closes it.
+
+it('drops a single @container rule with one warning, other rules parse normally', function () {
+    $css = '@container (min-width: 200px) { .card { color: red } } p { color: blue }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->warnings)->toBe(['1 @container rule blocks skipped (not supported)']);
+});
+
+it('does not silently drop rules AFTER a @container block (the bug this task found)', function () {
+    $css = '@container (min-width: 200px) { .card { color: red } } .after { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('green'));
+});
+
+it('aggregates multiple @container rules into a SINGLE warning with the total count', function () {
+    $css = '@container (min-width: 200px) { .a { color: red } } @container card (max-width: 400px) { .b { color: blue } } p { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['2 @container rule blocks skipped (not supported)']);
+});
+
+it('has no @container warning at all when the stylesheet declares none', function () {
+    $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});
