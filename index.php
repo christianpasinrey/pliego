@@ -78,7 +78,7 @@ $sampleHtml = <<<'HTML'
   <h1>Cammino francese da Sarria</h1>
   <p class="meta">Prenotazione n. 136961 — Cliente: Livia</p>
 
-  <div class="price">Prezzo a persona: 296,33 €</div>
+  <div class="price">Prezzo a persona: 296,33 € <span class="badge-pill">-10%</span></div>
   <a class="btn">Prenota ora</a>
 
   <div class="band">Cosa portare</div>
@@ -145,23 +145,53 @@ $sampleCss = <<<'CSS'
   --gap: 1rem;
 }
 body { font-size: 14px; color: #222222 }
-.header { background-color: var(--brand); color: white; padding: calc(var(--gap) * .75); font-size: 16px }
+/* M8: the header banner gains a native PDF gradient (a real /Shading object, not a bitmap) --
+ * still built entirely from :root var()s, same Bootstrap-friendly idiom as the rest of this sheet. */
+.header {
+  background: linear-gradient(to right, var(--brand), #2a5298);
+  color: white;
+  padding: calc(var(--gap) * .75);
+  font-size: 16px;
+}
 h1 { font-size: 24px; margin: 16px 0 4px 0 }
 .meta { color: #666666; margin: 0 0 12px 0 }
 .price { background-color: var(--accent); padding: 14px; font-size: 20px; margin: 0 0 14px 0 }
+/* M8: a real Bootstrap ".badge.rounded-pill" -- border-radius: 999px is auto-clamped by the
+ * engine's corner-overlap clamp (css-backgrounds-3 §5.5) down to exactly half this badge's own
+ * height, no special-case code needed to get the true pill shape. */
+.badge-pill {
+  display: inline;
+  border-radius: 999px;
+  background-color: #163a6b;
+  color: white;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: bold;
+}
 /* M7: display:inline-block finally paints its own bg+border+padding IN LINE (real inline boxes,
- * M7-T4) -- the exact Bootstrap ".btn" pattern that used to flatten to plain text before M7. */
+ * M7-T4) -- the exact Bootstrap ".btn" pattern that used to flatten to plain text before M7.
+ * M8: + border-radius and a soft box-shadow -- the last mile from "boxed" to "looks real". */
 .btn {
   display: inline-block;
   background-color: var(--brand);
   color: white;
   padding: calc(var(--gap) * .375) calc(var(--gap) * .75);
   border: 1px solid var(--brand);
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .35);
   margin: 0 0 14px 0;
 }
 .packing-list { margin: 0 0 14px 0 }
 .band { background-color: var(--accent); padding: 10px; font-size: 18px; margin: 0 0 10px 0 }
-.card { background-color: #f4f4f4; padding: 12px; margin: 0 0 10px 0 }
+/* M8: rounded corners + a soft shadow -- the real "Bootstrap .card" look, on top of M1-M7's plain
+ * bordered/padded box (both features compose with the existing flex photo-card below, unchanged). */
+.card {
+  background-color: #f4f4f4;
+  padding: 12px;
+  margin: 0 0 10px 0;
+  border-radius: 8px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .18);
+}
 .photo-card { display: flex; gap: 12px }
 .info { flex: 1 }
 .day { margin: 0 0 4px 0; font-size: 16px }
