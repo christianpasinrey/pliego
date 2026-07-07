@@ -90,10 +90,38 @@ final class FontCatalog
         return isset($this->registrations[$this->normalizeFamily($family)]);
     }
 
-    /** Fallback: exact -> (weight,normal) -> (400,style) -> (400,normal) -> same chain in family 'default'. */
+    /**
+     * Fallback: exact -> (weight,normal) -> (400,style) -> (400,normal) -> same chain in family 'default'.
+     *
+     * M9-T1 housekeeping (M8 final-review finding): before this task, a $family that was NEVER
+     * registered at all (not even under a different case -- normalizeFamily() already folds
+     * casing) silently fell through to the 'default' chain below, with no warning of any kind --
+     * FontCatalog has no WarningCollector reference (see the constructor: none), so there was no
+     * channel to warn THROUGH even if we wanted to. Investigated every caller before adjudicating
+     * throw-vs-warn: all three production call sites (BlockFlowContext::faceFor(),
+     * InlineFlowContext::faceFor(), IntrinsicSizer's own faceFor()) resolve $family through
+     * Layout\Text\FontFamilyResolver::resolve() first, which ONLY ever returns a name it already
+     * confirmed via hasFamily() (or the literal 'default') -- see that class's docblock. So a
+     * select() call reaching this method with an unregistered, non-'default' $family can only
+     * happen from a bug in a future caller that skips FontFamilyResolver, not from any real
+     * document -- an internal invariant violation, not a normal "unknown font-family" case (CSS's
+     * OWN unknown-name-skips-silently semantics are already handled one layer up, by
+     * FontFamilyResolver, which is exactly why it's safe for select() to stop being permissive
+     * here). Throwing surfaces that bug immediately instead of silently substituting the wrong
+     * font. The only test that relied on the old silent fallback (FontCatalogTest.php) was a
+     * direct unit test of this method's own permissiveness, not of any real caller path, and was
+     * updated alongside this change to assert the throw instead.
+     */
     public function select(string $family, int $weight, bool $italic): FontFace
     {
         $normalizedFamily = $this->normalizeFamily($family);
+        if ($normalizedFamily !== 'default' && !isset($this->registrations[$normalizedFamily])) {
+            throw new FontException(
+                "select() called for family '$family', which was never registered: internal invariant "
+                . "violation (callers must check hasFamily() first -- see Layout\\Text\\FontFamilyResolver, "
+                . 'the sole guard on the normal rendering path)',
+            );
+        }
         $match = $this->resolve($normalizedFamily, $weight, $italic)
             ?? ($normalizedFamily !== 'default' ? $this->resolve('default', $weight, $italic) : null);
 

@@ -1010,6 +1010,33 @@ it('offsets every blur>0 layer by (offsetX, offsetY) before expanding/insetting'
     ]);
 });
 
+it('M9-T1 housekeeping (M8 review gap): combines blur>0 WITH a non-zero border-radius -- each of the 4 layers gets its OWN radius = base radius + that layer\'s delta, never the sharp-rect fallback a zero base radius gets', function () {
+    // Same blur=6 (step=2, deltas -3,-1,+1,+3) as the blur-only test above, but the box now
+    // declares a uniform border-radius:10 -- unlike that test (base radius 0, where the two
+    // INSET layers clamp to 0 and paint via sharp fillRect()), every layer here stays clearly
+    // positive (10-3=7 at worst) so ALL FOUR layers go through fillRoundedRect(), each with its
+    // own radius = 10 + delta: 7, 9, 11, 13.
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(0.0, 0.0, 6.0, new Color(0, 0, 0));
+    $box = new BoxFragment(
+        new Rect(0, 0, 100, 50),
+        null,
+        [],
+        BorderSet::none(),
+        borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0),
+        boxShadow: $shadow,
+    );
+    $page = new Page(1, [$box]);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'roundedRect(3.00,3.00,94.00,44.00,r=7.00/7.00/7.00/7.00,#000000,a=0.25)',    // layer 0: delta=-3 -> radius 10-3=7
+        'roundedRect(1.00,1.00,98.00,48.00,r=9.00/9.00/9.00/9.00,#000000,a=0.25)',    // layer 1: delta=-1 -> radius 10-1=9
+        'roundedRect(-1.00,-1.00,102.00,52.00,r=11.00/11.00/11.00/11.00,#000000,a=0.25)', // layer 2: delta=+1 -> radius 10+1=11
+        'roundedRect(-3.00,-3.00,106.00,56.00,r=13.00/13.00/13.00/13.00,#000000,a=0.25)', // layer 3: delta=+3 -> radius 10+3=13
+    ]);
+});
+
 it('paints nothing for box-shadow when null (default), byte-identical to before this task', function () {
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());

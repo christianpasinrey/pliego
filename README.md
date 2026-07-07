@@ -726,6 +726,12 @@ gradient-filled, shadowed `.card` still lays out through the exact same
 - `text-align: justify` is reported as a warning rather than silently
   approximated.
 - Unsupported CSS is reported as non-fatal warnings, not rendering failures.
+- **Inline `style="..."` attributes are not supported**: only `<style>`
+  stylesheets (and the engine's own UA stylesheet) are parsed for CSS — an
+  element's own `style` attribute is ignored entirely, with a one-time
+  warning the first time one is seen anywhere in the document (not once per
+  element). Use a `<style>` block (or an external stylesheet passed to the
+  engine) instead.
 - A unitless `line-height` is resolved to px against the declaring element's
   own `font-size` and inherited by descendants as that already-resolved px
   value, not as the unitless multiplier — unlike real CSS, where each

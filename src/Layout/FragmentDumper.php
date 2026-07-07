@@ -115,7 +115,7 @@ final class FragmentDumper
         ];
     }
 
-    /** @return array<string, array{widthPx: float, color: string}|null> */
+    /** @return array<string, array{widthPx: float, color: string, style?: string}|null> */
     private function borders(BorderSet $borders): array
     {
         return [
@@ -126,16 +126,31 @@ final class FragmentDumper
         ];
     }
 
-    /** @return array{widthPx: float, color: string}|null */
+    /**
+     * M9-T1 housekeeping (M8 final-review finding): previously gated on `!== Solid` (any
+     * Dashed/Dotted side, both painted since M8-T4 -- see BorderStyle's docblock -- dumped as
+     * `null`, indistinguishable from a genuinely invisible side). The gate is now `=== None`
+     * (same criterion BorderSet::isVisible() already uses), and 'style' is added ADDITIVELY --
+     * only when the side's style ISN'T Solid -- so every existing golden (Solid-only sides, the
+     * only style this engine had until M8-T4) stays byte-identical: no golden in this repo
+     * exercises a dashed/dotted border yet (verified: none of the 10 committed
+     * tests/Unit/Layout/goldens/*.json fixtures declare one), so this change needed no golden
+     * regeneration.
+     * @return array{widthPx: float, color: string, style?: string}|null
+     */
     private function side(BorderSide $side): ?array
     {
-        if ($side->style !== BorderStyle::Solid || $side->widthPx <= 0.0) {
+        if ($side->style === BorderStyle::None || $side->widthPx <= 0.0) {
             return null;
         }
-        return [
+        $dump = [
             'widthPx' => round($side->widthPx, 2),
             'color' => $side->color === null ? '#000000' : $this->hex($side->color),
         ];
+        if ($side->style !== BorderStyle::Solid) {
+            $dump['style'] = strtolower($side->style->name);
+        }
+        return $dump;
     }
 
     /** @return array<string, mixed> */

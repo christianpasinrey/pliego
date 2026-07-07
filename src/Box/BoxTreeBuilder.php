@@ -39,6 +39,7 @@ final class BoxTreeBuilder
 
     private function buildBlock(\Dom\Element $element, StyleMap $styles): BlockBox
     {
+        $this->warnIfInlineStyleAttribute($element);
         $style = $styles->get($element);
         $children = $this->collectChildren($element, $styles, $style);
         if ($style->display === Display::Flex) {
@@ -109,6 +110,7 @@ final class BoxTreeBuilder
             if ($childStyle->display === Display::None) {
                 continue;
             }
+            $this->warnIfInlineStyleAttribute($node);
             $tag = strtolower($node->tagName);
             if ($tag === 'br') {
                 $pending[] = new LineBreakRun();
@@ -322,6 +324,7 @@ final class BoxTreeBuilder
             if ($childStyle->display === Display::None) {
                 continue;
             }
+            $this->warnIfInlineStyleAttribute($node);
             if ($childStyle->display === Display::TableRow) {
                 $rows[] = $this->buildTableRow($node, $styles, $isHeader);
                 continue;
@@ -403,6 +406,7 @@ final class BoxTreeBuilder
             if ($childStyle->display === Display::None) {
                 continue;
             }
+            $this->warnIfInlineStyleAttribute($node);
             if ($childStyle->display === Display::TableCell) {
                 $cells[] = $this->buildTableCell($node, $styles);
                 continue;
@@ -626,6 +630,7 @@ final class BoxTreeBuilder
             if ($childStyle->display === Display::None) {
                 continue;
             }
+            $this->warnIfInlineStyleAttribute($node);
             $tag = strtolower($node->tagName);
             if ($tag === 'br') {
                 $pending[] = new LineBreakRun();
@@ -661,6 +666,30 @@ final class BoxTreeBuilder
             if ($hasBox) {
                 $pending[] = new InlineBoxEnd();
             }
+        }
+    }
+
+    /**
+     * M9-T1 housekeeping (README scope note: "inline style="" attributes are not supported"):
+     * this engine only parses `<style>` stylesheets (and its own UA stylesheet, see
+     * Style\UserAgentStylesheet) -- StyleResolver/CssStyleSource never read an element's `style`
+     * attribute, so any inline style is silently dropped with NO warning until this task. Called
+     * from every dispatch point that inspects a real \Dom\Element (buildBlock() -- covers the
+     * body root plus any block/inline-block/table-child element -- and the collectChildren()/
+     * collectInline()/collectTableRows()/buildTableRow() loops, which cover everything buildBlock()
+     * doesn't: plain inline elements, <img>/<br>, and table structure elements td/th/tr/thead/
+     * tbody), so effectively every element the tree-builder visits is checked at least once.
+     * addWarningOnce (not addWarning): a document with a `style=""` attribute on every element
+     * would otherwise flood RenderReport with one identical message per element -- one mention
+     * per render is enough to alert the caller that the attribute is being ignored entirely.
+     */
+    private function warnIfInlineStyleAttribute(\Dom\Element $element): void
+    {
+        if ($element->getAttribute('style') !== null) {
+            $this->warnings->addWarningOnce(
+                'inline-style-attribute',
+                'inline style="" attributes are not supported; use a stylesheet',
+            );
         }
     }
 
