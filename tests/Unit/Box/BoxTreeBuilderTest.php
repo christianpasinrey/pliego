@@ -1003,3 +1003,61 @@ it('applies text-transform to each line of a white-space:pre run independently',
     assert($firstLine instanceof TextRun);
     expect($firstLine->text)->toBe('Hello World');
 });
+
+// --- M9-T1 housekeeping: inline style="" attributes are not supported, warn once -----------------
+// This engine only parses <style> stylesheets (StyleResolver/CssStyleSource never read an
+// element's own `style` attribute) -- an inline style is silently dropped with no warning until
+// this task. warnIfInlineStyleAttribute() is wired into every dispatch point that inspects a real
+// element, so a style="" attribute anywhere in the document (block, inline, image, table
+// structure) triggers the SAME one-time warning.
+
+it('warns once when a block element carries a style="" attribute', function () {
+    [, $warnings] = buildTreeCollectingWarnings('<body><div style="color: red">text</div></body>', __DIR__);
+    $relevant = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style')));
+    expect($relevant)->toBe(['inline style="" attributes are not supported; use a stylesheet']);
+});
+
+it('warns once when the <body> root itself carries a style="" attribute', function () {
+    [, $warnings] = buildTreeCollectingWarnings('<body style="margin: 0">text</body>', __DIR__);
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style'));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('warns once for a style="" attribute on a plain inline element (nested, via collectInline())', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <span>outer <strong style="color: blue">inner</strong></span> after</p></body>',
+        __DIR__,
+    );
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style'));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('warns once for a style="" attribute on an <img>', function () {
+    [, $warnings] = buildTreeCollectingWarnings('<body><img src="tiny.jpg" style="border: 0"></body>', IMAGE_FIXTURES_DIR);
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style'));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('warns once for a style="" attribute on a table structure element (<td>)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><table><tr><td style="text-align: center">cell</td></tr></table></body>',
+        __DIR__,
+    );
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style'));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('warns only ONCE total even with multiple style="" attributes across the document (addWarningOnce dedup)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><div style="color: red">a</div><p>text <span style="color: blue">b</span></p></body>',
+        __DIR__,
+    );
+    $relevant = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style')));
+    expect($relevant)->toHaveCount(1);
+});
+
+it('does not warn when no element in the document has a style="" attribute (no false positive)', function () {
+    [, $warnings] = buildTreeCollectingWarnings('<body><div class="foo">text <span>inline</span></div></body>', __DIR__);
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'inline style'));
+    expect($relevant)->toBeEmpty();
+});

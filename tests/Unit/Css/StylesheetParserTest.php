@@ -400,3 +400,97 @@ it('Finding D: a literal "/*" inside a url() is NOT treated as a comment start',
     expect($result->fontFaceRules)->toHaveCount(1);
     expect($result->fontFaceRules[0]->srcPath)->toBe('a/*b.ttf');
 });
+
+// --- M9-T2: @media (css-conditional-3 §3, minimal evaluation) -----------------------------------
+// Today, without this handling, sabberworm's Document::getAllDeclarationBlocks() recurses into
+// AtRuleBlockList (@media's own class) unconditionally -- an `@media (min-width: 768px) { ... }`
+// rule applied REGARDLESS of medium, silently wrong for a print-only engine. See StylesheetParser's
+// class docblock for the full design (resolveMediaBlocks()/mediaQueryApplies()).
+
+it('applies rules inside @media print, at the same author level (no wrapping artifact)', function () {
+    $result = new StylesheetParser()->parse('@media print { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->warnings)->toBe([]);
+});
+
+it('applies rules inside @media all', function () {
+    $result = new StylesheetParser()->parse('@media all { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('is case-insensitive and whitespace-tolerant on the media type keyword', function () {
+    $result = new StylesheetParser()->parse('@media   PRINT  { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('skips a @media (min-width: ...) block, with one aggregated warning', function () {
+    $result = new StylesheetParser()->parse('@media (min-width: 768px) { p { color: red } }');
+    expect($result->rules)->toBe([]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('skips a plain @media screen block, with one aggregated warning', function () {
+    $result = new StylesheetParser()->parse('@media screen { p { color: red } }');
+    expect($result->rules)->toBe([]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('skips @media (prefers-reduced-motion: reduce) (a feature query, not print/all)', function () {
+    $result = new StylesheetParser()->parse('@media (prefers-reduced-motion: reduce) { .x { color: red } }');
+    expect($result->rules)->toBe([]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('aggregates multiple skipped @media blocks into a SINGLE warning with the total count', function () {
+    $css = '@media (min-width: 768px) { a { color: red } } @media screen { b { color: blue } }
+        @media (max-width: 991.98px) { c { color: green } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toBe([]);
+    expect($result->warnings)->toBe(['3 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('preserves in-file author order across an applying @media block (rules before/inside/after keep ascending $order)', function () {
+    $css = 'p { color: red } @media print { p { color: blue } } p { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(3);
+    [$first, $second, $third] = $result->rules;
+    expect($first->order)->toBeLessThan($second->order);
+    expect($second->order)->toBeLessThan($third->order);
+    expect($first->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($second->declarations['color'])->toEqual(new Color(0, 0, 255));
+    expect($third->declarations['color'])->toEqual(new Color(0, 128, 0));
+});
+
+it('a nested @media inside an applying outer @media is evaluated independently (outer print, inner screen-only skipped)', function () {
+    $css = '@media print { p { color: red } @media (hover: hover) { p { color: blue } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('a nested @media inside a skipped outer @media is NOT independently counted -- the outer decision governs the whole subtree', function () {
+    $css = '@media screen { @media print { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toBe([]);
+    // Exactly ONE skipped block (the outer) -- the nested @media print never gets evaluated on its
+    // own, its whole subtree is dead under a medium that does not apply.
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('an @page nested inside an applying @media print is still recognized (media resolution runs before @page extraction)', function () {
+    $result = new StylesheetParser()->parse('@media print { @page { margin: 10px } }');
+    expect($result->pageRule?->margins)->toEqual([
+        'top' => Length::px(10.0), 'right' => Length::px(10.0),
+        'bottom' => Length::px(10.0), 'left' => Length::px(10.0),
+    ]);
+    expect($result->warnings)->toBe([]);
+});
+
+it('has no @media warning at all when the stylesheet has no @media blocks', function () {
+    $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});

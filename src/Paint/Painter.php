@@ -34,9 +34,6 @@ final readonly class Painter
      *  0.05em thickness. */
     private const float FALLBACK_UNDERLINE_POSITION_EM = -0.1;
     private const float FALLBACK_UNDERLINE_THICKNESS_EM = 0.05;
-    /** M8 final-review Finding F: upper bound on the number of drawImage() calls a single
-     *  background-repeat:repeat tiling grid may emit -- see paintBackgroundImage(). */
-    private const int MAX_BACKGROUND_TILES = 2000;
 
     /**
      * M8-T2: $warnings es opcional (mismo patrón que Layout\*FormattingContext) — sigue siendo
@@ -285,10 +282,11 @@ final readonly class Painter
      *
      * M8-T3 (css-images-3 §3.1 reducido): $gradient, si lo hay, se pinta DESPUÉS del color (ver
      * ComputedStyle::$backgroundGradient) — ambos pueden coexistir (el color, cuando lo hay, sirve
-     * de fondo visible detrás del gradiente; M8 no soporta alpha en stops, así que el gradiente en
-     * sí siempre es opaco y normalmente lo tapa por completo, pero pintar el color de todas formas
-     * es la interpretación correcta del spec y barata de mantener). Canvas::paintGradient() recibe
-     * el MISMO $radius (recorta a la curva del border-box, igual criterio que fillRoundedRect()).
+     * de fondo visible detrás del gradiente; desde M9-T3 un gradiente con stops translúcidos deja
+     * ver ese color de fondo A TRAVÉS del /SMask, así que pintar el color de todas formas es la
+     * interpretación correcta del spec y, además, deja de ser un caso puramente defensivo). Canvas::
+     * paintGradient() recibe el MISMO $radius (recorta a la curva del border-box, igual criterio
+     * que fillRoundedRect()).
      */
     /**
      * M8-T6: orden de pintado extendido a 3 capas -- background-color (ya existía), LUEGO
@@ -358,12 +356,15 @@ final readonly class Painter
      *     destino 200×100.
      *   - repeat=true: SIEMPRE tilea la imagen a su tamaño INTRÍNSECO (auto), sin importar lo que
      *     $backgroundSize resolviera (adjudicación M8: "tile the AUTO-sized image n×m" del brief --
-     *     repeat manda sobre size para las dimensiones del tile en este modelo reducido) -- grid
-     *     n=ceil(boxW/imgW) × m=ceil(boxH/imgH) tiles desde el origen de posición, cada uno
-     *     dibujado ENTERO (nunca recortado a un tamaño parcial) -- el clip se encarga de cortar los
-     *     tiles de borde que sobresalen. `background-position: center` combinado con repeat es una
-     *     combinación no soportada en este modelo reducido -- warning UNA vez, se sigue tileando
-     *     desde top-left (repeat permanece true, no se degrada a no-repeat).
+     *     repeat manda sobre size para las dimensiones del tile en este modelo reducido). M9-T3: la
+     *     rejilla YA NO se emite como N drawImage() -- Canvas::fillImagePattern() pinta un ÚNICO
+     *     patrón PDF (PatternType 1, ISO 32000-1 §8.7.3.1) que el propio lector tilea, anclado en
+     *     el origen de posición (misma esquina visual que el bucle antiguo, ver el docblock de
+     *     Pdf\PdfCanvas::fillImagePattern()) -- O(1) en tamaño/tiempo, el antiguo cap de 2000 tiles
+     *     (y su warning) desaparecen por completo, solo queda la salvaguarda de cordura de esa
+     *     misma clase (tile <1px no se pinta). `background-position: center` combinado con repeat
+     *     es una combinación no soportada en este modelo reducido -- warning UNA vez, se sigue
+     *     tileando desde top-left (repeat permanece true, no se degrada a no-repeat).
      */
     private function paintBackgroundImage(
         Rect $rect,
@@ -402,32 +403,10 @@ final readonly class Painter
                     'background-repeat with background-position:center is not supported (M8): tiling from top-left',
                 );
             }
-            $cols = (int) ceil($rect->width / $imgW);
-            $rows = (int) ceil($rect->height / $imgH);
-            // M8 final-review Finding F: a pathologically small tile against a large box (e.g. a
-            // 1x1px image tiled across a full page) can blow up n*m arbitrarily -- one drawImage()
-            // call (one PDF content-stream op) PER TILE, with no upper bound. Capped at a fixed
-            // ceiling, with a ONE-TIME warning (addWarningOnce -- a document with many such
-            // pathological boxes only needs to say this once); tiles are emitted in the same
-            // row-major, top-left-first order as before, simply stopping once the cap is reached
-            // (the missing tail of tiles near the bottom/right edge is the visible cost of the
-            // cap -- documented, not hidden).
-            $totalTiles = $cols * $rows;
-            $maxTiles = self::MAX_BACKGROUND_TILES;
-            if ($totalTiles > $maxTiles) {
-                $this->warnings?->addWarningOnce(
-                    'background-repeat-tile-cap',
-                    "background-repeat tiling capped at $maxTiles tiles",
-                );
-            }
-            $emitted = 0;
-            for ($row = 0; $row < $rows && $emitted < $maxTiles; $row++) {
-                for ($col = 0; $col < $cols && $emitted < $maxTiles; $col++) {
-                    $tile = new Rect($rect->x + $col * $imgW, $rect->y + $row * $imgH, $imgW, $imgH);
-                    $canvas->drawImage($tile, $resolved, $opacity);
-                    $emitted++;
-                }
-            }
+            // M9-T3 (ISO 32000-1 §8.7.3.1): a single PatternType 1 tiling pattern, anchored at the
+            // SAME top-left tile the old n×m drawImage() loop started from -- O(1), no tile-count
+            // cap needed anymore (see Pdf\PdfCanvas::fillImagePattern()'s own <1px sanity floor).
+            $canvas->fillImagePattern($rect, $resolved, $imgW, $imgH, $opacity);
             $canvas->restoreClip();
             return;
         }

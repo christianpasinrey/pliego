@@ -1281,12 +1281,12 @@ it('falls back to circle-at-center + a warning for a complex radial-gradient() f
     expect($parser->drainWarnings())->toHaveCount(1);
 });
 
-it('warns and renders opaque for a gradient color-stop with alpha (soft masks are a later milestone)', function () {
+it('keeps the alpha channel of a gradient color-stop, with NO warning (M9-T3: soft masks support it)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('background-image', 'linear-gradient(rgba(255, 0, 0, 0.5), blue)');
     $stops = gradientFrom($result)->stops;
-    expect($stops[0]->color)->toEqual(new Color(255, 0, 0));
-    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($stops[0]->color)->toEqual(new Color(255, 0, 0, 0.5));
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
 it('rejects a gradient with fewer than 2 color stops with a warning', function () {
@@ -1682,6 +1682,42 @@ it('parses text-transform none/uppercase/lowercase/capitalize and warns on an un
 
     $parser = new DeclarationParser();
     $result = $parser->parse('text-transform', 'full-width');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M9-T2: transition/animation are a SILENT no-op in print media (RESTRICCIONES GLOBALES) -----
+// A static paginated document has no dynamic state to transition between and no time axis to
+// animate over -- these declarations are a legitimate print no-op, same spirit as @keyframes
+// (already skipped for free -- KeyFrame doesn't extend CSSBlockList, see StylesheetParser's
+// docblock) -- so unlike every OTHER unsupported property, they must NOT warn at all.
+
+it('silently drops transition (shorthand) with no warning and no declaration recorded', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('transition', 'color .15s ease-in-out, background-color .15s ease-in-out');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toBe([]);
+});
+
+it('silently drops transition longhands and vendor-prefixed variants, with no warning', function () {
+    $parser = new DeclarationParser();
+    foreach (['transition-property', 'transition-duration', '-webkit-transition', '-moz-transition', '-o-transition'] as $property) {
+        expect($parser->parse($property, 'opacity'))->toBe([]);
+    }
+    expect($parser->drainWarnings())->toBe([]);
+});
+
+it('silently drops animation (shorthand) and longhands, with no warning', function () {
+    $parser = new DeclarationParser();
+    foreach (['animation', 'animation-name', 'animation-duration', '-webkit-animation'] as $property) {
+        expect($parser->parse($property, 'spin 1s linear infinite'))->toBe([]);
+    }
+    expect($parser->drainWarnings())->toBe([]);
+});
+
+it('does not silence an unrelated property that merely starts with "trans" (no false-positive match)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('transform', 'rotate(45deg)');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });

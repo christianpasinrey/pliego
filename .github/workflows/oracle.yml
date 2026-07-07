@@ -1,0 +1,48 @@
+name: Oracle
+# M9-T5: the "Chrome-as-oracle" visual regression pipeline (tools/oracle/) -- a SEPARATE workflow
+# from ci.yml on purpose. It needs node+Chromium+Ghostscript, none of which the ordinary PHP job
+# (ci.yml) depends on -- keeping them in one workflow would make every push wait on a Chromium
+# download just to run `pest`. There is no branch protection rule requiring this job, and it is
+# never wired into ci.yml's job graph (no `needs:`), so a slow or flaky oracle run never blocks a
+# merge; it is an independent signal, read from its own check run and the uploaded /out/ artifact
+# (screenshots + diff.png per fixture, uploaded on both pass and fail -- see the last step).
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, mbstring
+          coverage: none
+          # No ext-gd: PliegoOracle\PixelDiff reuses pliego's own pure-PHP PngImage decoder (see
+          # its docblock) -- the oracle never depends on GD, same hermetic-decoder guarantee the
+          # main `pest` job already relies on.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/oracle/package-lock.json
+      - name: Install Ghostscript
+        run: sudo apt-get update && sudo apt-get install -y ghostscript
+      - run: composer install --no-interaction --no-progress
+      - name: Install oracle npm dependencies
+        working-directory: tools/oracle
+        run: npm ci
+      - name: Install Chromium (Playwright)
+        working-directory: tools/oracle
+        run: npx playwright install chromium --with-deps
+      - name: Run the oracle
+        run: php tools/oracle/run.php
+      - name: Upload screenshots + diffs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-out
+          path: tools/oracle/out/
+          if-no-files-found: ignore

@@ -174,6 +174,22 @@ it('degrades radial-gradient(50% 50%, ...) (percentage-pair size) to circle-at-c
     expect($pdf)->toContain('/ShadingType 3');
 });
 
+// --- M9-T3 (ISO 32000-1 §11.6.5.2, luminosity soft masks): rgba() gradient stops, end to end ------
+
+it('paints a linear-gradient() with an rgba() stop as a /SMask /Luminosity soft mask, end to end, zero warnings (M9-T3)', function () {
+    $css = '.box { width: 100px; height: 50px; background-color: #0000ff;
+        background-image: linear-gradient(rgba(255, 0, 0, 0.5), rgba(255, 0, 0, 0.5)); }';
+    $html = '<body><div class="box">x</div></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    // M8-T3 used to emit "Gradient color-stop alpha not supported (...)" here -- M9-T3 supports it,
+    // zero warnings.
+    expect($report->warnings)->toBe([]);
+    expect($pdf)->toContain('/ColorSpace /DeviceRGB')->toContain('/ColorSpace /DeviceGray');
+    expect($pdf)->toContain('/Group << /S /Transparency /CS /DeviceGray >>');
+    expect($pdf)->toMatch('#/SMask << /Type /Mask /S /Luminosity /G \d+ 0 R >>#');
+});
+
 // --- Ghostscript smoke test: proves the shading dict is well-formed enough for a real PDF
 // consumer to rasterize without error (not just "our own byte assertions agree with themselves").
 
@@ -228,6 +244,76 @@ it('renders a gradient PDF that Ghostscript can rasterize without error (E2E ren
     expect($exitCode)->toBe(0);
     expect(file_exists($renderedPage))->toBeTrue();
     expect(filesize($renderedPage))->toBeGreaterThan(0);
+
+    @unlink($renderedPage);
+    @unlink($pdfPath);
+})->skip($gsBinary === null, 'Ghostscript not found on PATH in this environment.');
+
+// --- M9-T3 combined Ghostscript smoke test: a PatternType 1 tiling background AND a translucent
+// (rgba stop) gradient over a colored background, in the SAME document -- proves both new PDF
+// constructs (tiling pattern, luminosity soft mask) are well-formed enough for a real consumer to
+// rasterize, and (when the GD extension is available) that the translucency is actually VISIBLE in
+// the raster, not just present in the PDF bytes.
+
+it('renders a tiling-pattern background AND a translucent gradient over a colored background that Ghostscript can rasterize, translucency visible when GD is available (M9-T3)', function () use ($gsBinary) {
+    if ($gsBinary === null) {
+        return;
+    }
+    $gs = $gsBinary;
+
+    $css = 'body { margin: 0; }
+        .translucent { position: absolute; top: 0; left: 0; width: 100px; height: 60px; background-color: #0000ff;
+            background-image: linear-gradient(rgba(255, 0, 0, 0.5), rgba(255, 0, 0, 0.5)); }
+        .tiled { position: absolute; top: 100px; left: 0; width: 60px; height: 40px;
+            background-image: url(tiny.jpg); background-repeat: repeat; }';
+    $html = '<body><div class="translucent">x</div><div class="tiled">y</div></body>';
+    $pdfPath = sys_get_temp_dir() . '/pliego-gradient-alpha-tiling-e2e.pdf';
+    $report = Engine::make()
+        ->basePath(__DIR__ . '/../../resources/images')
+        ->stylesheet($css)
+        ->render($html)
+        ->save($pdfPath);
+    expect($report->warnings)->toBe([]);
+
+    // Fixed filename, no "%d" page-number placeholder -- same reasoning as the other Ghostscript
+    // smoke tests in this file (single-page document, cmd.exe percent-expansion gotcha on Windows).
+    $renderedPage = sys_get_temp_dir() . '/pliego-gradient-alpha-tiling-e2e-page.png';
+    $cmd = sprintf(
+        '%s -dNOPAUSE -dBATCH -dSAFER -sDEVICE=png16m -r72 -sOutputFile=%s %s 2>&1',
+        escapeshellarg($gs),
+        escapeshellarg($renderedPage),
+        escapeshellarg($pdfPath),
+    );
+    $output = [];
+    $exitCode = 0;
+    exec($cmd, $output, $exitCode);
+
+    expect($exitCode)->toBe(0);
+    expect(file_exists($renderedPage))->toBeTrue();
+    expect(filesize($renderedPage))->toBeGreaterThan(0);
+
+    // Translucency check: .translucent is pinned at the page's own top-left (0,0), 100x60 CSS px --
+    // at Ghostscript's -r72 raster (72dpi, exactly this engine's own px->pt scale of ×0.75, so 1
+    // output pixel = 1 pt = 1.333 CSS px), sampling well inside the box (CSS px 20,20 -> raster
+    // ~15,15) should land on the translucent-red-over-opaque-blue blend, NOT pure blue (0,0,255)
+    // nor pure red (255,0,0) -- proof the /SMask /Luminosity actually modulated opacity in a REAL
+    // PDF consumer's raster, not just our own byte assertions. Sampled only if GD is available in
+    // this environment (visual note otherwise -- the Ghostscript exit-code check above already
+    // proved the PDF itself is well-formed).
+    if (extension_loaded('gd')) {
+        $im = @imagecreatefrompng($renderedPage);
+        if ($im !== false) {
+            $sampleX = (int) round(20 * 0.75);
+            $sampleY = (int) round(20 * 0.75);
+            $colorIndex = imagecolorat($im, $sampleX, $sampleY);
+            if ($colorIndex !== false) {
+                $colors = imagecolorsforindex($im, $colorIndex);
+                expect($colors['red'])->toBeGreaterThan(30);
+                expect($colors['blue'])->toBeGreaterThan(30);
+            }
+            imagedestroy($im);
+        }
+    }
 
     @unlink($renderedPage);
     @unlink($pdfPath);

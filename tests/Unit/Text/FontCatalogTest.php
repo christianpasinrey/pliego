@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Pliego\Text\FontCatalog;
+use Pliego\Text\FontException;
 use Pliego\Text\FontFace;
 
 function fontCatalogFixturesDir(): string
@@ -36,15 +37,18 @@ it('falls back to closest face', function (): void {
     );
 });
 
-it('falls back to the default family', function (): void {
+// M9-T1 housekeeping (M8 final-review finding): select() used to silently fall back to 'default'
+// for a family that was NEVER registered at all -- no warning channel exists on FontCatalog to
+// report it through, and every real caller (BlockFlowContext/InlineFlowContext/IntrinsicSizer)
+// only ever reaches select() via FontFamilyResolver, which already guards with hasFamily() first
+// (see FontFamilyResolver's docblock). So an unregistered, non-'default' family reaching select()
+// is an internal invariant violation, not a legitimate "unknown font-family" path -- adjudicated
+// to throw instead of silently substituting the wrong font.
+it('throws FontException when asked for a family that was never registered at all (internal invariant violation)', function (): void {
     $catalog = FontCatalog::withDefaults();
 
-    $face = $catalog->select('unknown-family', 400, false);
-
-    expect($face->key)->toBe('default:400:normal');
-    expect($face->font->bytes())->toBe(
-        file_get_contents(fontCatalogFixturesDir() . '/DejaVuSans.ttf'),
-    );
+    expect(fn() => $catalog->select('unknown-family', 400, false))
+        ->toThrow(FontException::class, "select() called for family 'unknown-family', which was never registered");
 });
 
 it('loads each font file once', function (): void {

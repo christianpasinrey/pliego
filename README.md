@@ -4,10 +4,14 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M8); the
-> package is not installable via Composer from a registry at this point.
+> **Not published to Packagist yet.** M9 makes pliego genuinely usable for
+> real-world **reports, invoices and transactional emails with a Bootstrap
+> look** — `Engine::bootstrap()` renders real, unmodified upstream Bootstrap
+> 5.3.6 markup with an honestly-measured, Chrome-verified visual fidelity
+> (see [Oracle](#oracle-chrome-as-ground-truth) below). The package is still
+> not installable via Composer from a registry at this point.
 
-## Status: M8 — Visual polish (border-radius, gradients, shadows, spacing, background-image, @font-face)
+## Status: M9 — Real Bootstrap ingestion (vendored preset, tiling patterns, soft-mask gradient alpha, Chrome oracle)
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -61,11 +65,83 @@ operator), `background-image` (`cover`/`contain`/tiling, sharing the
 `<img>` decode/dedup pipeline), and `@font-face` (local TrueType, case-
 insensitive family lookup) — everything a Bootstrap-derived `.card`/`.btn`/
 `.badge`/`.display-*` document needs to look, not just lay out, like the
-real thing. It is still not a general-purpose renderer — `:hover`-style
-dynamic pseudo-classes (meaningless in paged media), `@media`,
-pseudo-elements (`::before`/`::after`), `position: sticky`, CSS columns,
-writing modes, `text-shadow`, `border-image`, and the rest of
-tables/flex-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
+real thing. M9 closes the loop opened by M6-M8's hand-picked "Bootstrap-
+flavored" CSS: it ingests the **real, unmodified, vendored upstream
+`bootstrap.min.css` (5.3.6)** end to end (895 warnings from parsing the
+232KB sheet alone, every one categorized and pinned as a golden — a
+complete, honest partition, not a sample), exposes it as
+`Engine::bootstrap()` (a preset that stacks author-order before your own
+`->stylesheet()` calls, see [Presets](#presets)), adds the two PDF primitives
+a real striped/gradiented Bootstrap page actually needs — `PatternType 1`
+tiling patterns (`/Pattern cs`/`/Pn scn` fills instead of per-tile `Do`
+calls) and `ExtGState` **soft-mask** groups (a parallel grayscale shading as
+`/SMask /Luminosity`, so a gradient color stop can finally carry real
+alpha) — and closes the milestone with a from-scratch **Chrome-as-oracle
+visual regression pipeline** (`tools/oracle/`: Playwright screenshots vs.
+pliego's own Ghostscript raster, compared in pure PHP) that measures, rather
+than asserts, how close the two renderers actually land — see
+[Oracle](#oracle-chrome-as-ground-truth) for the full fidelity table. It is
+still not a general-purpose renderer — `:hover`-style dynamic pseudo-classes
+(meaningless in paged media), `@media`, pseudo-elements (`::before`/
+`::after`), `position: sticky`, CSS columns, writing modes, `text-shadow`,
+`border-image`, and the rest of tables/flex-to-spec are the milestones ahead
+(see [Roadmap](#roadmap)).
+
+### Supported as of M9
+
+M9 doesn't widen the CSS/box-model surface the way M1-M7 did — it proves
+that surface against a **real, unmodified, third-party stylesheet** instead
+of the hand-picked "Bootstrap-flavored" CSS every earlier milestone's E2E
+used, and adds the couple of PDF primitives that stylesheet actually needs.
+
+- **`Engine::bootstrap()`** — a static-factory preset (alternative to
+  `Engine::make()`) that vendors real Bootstrap 5.3.6
+  (`resources/presets/bootstrap.min.css`, MIT) plus a small print addendum
+  (`@page { margin: 15mm }` — real Bootstrap ships no print margins at all).
+  Queued author-order **before** every `->stylesheet()` call, so your own
+  same-specificity overrides win by cascade order alone, no `!important`
+  needed. Full detail, including what it deliberately does **not** do (no
+  JS, no sheet rewriting), in [Presets](#presets).
+- **Honest capability audit**: parsing the vendored sheet alone produces 895
+  warnings, every one bucketed by a regex-per-category classifier and pinned
+  as a golden snapshot with a `'other'`-must-be-empty safety net (i.e. a
+  *complete* partition, not a sample) — `@media` blocks (skipped as a single
+  aggregate warning, not one per block), unknown/unsupported pseudo-classes,
+  unsupported properties/keywords/lengths/colors, invalid `calc()`
+  expressions (mostly Bootstrap's own `vw`-based responsive type scale — see
+  [Oracle](#oracle-chrome-as-ground-truth) for the visible consequence of
+  that one). Rendering an actual page pushes the count higher still (944 for
+  the M9-T2 component showcase, 1175 for the full page used as oracle
+  fixture 07) as more declarations get resolved against real elements
+  (unresolved `var()` chains, atomic flex fragments taller than a page,
+  …) — this is the *whole point*: pliego tells you exactly what it didn't
+  understand instead of silently dropping it.
+- **`PatternType 1` tiling patterns** (ISO 32000-1 §8.7.3.3, `/PaintType 1`):
+  `PdfWriter::registerTilingPattern()` registers a small tile as a pattern
+  cell once; `PdfCanvas` then fills a border box with `/Pattern cs`/`/Pn
+  scn` instead of stamping N individual `Do` XObject calls — the mechanism
+  real Bootstrap's own tiled/repeated backgrounds need, decoupled from how
+  many times the tile actually repeats across the box.
+- **`ExtGState` soft-mask groups for gradient alpha** (ISO 32000-1 §11.6.5.2,
+  `/SMask /Luminosity`): `PdfWriter::registerSoftMaskGroup()` builds a
+  grayscale Form XObject shading **in parallel** with a gradient's own color
+  shading — a gradient stop's alpha channel finally survives into the PDF
+  (an `rgba()` color-stop used to be forced fully opaque with a warning,
+  see M8; that warning is gone for stops the soft-mask path now handles).
+- **Chrome-as-oracle visual regression** (`tools/oracle/`, not part of the
+  Composer package — Playwright/Node live entirely under that directory
+  with their own `package.json`): screenshots real Chromium's rendering of
+  each fixture and compares it, pixel-by-pixel in pure PHP, against
+  pliego's own Ghostscript rasterization. Opt-in locally (`composer
+  oracle`), a separate, non-blocking CI job otherwise — see
+  [Oracle](#oracle-chrome-as-ground-truth) for the full fidelity table and
+  how to run it.
+- **Housekeeping**: a document with a `<style>` element anywhere (`<head>`
+  or `<body>`) now gets a one-time warning ("style tags are ignored; pass
+  CSS via stylesheet()") instead of silently rendering unstyled — this
+  engine's API is CSS and HTML as two separate strings
+  (`->stylesheet($css)->render($html)`); auto-extracting and applying inline
+  `<style>` content is a real feature, left for a future milestone.
 
 ### Supported as of M8
 
@@ -726,6 +802,12 @@ gradient-filled, shadowed `.card` still lays out through the exact same
 - `text-align: justify` is reported as a warning rather than silently
   approximated.
 - Unsupported CSS is reported as non-fatal warnings, not rendering failures.
+- **Inline `style="..."` attributes are not supported**: only `<style>`
+  stylesheets (and the engine's own UA stylesheet) are parsed for CSS — an
+  element's own `style` attribute is ignored entirely, with a one-time
+  warning the first time one is seen anywhere in the document (not once per
+  element). Use a `<style>` block (or an external stylesheet passed to the
+  engine) instead.
 - A unitless `line-height` is resolved to px against the declaring element's
   own `font-size` and inherited by descendants as that already-resolved px
   value, not as the unitless multiplier — unlike real CSS, where each
@@ -788,6 +870,128 @@ weights/styles of `default`, or other font families entirely) — only faces
 actually referenced by matched CSS get embedded. Instead of `->save($path)`,
 `RenderResult::toStream($resource)` writes to any open stream resource.
 
+## Presets
+
+`Engine::bootstrap()` is an alternative entry point to `Engine::make()` that
+ships with a vendored copy of real Bootstrap 5.3.6 (`bootstrap.min.css`, MIT —
+see `resources/presets/LICENSE-bootstrap.txt`), so a document can use
+`.btn`/`.card`/`.badge`/`.table`/etc. without pasting Bootstrap's CSS into
+your own stylesheet first:
+
+```php
+use Pliego\Engine;
+
+$html = <<<'HTML'
+<body>
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Invoice #1042</h5>
+      <p class="card-text">Rendered with the Bootstrap preset.</p>
+      <a href="#" class="btn btn-primary">Pay now</a>
+    </div>
+  </div>
+</body>
+HTML;
+
+$report = Engine::bootstrap()
+    ->stylesheet('.btn-primary { background-color: purple }') // your own override
+    ->render($html)
+    ->save('invoice.pdf');
+```
+
+What it does:
+
+- Queues the vendored sheet as the **first** author-origin stylesheet, before
+  every `->stylesheet()` call that follows — a same-specificity rule of yours
+  (`.btn-primary { background-color: purple }` above) wins purely by cascade
+  order, no `!important` or extra specificity needed. This holds regardless
+  of how many `->stylesheet()` calls you chain, or in what order they run.
+- Also queues a small **print addendum** (`resources/presets/bootstrap-print.css`)
+  right after it: real Bootstrap ships no `@page` rule at all (it's a
+  screen-first sheet), so this addendum sets `@page { margin: 15mm }` —
+  sane page margins out of the box instead of pliego's generic 48px default.
+  A `@page` rule in your own `->stylesheet()` call completely replaces it
+  (CSS's "last `@page` rule wins", not merged margin-by-margin).
+
+What it does **not** do:
+
+- It doesn't add Bootstrap's JS (no interactivity exists in a PDF) or any
+  `:hover`/`:focus`/responsive breakpoint behavior — this engine targets a
+  single paged medium, so screen-only `@media` rules are dropped and dynamic
+  pseudo-classes are permanently excluded (see the M9 warning audit).
+- It doesn't rewrite or subset the vendored sheet — the file is the real,
+  unmodified upstream release; unsupported constructs (`:nth-of-type`, inset
+  `box-shadow`, `transform`, …) simply warn and get skipped, same as any CSS
+  you'd write by hand. `Engine::make()` (no preset) is completely unaffected —
+  never calling `->bootstrap()` renders byte-for-byte as before this feature
+  existed.
+
+## Oracle: Chrome as ground truth
+
+Warnings tell you what pliego *didn't understand*; they say nothing about
+whether what it *did* paint actually **looks** right. `tools/oracle/`
+answers that second question by rendering the same HTML/CSS through two
+independent engines and measuring the disagreement in real pixels, instead
+of asserting anything by hand:
+
+1. **`render-chrome.mjs`** (Playwright) screenshots each fixture in headless
+   Chromium at the CSS-px A4 page size (794×1123, `deviceScaleFactor: 2`) —
+   real ground truth, the same engine your users' browsers use.
+2. **`render-pliego.php`** runs the identical HTML/CSS through
+   `Engine::make()`/`Engine::bootstrap()` and rasterizes the resulting PDF
+   with Ghostscript at 192dpi (the same effective density as Chrome's 2×
+   screenshot).
+3. **`compare.php`** (`PliegoOracle\PixelDiff`, pure PHP — it reuses
+   pliego's own PNG decoder, no GD/Imagick) computes the **% of pixels that
+   genuinely differ**: `max(|ΔR|,|ΔG|,|ΔB|) > 24`, with an antialiasing mask
+   that excludes any pixel sitting on a strong local edge in *either* image
+   (two engines legitimately disagreeing about which side of an edge a
+   half-covered pixel belongs to isn't a layout/paint bug). Every fixture
+   gets an `NN-diff.png` visualization regardless of pass/fail.
+
+Each fixture's max allowed diff% lives in `tools/oracle/thresholds.json`,
+calibrated against a **real measured run**, never a round number picked in
+advance — see that file's own `_comment` for the exact policy.
+
+**Run it locally** (needs Node + a Chromium download + Ghostscript on
+`PATH`; degrades to a no-op with a note if any are missing):
+
+```
+composer oracle
+```
+
+**In CI**: `.github/workflows/oracle.yml` is a **separate job** from the
+main `pest`/PHPStan/deptrac workflow — it installs Node/Playwright/
+Ghostscript (a real Chromium download, minutes not seconds) and is **never**
+wired as a dependency of the PHP job, so a slow or momentarily-flaky oracle
+run never blocks a merge. It uploads every screenshot + diff visualization
+as a build artifact on both pass and fail. `tests/EndToEnd/
+OracleFixturesSmokeTest.php` is the hermetic counterpart that *does* run in
+the ordinary `pest` job — no pixel comparison, just "does every fixture
+render through Engine without throwing, onto exactly one page".
+
+### Fidelity table (radical transparency)
+
+The real, measured numbers from the fixtures shipped today — not
+aspirational targets:
+
+| # | Fixture | Exercises | Diff % | Threshold | Root cause of the gap |
+|---|---|---|---:|---:|---|
+| 01 | Typography | Headings/paragraphs/lists, DejaVu Sans regular+bold+italic, numeric line-heights | 0.790% | 1.5% | Sub-pixel text metric rounding only; no structural gap |
+| 02 | Table striped | `border-collapse`, `:nth-child(odd)` striping, auto column widths | 3.270% | 4.0% | `border-collapse` unsupported (separated-borders model always used) + the auto column-width algorithm's own rounding |
+| 03 | Card, buttons, badges | `border-radius`, `box-shadow`, inline-block `.btn`/`.badge` | 1.529% | 2.5% | Approximated (non-Gaussian, 4-layer) `box-shadow` blur vs. Chrome's real blur convolution |
+| 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 1.471% | 2.0% | Minor cross-axis rounding in the flex subset |
+| 05 | Blockquote / monospace | `blockquote`, `pre`/`code`, `white-space: pre` | 0.144% | 1.0% | Near pixel-perfect — smallest, simplest fixture |
+| 06 | Gradients / shadows | Linear/radial `/Shading` gradients, `box-shadow` | 0.151% | 1.0% | Near pixel-perfect — native PDF shadings match Chrome's own gradient rendering closely |
+| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 4.704% | 5.5% | **The worst fixture, honestly.** Real Bootstrap's headings use a fluid, responsive type scale — `h1,.h1{font-size:calc(1.375rem + 1.5vw)}` (and h2-h6 likewise) with a fixed-size override inside a `@media (min-width: …)` block. `vw` has no meaning in a print engine (`calc()` with a viewport unit is rejected, warned, dropped) **and** the compensating `@media` override never applies either (all `@media` blocks are skipped for print) — so every heading falls back to the plain UA stylesheet's `h1{font-size:2em;font-weight:bold}`, visibly bigger/bolder than Bootstrap's intended size. That size difference at the top of the page then **compounds downward** (same cumulative-drift phenomenon documented on fixture 01, just much larger here) — nearly everything below the `<h1>` sits measurably lower in pliego's render than in Chrome's by the time you reach the footer. |
+
+Fixture 07 is deliberately kept to content that still fits **one** page
+(`OracleFixturesSmokeTest.php` hard-requires every oracle fixture to render
+to exactly one page, so `compare.php`'s "overlapping top-left region"
+normalization stays meaningful) — `tests/EndToEnd/BootstrapPageTest.php` is
+the *unbounded* companion E2E, a longer real page that's allowed (expected)
+to paginate.
+
 ## Playground
 
 `index.php` doubles as a runnable playground: a two-pane web UI (CodeMirror
@@ -808,7 +1012,15 @@ still built from the same `:root` vars), the price line carries a
 the corner-overlap clamp — no special-casing), and both `.btn` and every
 `.card` gained `border-radius` + a soft `box-shadow` — the full Bootstrap
 look (rounded, shadowed, gradient-lit) renders correctly on the very first
-click, no editing required.
+click, no editing required. As of M9, a **"Bootstrap preset" checkbox**
+next to the action buttons picks `Engine::bootstrap()` over `Engine::make()`
+for the next render (a POST field, `$useBootstrapPreset ? Engine::bootstrap()
+: Engine::make()` server-side) — and an **"Ejemplo Bootstrap"** button next
+to the original **"Ejemplo"** one swaps both editors for a second sample
+that has **no custom CSS at all** (`.btn`/`.card`/`.badge`/`.table`
+markup only) and auto-checks the preset box for you, so the very first
+click after loading it already shows the real Bootstrap look with zero
+authored styles.
 
 To run it locally:
 
@@ -841,8 +1053,9 @@ of flexbox/grid:
 | **M5** | **Tables subset**: `table`/`thead`/`tbody`/`tr`/`td`/`th`, auto + fixed column-width algorithms, `colspan`, separated borders (`border-spacing`), cell `vertical-align`, nested tables, row-atomic pagination | Third-party/email-style HTML is built from `<table>`s, not flexbox — a classic email layout (photo cell + text cell, bordered data table inside) renders without rewriting it first |
 | **M6** | **CSS core**: selector combinators + `:nth-child`/`:not` + specificity, `em`/`rem`/physical units, `:root` custom properties + `calc()`, full color syntax (`rgb()`/`hsl()`/148 named colors) + alpha via `ExtGState` | Real-world stylesheets (Bootstrap-flavored CSS especially) lean on `var()`/`calc()`, `rem`, and combinators/`:nth-child` for the exact "striped table" pattern used everywhere — none of that worked before M6 |
 | **M7** | **Layout**: real user-agent stylesheet (`h1`-`h6`, list/blockquote/`pre` margins, monospace), list markers (`disc`/`circle`/`square`/`decimal`), real inline boxes + `display: inline-block` (THE `.btn`/`.badge` fix), `min`/`max-width`/`height` + `overflow: hidden` clipping, floats with line shortening, `position: relative`/`absolute` | A Bootstrap-derived `.btn`/`.badge`/`.card` finally paints in-line instead of flattening to plain text — the last big gap between this engine's box model and a real browser's |
-| **M8** (this release) | **Visual polish**: `border-radius` (Bézier + annular ring + rounded clipping), native PDF gradients (`linear-gradient()`/`radial-gradient()` as real `/Shading` objects), approximated `box-shadow` (4-layer, non-Gaussian) + `dashed`/`dotted` borders, `letter-spacing`/`word-spacing`/`text-transform`, `background-image` (`cover`/`contain`/tiling), `@font-face` (local TTF, case-insensitive) | The last mile between "the boxes are in the right place" (M1-M7) and "it actually looks like a real Bootstrap-derived document" — a rounded, shadowed, gradient-filled `.card`/`.btn`/pill `.badge` is the exact look the target document's author would reach for |
-| **M9+** | Pseudo-elements (`::before`/`::after`) → `@media` → `position: sticky` → CSS columns → flex to spec (`order`, `align-self`, `stretch`) → grid → `text-shadow`/`border-image` | Generated content and responsive/print media queries round out the CSS core; flex/grid get completed to spec in their own milestones; the remaining visual properties M8 explicitly excluded |
+| **M8** | **Visual polish**: `border-radius` (Bézier + annular ring + rounded clipping), native PDF gradients (`linear-gradient()`/`radial-gradient()` as real `/Shading` objects), approximated `box-shadow` (4-layer, non-Gaussian) + `dashed`/`dotted` borders, `letter-spacing`/`word-spacing`/`text-transform`, `background-image` (`cover`/`contain`/tiling), `@font-face` (local TTF, case-insensitive) | The last mile between "the boxes are in the right place" (M1-M7) and "it actually looks like a real Bootstrap-derived document" — a rounded, shadowed, gradient-filled `.card`/`.btn`/pill `.badge` is the exact look the target document's author would reach for |
+| **M9** (this release) | **Real Bootstrap**: `Engine::bootstrap()` preset ingesting the real, unmodified, vendored `bootstrap.min.css` (5.3.6), `PatternType 1` tiling patterns + `ExtGState` soft-mask gradient alpha (the two PDF primitives that sheet needed), and a from-scratch **Chrome-as-oracle** visual regression pipeline (`tools/oracle/`) that measures fidelity in real pixels instead of asserting it | Proves the M1-M8 CSS/box-model subset against a real third-party stylesheet rather than a hand-picked one, and replaces "trust me, it looks right" with a measured, honestly-published fidelity table |
+| **M10+** | Pseudo-elements (`::before`/`::after`) → `@media` (conditional inclusion, not just skip) → `position: sticky` → CSS columns → flex to spec (`order`, `align-self`, `stretch`) → grid → `text-shadow`/`border-image` | Generated content and responsive/print media queries round out the CSS core; flex/grid get completed to spec in their own milestones; the remaining visual properties M8 explicitly excluded |
 
 ## License
 

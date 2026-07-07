@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* M9-T5: DejaVu Sans loaded as a real @font-face in BOTH engines (Chrome here via this
+     stylesheet, pliego via the same rule parsed by StylesheetParser) so both renderers pick the
+     exact same glyph outlines/metrics -- the whole reason a text-heavy fixture like this one can
+     realistically target <1% diff instead of the wide tolerance Arial-vs-DejaVu would need. */
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans.ttf); font-weight: 400; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Bold.ttf); font-weight: 700; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Oblique.ttf); font-weight: 400; font-style: italic; }
+  @page { margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 794px;
+    font-family: 'DejaVu Sans', sans-serif;
+    color: #1a1a1a;
+    padding: 40px;
+    box-sizing: border-box;
+  }
+  /* line-height is set NUMERICALLY (unitless multiplier) on every text rule below, including
+     headings -- deliberately never left at the 'normal' initial value. 'normal' resolves from
+     the ACTIVE FONT's own hhea metrics in Chrome, but to a fixed 1.2 constant in pliego
+     (Layout\TextMeasurer::NORMAL_LINE_HEIGHT, CSS 2.2 SS10.8's own "recommended 1.0-1.2" range --
+     a legitimate UA-defined choice, not a bug) -- the two don't quite agree for DejaVu Sans, and
+     since block position is CUMULATIVE down the page, even a ~1px per-heading disagreement
+     compounds into a visible drift by the bottom of a text-heavy fixture like this one (found
+     during M9-T5 calibration, see task-5-report.md). A numeric line-height is unambiguous CSS
+     (multiplier * font-size, no font-metric-dependent resolution either engine could disagree
+     on), so it -- not a wider threshold -- is the correct fix for a "same font, expect near-zero
+     diff" fixture.
+  */
+  h1 { font-size: 28px; font-weight: 700; line-height: 1.2; margin: 0 0 12px 0; }
+  h2 { font-size: 22px; font-weight: 700; line-height: 1.2; margin: 20px 0 10px 0; color: #333333; }
+  h3 { font-size: 17px; font-weight: 700; line-height: 1.2; margin: 16px 0 8px 0; font-style: italic; }
+  p { font-size: 13px; line-height: 1.5; margin: 0 0 10px 0; }
+  ul, ol { margin: 0 0 14px 0; padding-left: 24px; }
+  li { font-size: 13px; line-height: 1.5; margin: 0 0 4px 0; }
+  .lead { font-size: 15px; line-height: 1.5; color: #555555; }
+</style>
+</head>
+<body>
+  <h1>Oracle Fixture 01 &mdash; Typography</h1>
+  <p class="lead">Headings, paragraphs and lists, set in DejaVu Sans at regular, bold and italic weights.</p>
+  <h2>Section One</h2>
+  <p>The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. This paragraph exists to exercise line wrapping, word spacing and baseline alignment across a handful of lines of body copy.</p>
+  <p>A second paragraph, shorter, to check the vertical margin collapsing between consecutive block-level paragraphs stays consistent between the two renderers.</p>
+  <h3>An Italic Subheading</h3>
+  <ul>
+    <li>First unordered item, plain text.</li>
+    <li>Second item with <strong>bold emphasis</strong> inline.</li>
+    <li>Third item with <em>italic emphasis</em> inline.</li>
+  </ul>
+  <h2>Section Two</h2>
+  <ol>
+    <li>First ordered item.</li>
+    <li>Second ordered item, slightly longer so it wraps onto a second line inside the list to check hanging indent behavior for ordered markers.</li>
+    <li>Third ordered item.</li>
+  </ol>
+</body>
+</html>

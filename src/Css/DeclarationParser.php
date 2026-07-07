@@ -187,11 +187,33 @@ final class DeclarationParser
     /** @var list<string> */
     private array $warnings = [];
 
+    /**
+     * M9-T2 (RESTRICCIONES GLOBALES): `transition`/`animation` (shorthand y cualquier longhand,
+     * vendor-prefijado o no -- `-webkit-transition`, `transition-property`, `animation-name`, ...)
+     * son SILENCIO ADJUDICADO, no warning: un motor de paginación estático no tiene estados
+     * dinámicos que transicionar/animar (no hay hover real, no hay tiempo que transcurra en un PDF),
+     * así que estas declaraciones son un no-op LEGÍTIMO en media print -- exactamente igual de
+     * legítimo que el `@keyframes` que las acompaña (que sabberworm ya ignora sin más: `KeyFrame`
+     * extiende `CSSList` directamente, no `CSSBlockList`, así que `Document::
+     * getAllDeclarationBlocks()` nunca desciende a su cuerpo -- ver el docblock de clase de
+     * StylesheetParser para el contraste con @media, que SÍ hereda de CSSBlockList y por eso
+     * necesitó su propio manejo). Antes de esta tarea cada una caía al fallback genérico
+     * "Unsupported property: $property" (bootstrap.min.css real dispara ~24 de estos: transition,
+     * -webkit-transition, -moz-transition, transition-property, animation) -- puro ruido para una
+     * propiedad que nunca podría tener efecto observable aquí ni aunque se soportara. Regex
+     * case-insensitive porque `$property` YA llega en minúsculas (ver abajo) pero la constante del
+     * patrón se declara una vez, no en cada llamada.
+     */
+    private const string TRANSITION_ANIMATION_PATTERN = '/^(-webkit-|-moz-|-o-|-ms-)?(transition|animation)(-.+)?$/';
+
     /** @return array<string, mixed> */
     public function parse(string $property, string $value): array
     {
         $property = strtolower(trim($property));
         $value = trim($value);
+        if (preg_match(self::TRANSITION_ANIMATION_PATTERN, $property) === 1) {
+            return [];
+        }
         // M7-T5 (CSS 2.2 §10.4): 'auto' es el initial value real de min-width/min-height ("sin
         // mínimo"), 'none' el de max-width/max-height ("sin máximo") -- ambos colapsan al MISMO
         // null que "propiedad no declarada en absoluto" en ComputedStyle::compute() (ver
@@ -1282,15 +1304,11 @@ final class DeclarationParser
                 }
                 $position = max(0.0, min(100.0, (float) $m[1]));
             }
-            // M8-T3 (RESTRICCIONES GLOBALES M8, shadings con alpha -> M9): un stop con alpha
-            // declarado (rgba()/hsla() con canal alpha<1) no puede representarse en un
-            // /FunctionType 2/3 de PDF (RGB puro, sin canal alfa) sin un soft mask -- se avisa y
-            // se pinta OPACO (mismo color RGB, alpha descartado) en vez de fallar el gradiente
-            // entero.
-            if ($color->alpha !== null && $color->alpha < 1.0) {
-                $this->warnings[] = "Gradient color-stop alpha not supported (rendered opaque; soft masks are a later milestone): $stopArg";
-                $color = new Color($color->r, $color->g, $color->b);
-            }
+            // M9-T3 (ISO 32000-1 §11.6.5.2, luminosity soft masks): un stop con alpha declarado
+            // (rgba()/hsla() con canal alpha<1) ya NO se fuerza a opaco -- Pdf\PdfCanvas::
+            // paintGradient() detecta el alpha y pinta un /SMask /Luminosity (shading gris paralelo,
+            // ver su docblock) en vez de descartarlo con un warning (comportamiento M8-T3, ya
+            // retirado). $color conserva su alpha tal cual lo dejó Color::fromCss().
             $rawStops[] = [$color, $position];
         }
         return self::distributeStopPositions($rawStops);

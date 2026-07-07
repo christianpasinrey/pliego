@@ -79,6 +79,33 @@ final class PdfWriter
     /** @var array<string, string> misma firma => nombre de recurso ("Sh1", "Sh2", ...), en orden de creación */
     private array $shadingNames = [];
     private int $nextShadingIndex = 1;
+    /**
+     * M9-T3 (ISO 32000-1 §8.7.3.1, PatternType 1 tiling patterns): dedup POR FIRMA -- igual
+     * criterio que $shadingIds, ver registerTilingPattern(). La firma la calcula Pdf\PdfCanvas
+     * (imageXObjectId + tamaño de tile + punto de anclaje, TODOS en pt) — dos llamadas con la
+     * MISMA firma comparten un único objeto /Pattern (mismo /Matrix, así que es seguro compartir).
+     *
+     * @var array<string, int> firma => object id
+     */
+    private array $patternIds = [];
+    /** @var array<string, string> misma firma => nombre de recurso ("P1", "P2", ...), en orden de creación */
+    private array $patternNames = [];
+    private int $nextPatternIndex = 1;
+    /**
+     * M9-T3 (ISO 32000-1 §11.6.5.2, luminosity soft masks): ExtGState { /SMask << /S /Luminosity
+     * /G <form XObject> >> } para un gradiente con stops translúcidos -- ver
+     * registerSoftMaskGroup(). Dedup por firma (misma firma que el par de shadings color/gris que
+     * la originan, ver Pdf\PdfCanvas::paintGradient()). Comparte el MISMO contador de nombres
+     * "GSn" que $extGStateIds (constant-alpha) -- ambos son ExtGState y conviven en el mismo
+     * /Resources /ExtGState de la página (ver extGStatePageResources()), así que sus nombres nunca
+     * pueden colisionar.
+     *
+     * @var array<string, int> firma => object id del ExtGState (NO del Form XObject -- ese no
+     *      necesita nombre de recurso propio, solo se referencia por object id desde /SMask /G)
+     */
+    private array $softMaskGsIds = [];
+    /** @var array<string, string> misma firma => nombre de recurso ("GS1", "GS2", ...) */
+    private array $softMaskGsNames = [];
 
     /** @param resource $stream */
     public function __construct(private readonly mixed $stream) {}
@@ -108,8 +135,10 @@ final class PdfWriter
      *        (M6-T5 alpha — see registerExtGState()/extGStatePageResources())
      * @param array<string, int> $shadingRefs resource name (e.g. "Sh1") => Shading object id
      *        (M8-T3 gradients — see registerShading()/shadingPageResources())
+     * @param array<string, int> $patternRefs resource name (e.g. "P1") => Pattern object id
+     *        (M9-T3 tiling backgrounds — see registerTilingPattern()/patternPageResources())
      */
-    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs, array $xobjectRefs = [], array $extGStateRefs = [], array $shadingRefs = []): void
+    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs, array $xobjectRefs = [], array $extGStateRefs = [], array $shadingRefs = [], array $patternRefs = []): void
     {
         $contentId = $this->allocateObjectId();
         $length = strlen($contentStream);
@@ -131,6 +160,10 @@ final class PdfWriter
         $shadings = $this->refDict($shadingRefs);
         if ($shadings !== null) {
             $resourceParts[] = "/Shading << $shadings>>";
+        }
+        $patterns = $this->refDict($patternRefs);
+        if ($patterns !== null) {
+            $resourceParts[] = "/Pattern << $patterns>>";
         }
         $resources = $resourceParts === [] ? '<< >>' : '<< ' . implode(' ', $resourceParts) . ' >>';
 
@@ -243,12 +276,19 @@ final class PdfWriter
      * @return array<string, int> resourceName ("GS1", ...) => objectId de TODOS los ExtGState
      *         registrados hasta el momento — mismo patrón "acumula globalmente, sobre-incluye en
      *         cada página" que FontRegistry::pageResources()/ImageRegistry::pageResources().
+     *
+     * M9-T3: += los ExtGState /SMask de registerSoftMaskGroup() -- comparten el mismo contador de
+     * nombres "GSn" que los de constant-alpha (ver el docblock de $softMaskGsIds), así que un
+     * simple merge de ambos mapas no puede colisionar.
      */
     public function extGStatePageResources(): array
     {
         $resources = [];
         foreach ($this->extGStateNames as $milliAlpha => $name) {
             $resources[$name] = $this->extGStateIds[$milliAlpha];
+        }
+        foreach ($this->softMaskGsNames as $signature => $name) {
+            $resources[$name] = $this->softMaskGsIds[$signature];
         }
         return $resources;
     }
@@ -312,6 +352,107 @@ final class PdfWriter
             $resources[$name] = $this->shadingIds[$signature];
         }
         return $resources;
+    }
+
+    /**
+     * M9-T3 (ISO 32000-1 §8.7.3.1, "Tiling Patterns", PatternType 1): registra (dedup por firma —
+     * mismo criterio que registerShading(), ver el docblock de $patternIds) un patrón PaintType 1
+     * (color, no sin color) que repite la imagen $imageXObjectId en una rejilla de tile
+     * $tileWPt×$tileHPt, ANCLADA en ($originXPt, $originYPt) — el punto de la página en espacio
+     * PDF por defecto (ISO 32000-1: /Matrix de un patrón mapea SIEMPRE al espacio por defecto del
+     * content stream que lo usa, IGNORANDO cualquier `cm` previo al `scn` que lo pinte -- por eso
+     * el anclaje debe viajar en el propio /Matrix del patrón, no puede depender de nada dinámico en
+     * tiempo de pintado) donde Pdf\PdfCanvas ya calculó que debe empezar la esquina superior
+     * izquierda del border-box (incluido el flip de Y, ver su docblock de paintTiledImage... /
+     * fillImagePattern()).
+     *
+     * El patrón declara sus PROPIOS /Resources (un único /XObject /Im1 -> $imageXObjectId) —
+     * autocontenido, igual criterio que defer() (Form XObjects de margin-box) declarando su propio
+     * /Font: independiente de cómo se llame ese mismo XObject en el /Resources de la página.
+     */
+    public function registerTilingPattern(string $signature, int $imageXObjectId, float $tileWPt, float $tileHPt, float $originXPt, float $originYPt): int
+    {
+        if (isset($this->patternIds[$signature])) {
+            return $this->patternIds[$signature];
+        }
+        $objectId = $this->allocateObjectId();
+        $name = 'P' . $this->nextPatternIndex++;
+        $this->patternIds[$signature] = $objectId;
+        $this->patternNames[$signature] = $name;
+
+        $bbox = sprintf('[0 0 %.2F %.2F]', $tileWPt, $tileHPt);
+        $matrix = sprintf('[1 0 0 1 %.2F %.2F]', $originXPt, $originYPt);
+        $ops = sprintf("%.2F 0 0 %.2F 0 0 cm /Im1 Do", $tileWPt, $tileHPt);
+        $length = strlen($ops);
+        $this->writeObject(
+            $objectId,
+            "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox $bbox "
+                . sprintf('/XStep %.2F /YStep %.2F', $tileWPt, $tileHPt)
+                . " /Resources << /XObject << /Im1 $imageXObjectId 0 R >> >> /Matrix $matrix /Length $length >>\nstream\n$ops\nendstream",
+        );
+        return $objectId;
+    }
+
+    /** Nombre de recurso ("P1", "P2", ...) del patrón para $signature, registrándolo (dedup) si hace falta. */
+    public function tilingPatternResourceName(string $signature, int $imageXObjectId, float $tileWPt, float $tileHPt, float $originXPt, float $originYPt): string
+    {
+        $this->registerTilingPattern($signature, $imageXObjectId, $tileWPt, $tileHPt, $originXPt, $originYPt);
+        return $this->patternNames[$signature];
+    }
+
+    /**
+     * @return array<string, int> resourceName ("P1", ...) => objectId de TODOS los patrones
+     *         registrados hasta el momento -- mismo patrón "acumula globalmente, sobre-incluye en
+     *         cada página" que shadingPageResources().
+     */
+    public function patternPageResources(): array
+    {
+        $resources = [];
+        foreach ($this->patternNames as $signature => $name) {
+            $resources[$name] = $this->patternIds[$signature];
+        }
+        return $resources;
+    }
+
+    /**
+     * M9-T3 (ISO 32000-1 §11.6.5.2, "Luminosity Masks"): escribe el Form XObject de grupo de
+     * transparencia $formOps (DeviceGray, /Resources ya resuelto por el caller -- el único recurso
+     * que necesita es la /Shading gris que pinta la máscara, referenciada dentro de $formOps con el
+     * nombre local fijo "ShMask") y el ExtGState que lo envuelve como /SMask /Luminosity. Dedup por
+     * firma (ver el docblock de $softMaskGsIds) -- $formOps/$bboxPt/$grayShadingObjectId son
+     * deterministas a partir de (rect, Gradient), así que dos elementos con la MISMA firma producen
+     * bytes idénticos y pueden compartir un único par (Form, ExtGState).
+     *
+     * Devuelve el object id del ExtGState (lo que un `gs` necesita referenciar) — el Form XObject
+     * en sí nunca tiene nombre de recurso propio en la página, solo se apunta desde /SMask /G.
+     */
+    public function registerSoftMaskGroup(string $signature, string $bboxPt, string $formOps, int $grayShadingObjectId): int
+    {
+        if (isset($this->softMaskGsIds[$signature])) {
+            return $this->softMaskGsIds[$signature];
+        }
+        $formObjectId = $this->allocateObjectId();
+        $resources = "<< /Shading << /ShMask $grayShadingObjectId 0 R >> >>";
+        $length = strlen($formOps);
+        $this->writeObject(
+            $formObjectId,
+            "<< /Type /XObject /Subtype /Form /BBox $bboxPt /Group << /S /Transparency /CS /DeviceGray >> "
+                . "/Resources $resources /Length $length >>\nstream\n$formOps\nendstream",
+        );
+
+        $gsObjectId = $this->allocateObjectId();
+        $name = 'GS' . $this->nextExtGStateIndex++;
+        $this->softMaskGsIds[$signature] = $gsObjectId;
+        $this->softMaskGsNames[$signature] = $name;
+        $this->writeObject($gsObjectId, "<< /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G $formObjectId 0 R >> >>");
+        return $gsObjectId;
+    }
+
+    /** Nombre de recurso ("GS1", "GS2", ...) del ExtGState /SMask para $signature, registrándolo (dedup) si hace falta. */
+    public function softMaskGroupResourceName(string $signature, string $bboxPt, string $formOps, int $grayShadingObjectId): string
+    {
+        $this->registerSoftMaskGroup($signature, $bboxPt, $formOps, $grayShadingObjectId);
+        return $this->softMaskGsNames[$signature];
     }
 
     public function finish(): void

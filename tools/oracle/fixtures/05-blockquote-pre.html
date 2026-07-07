@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans.ttf); font-weight: 400; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Bold.ttf); font-weight: 700; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans Mono'; src: url(../../../resources/fonts/DejaVuSansMono.ttf); font-weight: 400; font-style: normal; }
+  @page { margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body { width: 794px; font-family: 'DejaVu Sans', sans-serif; padding: 40px; box-sizing: border-box; color: #1a1a1a; }
+  h1 { font-size: 24px; font-weight: 700; line-height: 1.2; margin: 0 0 16px 0; }
+  blockquote {
+    margin: 0 0 20px 0;
+    padding: 10px 18px;
+    border-left: 4px solid #999999;
+    background-color: #f7f7f7;
+    font-size: 14px;
+    line-height: 1.4;
+    font-style: italic;
+    color: #444444;
+  }
+  blockquote p { margin: 0 0 6px 0; }
+  blockquote footer { font-size: 12px; line-height: 1.4; font-style: normal; color: #777777; }
+  ul { margin: 0 0 20px 0; padding-left: 22px; font-size: 13px; }
+  li { line-height: 1.4; margin: 0 0 4px 0; }
+  pre {
+    background-color: #2d2d2d;
+    color: #f0f0f0;
+    font-family: 'DejaVu Sans Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 14px 16px;
+    margin: 0;
+    border-radius: 6px;
+  }
+  code { font-family: 'DejaVu Sans Mono', monospace; }
+</style>
+</head>
+<body>
+  <h1>Oracle Fixture 05 &mdash; Blockquote and Monospace</h1>
+  <blockquote>
+    <p>&ldquo;Premature optimization is the root of all evil.&rdquo;</p>
+    <footer>&mdash; Donald Knuth</footer>
+  </blockquote>
+  <ul>
+    <li>Regular list item before the code block.</li>
+    <li>Second item, with an inline <code>code()</code> span.</li>
+  </ul>
+  <pre>function greet(name) {
+    console.log("Hello, " + name + "!");
+}
+
+greet("pliego");</pre>
+</body>
+</html>

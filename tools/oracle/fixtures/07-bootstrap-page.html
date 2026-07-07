@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- M9-T6: the real vendored Bootstrap 5.3.6 sheet, pulled in via <link> (not inlined into a
+     <style> block like fixtures 01-06's own hand-written CSS) -- 232KB inline would work too, but
+     a <link> is what a real consumer's own document would actually do, and Playwright's file://
+     navigation resolves this relative href exactly like a real page load (see render-chrome.mjs's
+     own docblock). Same relative-path convention as every other fixture's @font-face src below
+     (../../../resources/... from tools/oracle/fixtures/). -->
+<link rel="stylesheet" href="../../../resources/presets/bootstrap.min.css">
+<style>
+  /* DejaVu Sans loaded as a real @font-face in BOTH engines (Chrome here, pliego via the same
+     rule parsed by StylesheetParser), AFTER the <link> so it and the :root override below still
+     apply on top of Bootstrap's own font declarations (author order: <link> first, this <style>
+     block after -- see FixtureHtml::extractCss()'s own docblock on why order matters here). */
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans.ttf); font-weight: 400; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Bold.ttf); font-weight: 700; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Oblique.ttf); font-weight: 400; font-style: italic; }
+  /* Real Bootstrap's --bs-body-font-family/--bs-font-sans-serif default to a system-ui stack --
+     overridden to DejaVu Sans (same var() override mechanism a real consumer would use to swap
+     Bootstrap's default font) so both renderers pick the exact same glyph outlines/metrics. */
+  :root { --bs-body-font-family: 'DejaVu Sans', sans-serif; --bs-font-sans-serif: 'DejaVu Sans', sans-serif; }
+  @page { margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body { width: 794px; }
+  /* M9 final-review Finding 3: was a `style="font-size: 14px; color: #555;"` attribute on the
+     intro paragraph below -- pliego ignores element `style="..."` attributes BY DESIGN (see
+     BoxTreeBuilder's own docblock: only the two-string CSS/HTML API feeds the cascade, never
+     inline attributes), while Chrome applies them as the highest-specificity author rule. That
+     mismatch polluted every oracle diff (Chrome's paragraph at 14px/#555, pliego's at Bootstrap's
+     UA/class default) AND printed a real "inline style attribute ignored" warning on every run.
+     Moved here as a class so BOTH renderers see and apply the exact same declaration.
+  */
+  .report-intro { font-size: 14px; color: #555; }
+</style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">Pliego Reports</a>
+      <span class="navbar-text">Quarterly Summary</span>
+    </div>
+  </nav>
+  <div class="container py-3">
+    <h1 class="h3 mb-2">Quarterly Account Summary</h1>
+    <p class="mb-3 report-intro">A compact, real Bootstrap 5.3 page: navbar, card grid, buttons, badges, alerts, a striped table and a closing blockquote -- the oracle's 7th fixture.</p>
+
+    <div class="row row-cols-3 g-2 mb-3">
+      <div class="col">
+        <div class="card h-100">
+          <div class="card-body p-2">
+            <h6 class="card-title">Revenue</h6>
+            <p class="card-text small mb-0">Total recognized this quarter.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card h-100">
+          <div class="card-body p-2">
+            <h6 class="card-title">Churn</h6>
+            <p class="card-text small mb-0">Lapsed accounts this quarter.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card h-100">
+          <div class="card-body p-2">
+            <h6 class="card-title">Growth</h6>
+            <p class="card-text small mb-0">Net new plus expansion revenue.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mb-2">
+      <button type="button" class="btn btn-primary btn-sm">Primary</button>
+      <button type="button" class="btn btn-secondary btn-sm">Secondary</button>
+      <button type="button" class="btn btn-outline-primary btn-sm">Outline</button>
+    </div>
+
+    <p class="mb-2">
+      <span class="badge bg-primary">New</span>
+      <span class="badge bg-success rounded-pill">Active</span>
+      <span class="badge bg-danger">Overdue</span>
+    </p>
+
+    <div class="alert alert-primary py-2 mb-2" role="alert">Informational note about this report.</div>
+    <div class="alert alert-danger py-2 mb-3" role="alert">One account needs manual follow-up.</div>
+
+    <table class="table table-striped table-sm mb-3">
+      <thead>
+        <tr><th>#</th><th>Account</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Acme Corp</td><td>Active</td></tr>
+        <tr><td>2</td><td>Globex Inc</td><td>Active</td></tr>
+        <tr><td>3</td><td>Initech</td><td>Overdue</td></tr>
+        <tr><td>4</td><td>Umbrella LLC</td><td>Active</td></tr>
+      </tbody>
+    </table>
+
+    <blockquote class="blockquote mb-0">
+      <p class="small mb-1">Automated billing reports cut our monthly close time from days to under an hour.</p>
+      <footer class="blockquote-footer small">Finance Lead, <cite title="Source Title">Acme Corp</cite></footer>
+    </blockquote>
+  </div>
+</body>
+</html>

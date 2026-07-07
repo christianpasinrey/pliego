@@ -115,6 +115,22 @@ final class RecordingCanvas implements Canvas
         $this->calls[] = sprintf('image(%.2F,%.2F,%.2F,%.2F,%s,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height, $imageKey, $opacity);
     }
 
+    /** M9-T3: single-call replacement for the old drawImage()-per-tile loop -- see Canvas::fillImagePattern(). */
+    public function fillImagePattern(Rect $rect, string $imageKey, float $tileWidthPx, float $tileHeightPx, float $opacity): void
+    {
+        $this->calls[] = sprintf(
+            'pattern(%.2F,%.2F,%.2F,%.2F,tile=%.2Fx%.2F,%s,%.2F)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $tileWidthPx,
+            $tileHeightPx,
+            $imageKey,
+            $opacity,
+        );
+    }
+
     public function clipRect(Rect $rect): void
     {
         $this->calls[] = sprintf('clip(%.2F,%.2F,%.2F,%.2F)', $rect->x, $rect->y, $rect->width, $rect->height);
@@ -1010,6 +1026,33 @@ it('offsets every blur>0 layer by (offsetX, offsetY) before expanding/insetting'
     ]);
 });
 
+it('M9-T1 housekeeping (M8 review gap): combines blur>0 WITH a non-zero border-radius -- each of the 4 layers gets its OWN radius = base radius + that layer\'s delta, never the sharp-rect fallback a zero base radius gets', function () {
+    // Same blur=6 (step=2, deltas -3,-1,+1,+3) as the blur-only test above, but the box now
+    // declares a uniform border-radius:10 -- unlike that test (base radius 0, where the two
+    // INSET layers clamp to 0 and paint via sharp fillRect()), every layer here stays clearly
+    // positive (10-3=7 at worst) so ALL FOUR layers go through fillRoundedRect(), each with its
+    // own radius = 10 + delta: 7, 9, 11, 13.
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(0.0, 0.0, 6.0, new Color(0, 0, 0));
+    $box = new BoxFragment(
+        new Rect(0, 0, 100, 50),
+        null,
+        [],
+        BorderSet::none(),
+        borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0),
+        boxShadow: $shadow,
+    );
+    $page = new Page(1, [$box]);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'roundedRect(3.00,3.00,94.00,44.00,r=7.00/7.00/7.00/7.00,#000000,a=0.25)',    // layer 0: delta=-3 -> radius 10-3=7
+        'roundedRect(1.00,1.00,98.00,48.00,r=9.00/9.00/9.00/9.00,#000000,a=0.25)',    // layer 1: delta=-1 -> radius 10-1=9
+        'roundedRect(-1.00,-1.00,102.00,52.00,r=11.00/11.00/11.00/11.00,#000000,a=0.25)', // layer 2: delta=+1 -> radius 10+1=11
+        'roundedRect(-3.00,-3.00,106.00,56.00,r=13.00/13.00/13.00/13.00,#000000,a=0.25)', // layer 3: delta=+3 -> radius 10+3=13
+    ]);
+});
+
 it('paints nothing for box-shadow when null (default), byte-identical to before this task', function () {
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
@@ -1292,7 +1335,7 @@ it('contain centers when background-position:center is declared', function () {
     }
 })->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
 
-it('tiles a 100x40 image into a 250x100 box as a 3x3=9 drawImage() grid, hand-verified (repeat always uses the AUTO/intrinsic size)', function () {
+it('tiles a 100x40 image into a 250x100 box as a SINGLE fillImagePattern() call at the intrinsic tile size (M9-T3: pattern, not a drawImage() grid)', function () {
     $path = painterBgImageFixture(100, 40);
     try {
         $canvas = new RecordingCanvas();
@@ -1311,27 +1354,26 @@ it('tiles a 100x40 image into a 250x100 box as a 3x3=9 drawImage() grid, hand-ve
         $page = new Page(1, [$box]);
         testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
-        // n=ceil(250/100)=3, m=ceil(100/40)=3 -> 9 tiles, row-major, each 100x40, from (0,0).
-        $expected = ['clip(0.00,0.00,250.00,100.00)'];
-        for ($row = 0; $row < 3; $row++) {
-            for ($col = 0; $col < 3; $col++) {
-                $expected[] = sprintf('image(%.2F,%.2F,100.00,40.00,%s,1.00)', $col * 100.0, $row * 40.0, $path);
-            }
-        }
-        $expected[] = 'restoreClip()';
-        expect($canvas->calls)->toBe($expected);
-        expect($canvas->calls)->toHaveCount(11); // clip + 9 tiles + restoreClip
+        // M9-T3: ONE fillImagePattern() call covering the whole 250x100 box at the image's
+        // intrinsic 100x40 tile size -- Canvas/PdfCanvas is what actually tiles it (PatternType 1),
+        // not this Painter/Canvas boundary (see Canvas::fillImagePattern()'s docblock).
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,250.00,100.00)',
+            sprintf('pattern(0.00,0.00,250.00,100.00,tile=100.00x40.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
     } finally {
         unlink($path);
     }
 })->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
 
-// --- M8 final-review Finding F: tiling cap ------------------------------------------------------
-// A pathologically small tile image against a large box can blow up the tile grid arbitrarily
-// (n*m drawImage() calls, one PDF content-stream op each) -- capped at 2000 tiles with a one-time
-// warning, same addWarningOnce discipline as the rest of this class.
+// --- M9-T3: the old M8 final-review Finding F tile-count cap is GONE -----------------------------
+// A pathologically small tile image against a large box used to blow up the tile grid arbitrarily
+// (n*m drawImage() calls) -- capped at 2000 with a warning. Now it's a SINGLE fillImagePattern()
+// call regardless of how many tiles visually fit (PatternType 1 is O(1) in PDF size/paint time), so
+// there is nothing left to cap and no warning to emit.
 
-it('caps background-repeat tiling at 2000 tiles and warns once, for a pathologically small tile', function () {
+it('emits a SINGLE fillImagePattern() call (no cap, no warning) even for a pathologically small 1x1px tile', function () {
     $path = painterBgImageFixture(1, 1);
     try {
         $canvas = new RecordingCanvas();
@@ -1347,34 +1389,13 @@ it('caps background-repeat tiling at 2000 tiles and warns once, for a pathologic
         $page = new Page(1, [$box]);
         testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
-        // n=ceil(200/1)=200, m=ceil(200/1)=200 -> 40000 tiles uncapped; capped at 2000.
-        expect(substr_count(implode('', $canvas->calls), 'image('))->toBe(2000);
-        expect($canvas->calls)->toHaveCount(2002); // clip + 2000 tiles + restoreClip
-        expect($warnings->drain())->toBe([
-            'background-repeat tiling capped at 2000 tiles',
+        // Would have been n=ceil(200/1)=200, m=ceil(200/1)=200 -> 40000 tiles under the old loop
+        // (capped at 2000 with a warning) -- now a single pattern call, no warning at all.
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,200.00,200.00)',
+            sprintf('pattern(0.00,0.00,200.00,200.00,tile=1.00x1.00,%s,1.00)', $path),
+            'restoreClip()',
         ]);
-    } finally {
-        unlink($path);
-    }
-});
-
-it('does not warn or cap normal tiling well under the 2000-tile limit', function () {
-    $path = painterBgImageFixture(100, 40);
-    try {
-        $canvas = new RecordingCanvas();
-        $warnings = new WarningCollector();
-        $box = new BoxFragment(
-            new Rect(0, 0, 250, 100),
-            null,
-            [],
-            BorderSet::none(),
-            backgroundImagePath: $path,
-            backgroundRepeat: true,
-        );
-        $page = new Page(1, [$box]);
-        testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
-
-        expect(substr_count(implode('', $canvas->calls), 'image('))->toBe(9);
         expect($warnings->drain())->toBe([]);
     } finally {
         unlink($path);
@@ -1398,10 +1419,12 @@ it('warns once and keeps tiling from top-left when background-repeat:repeat is c
         $page = new Page(1, [$box]);
         testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
-        // Still tiles (2x2=4 tiles) from top-left, repeat NOT downgraded to non-repeat.
-        expect($canvas->calls)->toHaveCount(6); // clip + 4 tiles + restoreClip
-        expect($canvas->calls[0])->toBe('clip(0.00,0.00,100.00,100.00)');
-        expect($canvas->calls[1])->toBe(sprintf('image(0.00,0.00,50.00,50.00,%s,1.00)', $path));
+        // Still tiles from top-left (a single pattern call), repeat NOT downgraded to non-repeat.
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,100.00,100.00)',
+            sprintf('pattern(0.00,0.00,100.00,100.00,tile=50.00x50.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
         expect($warnings->drain())->toBe([
             'background-repeat with background-position:center is not supported (M8): tiling from top-left',
         ]);

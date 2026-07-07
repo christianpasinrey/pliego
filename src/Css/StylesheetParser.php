@@ -20,6 +20,38 @@ use Sabberworm\CSS\Parser as SabberwormParser;
  * nivel superior con su propio cuerpo de declaraciones, sin selectores, que sabberworm no tiene
  * por qué tratar mejor que @page) vía extractAtRuleBlocks(), generalizado a partir de
  * extractAtPageBlocks() para que ambos at-rules compartan el brace-matching en vez de duplicarlo.
+ *
+ * M9-T2 (@media, css-conditional-3): probado a mano contra sabberworm/php-css-parser 8.9 —
+ * Document::getAllDeclarationBlocks() RECURSA dentro de un AtRuleBlockList (la clase que sabberworm
+ * usa para @media, ver CSSBlockList::allDeclarationBlocks()) SIN mirar nunca el nombre del at-rule
+ * ni sus argumentos: hoy, un `@media (min-width: 768px) { .x { color: red } }` aplica SIEMPRE, como
+ * si no existiera el @media -- exactamente el mismo "sabberworm mangla anidados" que @page (ver
+ * arriba) pero peor: aquí ni siquiera hay pérdida de información, hay APLICACIÓN INCORRECTA de
+ * reglas condicionadas a un medium (bootstrap.min.css real está lleno de breakpoints
+ * min-width/max-width y de `@media (prefers-reduced-motion: reduce)` que nunca deberían alcanzar un
+ * documento impreso). Se resuelve con el MISMO patrón de extractor propio + brace-matching que
+ * @page/@font-face, pero @media NO puede compartir extractAtRuleBlocks() sin más: esos dos
+ * descartan el bloque entero tras extraerlo (su contenido se interpreta aparte, nunca vuelve al
+ * css principal); @media en cambio necesita DECIDIR si su contenido vuelve a quedar en el css que
+ * sabberworm procesará (medium aplica) o se descarta (no aplica) -- ver resolveMediaBlocks().
+ *
+ * Adjudicado (RESTRICCIONES GLOBALES M9-T2): evaluación de media query MÍNIMA, sin listas de
+ * features reales -- 'print' y 'all' (case-insensitive, ignorando espacios) APLICAN sus reglas al
+ * mismo nivel de autor que el resto de la hoja (orden de documento preservado, ver más abajo);
+ * cualquier otra cosa (`screen`, cualquier feature-query entre paréntesis como
+ * `(min-width: 768px)`, `(prefers-reduced-motion: reduce)`, `hover`, etc.) se DESCARTA en
+ * silencio, sin logging individual -- solo UN warning agregado al final de parse() con el total de
+ * bloques descartados (bootstrap real dispara ~108 de estos; un warning por bloque sería ruido
+ * puro, no información accionable). @media anidado hereda la decisión del @media exterior: si el
+ * exterior no aplica, su cuerpo entero se descarta sin mirar dentro (ni siquiera para contar
+ * anidados por separado -- "1 bloque descartado", no "1 + los que tuviera dentro"); si el exterior
+ * SÍ aplica, cualquier @media anidado en su cuerpo se evalúa de forma independiente y recursiva
+ * (puede perfectamente ser `@media print { @media (hover: hover) { ... } }`, descartándose solo el
+ * anidado). "Aplican al mismo nivel de autor, orden preservado" se logra literalmente: el cuerpo de
+ * un bloque que aplica se PEGA de vuelta en el css, en el mismo sitio donde estaba el `@media
+ * print { ... }` -- así StylesheetParser::parse() ve un css COMPLETAMENTE PLANO (sin @media
+ * supervivientes) en el mismo orden textual del fichero original, y el $order++ de siempre (ver
+ * parse()) cae exactamente donde caería sin este paso.
  */
 final class StylesheetParser
 {
@@ -33,6 +65,10 @@ final class StylesheetParser
     public function parse(string $css): ParseResult
     {
         $css = $this->stripComments($css);
+        // M9-T2: @media resuelto ANTES de @font-face/@page (ver docblock de clase) -- un bloque
+        // `@media print { @font-face { ... } }` (raro, pero legal) debe quedar aplanado a un
+        // `@font-face` de nivel superior para que extractAtRuleBlocks() lo vea a continuación.
+        [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css);
         [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
         $fontFaceRules = [];
         $fontFaceWarnings = [];
@@ -61,6 +97,14 @@ final class StylesheetParser
         $selectorParser = new SelectorParser($selectorWarnings);
         $rules = [];
         $warnings = [...$fontFaceWarnings, ...$pageWarnings];
+        // M9-T2: UN único warning agregado (nunca uno por bloque, ver docblock de clase) -- el
+        // conteo ya está cerrado en $mediaSkippedCount desde el paso de resolución, arriba. Texto
+        // fijo (brief M9-T2, RESTRICCIONES GLOBALES): "N @media rule blocks skipped
+        // (screen/interactive-only media)" -- "blocks" siempre en plural, incluso para N=1, para
+        // que el mensaje sea grep-eable con un patrón estable independientemente del conteo.
+        if ($mediaSkippedCount > 0) {
+            $warnings[] = "$mediaSkippedCount @media rule blocks skipped (screen/interactive-only media)";
+        }
         $order = 0;
         foreach ($document->getAllDeclarationBlocks() as $block) {
             // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2): un bloque puede mezclar
@@ -235,6 +279,83 @@ final class StylesheetParser
             $offset = $matchStart;
         }
         return [$css, $bodies];
+    }
+
+    /**
+     * M9-T2 (css-conditional-3, ver docblock de clase): recorre el css buscando `@media ... { ... }`
+     * de nivel superior (brace-matching manual, MISMO findMatchingBrace() que @page/@font-face), y
+     * para cada uno decide con mediaQueryApplies() si su cuerpo se PEGA de vuelta en el css (medio
+     * print/all) o se descarta entero (cualquier otra cosa). No comparte extractAtRuleBlocks(): ese
+     * método SIEMPRE saca el bloque del css principal (@page/@font-face se interpretan aparte); este
+     * necesita, en el caso "aplica", REINSERTAR el cuerpo tal cual en el mismo sitio -- css
+     * completamente plano en el orden textual original, para que StylesheetParser::parse() (más
+     * abajo, después de este paso) asigne $order exactamente como si el @media nunca hubiera
+     * existido.
+     *
+     * Un bloque que APLICA se resuelve RECURSIVAMENTE antes de reinsertarse (un `@media print` puede
+     * a su vez envolver un `@media (hover: hover)` que sí debe evaluarse por su cuenta) -- el
+     * resultado ya no contiene ningún `@media` sin resolver, así que reanudar el escaneo en
+     * $matchStart (mismo patrón de offset que extractAtRuleBlocks()) nunca vuelve a encontrar un
+     * @media ya resuelto ahí dentro, solo avanza hacia el resto del documento.
+     *
+     * Un bloque que NO aplica se descarta ENTERO (sustituido por un espacio, igual que
+     * extractAtRuleBlocks()) SIN recursar dentro de su cuerpo -- "el @media exterior decide por el
+     * anidado" (RESTRICCIONES GLOBALES M9-T2): un `@media screen { @media print { p{color:red} } }`
+     * cuenta como UN solo bloque descartado, no dos, y el `p{color:red}` de dentro nunca se evalúa
+     * ni se parsea (sería observable si tuviera una regla inválida que debiera generar warning
+     * propio -- deliberadamente no lo hace, todo el subárbol es letra muerta bajo un medio que no
+     * aplica).
+     *
+     * @return array{0: string, 1: int} [cssConMediaResuelto, bloquesDescartadosTotal]
+     */
+    private function resolveMediaBlocks(string $css): array
+    {
+        $skipped = 0;
+        $offset = 0;
+        while (preg_match('/@media\b([^{]*)\{/i', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
+            $matchStart = (int) $m[0][1];
+            $query = trim((string) $m[1][0]);
+            $openBrace = $matchStart + strlen((string) $m[0][0]) - 1;
+            $closeBrace = $this->findMatchingBrace($css, $openBrace);
+            if ($closeBrace === null) {
+                break;
+            }
+            $body = substr($css, $openBrace + 1, $closeBrace - $openBrace - 1);
+            if ($this->mediaQueryApplies($query)) {
+                [$resolvedBody, $nestedSkipped] = $this->resolveMediaBlocks($body);
+                $skipped += $nestedSkipped;
+                $css = substr($css, 0, $matchStart) . $resolvedBody . substr($css, $closeBrace + 1);
+            } else {
+                $skipped++;
+                $css = substr($css, 0, $matchStart) . ' ' . substr($css, $closeBrace + 1);
+            }
+            $offset = $matchStart;
+        }
+        return [$css, $skipped];
+    }
+
+    /**
+     * Evaluación MÍNIMA adjudicada (RESTRICCIONES GLOBALES M9-T2, ver docblock de clase): una media
+     * query list (css-mediaqueries-3, separada por comas -- cualquier query de la lista que aplique
+     * hace que toda la lista aplique, semántica OR) aplica si y solo si alguna de sus queries,
+     * normalizada (trim + minúsculas), es exactamente 'all' o 'print'. CUALQUIER feature-query entre
+     * paréntesis (min-width/max-width/hover/prefers-color-scheme/...), 'screen', o cualquier combinación de
+     * ambos (p.ej. "screen and (min-width: 768px)") no aplica -- no hay evaluación real de
+     * features (bootstrap.min.css real no las necesita para imprimirse correctamente: sus
+     * breakpoints responsive son, por definición, irrelevantes en un documento paginado de tamaño
+     * fijo). Explode(',', ...) es seguro aquí: ninguna media feature real usa una coma dentro de sus
+     * paréntesis (a diferencia de una lista de valores CSS normal), así que no hay riesgo de partir
+     * una query compuesta por la mitad.
+     */
+    private function mediaQueryApplies(string $query): bool
+    {
+        foreach (explode(',', $query) as $part) {
+            $normalized = strtolower(trim($part));
+            if ($normalized === 'all' || $normalized === 'print') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

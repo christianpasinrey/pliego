@@ -106,6 +106,58 @@ it('dumps a box fragment with visible borders (M2-T8), a hex color per solid sid
     ]);
 });
 
+// --- M9-T1 housekeeping (M8 final-review finding): dashed/dotted border sides -------------------
+// Before this task, side() gated on `!== Solid`, so a Dashed/Dotted side (painted since M8-T4,
+// see BorderStyle's docblock) dumped as `null` -- indistinguishable from a genuinely invisible
+// side. Additive fix: the gate is now `=== None` (same criterion BorderSet::isVisible() uses),
+// and a 'style' key is added ONLY when the style isn't Solid, so every Solid-side dump (the whole
+// pre-M8-T4 golden world) stays byte-identical -- verified by the untouched 'solid side' test above.
+
+it('dumps a dashed border side with an additive "style" key instead of null', function () {
+    $dashedTop = new BorderSide(2.0, BorderStyle::Dashed, new Color(0, 0, 0));
+    $borders = new BorderSet($dashedTop, BorderSet::none()->right, BorderSet::none()->bottom, BorderSet::none()->left);
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], $borders);
+
+    $dump = new FragmentDumper()->dump($box);
+
+    expect($dump['borders'])->toBe([
+        'top' => ['widthPx' => 2.0, 'color' => '#000000', 'style' => 'dashed'],
+        'right' => null,
+        'bottom' => null,
+        'left' => null,
+    ]);
+});
+
+it('dumps a dotted border side with an additive "style" key instead of null', function () {
+    $dottedLeft = new BorderSide(1.0, BorderStyle::Dotted, new Color(255, 0, 0));
+    $borders = new BorderSet(BorderSet::none()->top, BorderSet::none()->right, BorderSet::none()->bottom, $dottedLeft);
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], $borders);
+
+    $dump = new FragmentDumper()->dump($box);
+
+    expect($dump['borders'])->toBe([
+        'top' => null,
+        'right' => null,
+        'bottom' => null,
+        'left' => ['widthPx' => 1.0, 'color' => '#ff0000', 'style' => 'dotted'],
+    ]);
+});
+
+it('never dumps a "style" key for a solid side (golden stability: the pre-M8-T4 world stays untouched)', function () {
+    $solidTop = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($solidTop, BorderSet::none()->right, BorderSet::none()->bottom, BorderSet::none()->left);
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], $borders);
+
+    $dump = new FragmentDumper()->dump($box);
+
+    expect($dump['borders'])->toBe([
+        'top' => ['widthPx' => 2.0, 'color' => '#000000'],
+        'right' => null,
+        'bottom' => null,
+        'left' => null,
+    ]);
+});
+
 it('dumps a box fragment with clipsChildren true (M7-T5 overflow:hidden, M8-T1 housekeeping: newly visible in the dump)', function () {
     $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], BorderSet::none(), clipsChildren: true);
 

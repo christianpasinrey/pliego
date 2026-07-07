@@ -652,10 +652,13 @@ it('emits a ROUNDED clip (Bézier path + W n) instead of a plain rect when a bor
     expect($pdf)->not->toContain(' re W n');
 });
 
-it('renders an alpha color-stop OPAQUE in the Function (r/g/b only, no alpha channel anywhere)', function () {
-    // Simulates a Gradient constructed with a stop that still carries alpha (defensive: the real
-    // pipeline always strips it in DeclarationParser, see its test file, but PdfCanvas itself
-    // must never leak an alpha component into a PDF Function regardless of caller).
+// --- M9-T3 (ISO 32000-1 §11.6.5.2, luminosity soft masks): rgba() gradient stops -----------------
+// M8-T3 forced an alpha<1 stop to opaque with a warning ("soft masks are a later milestone") -- M9
+// delivers that milestone: a /SMask /Luminosity ExtGState, backed by a parallel GRAY shading whose
+// stops are the ORIGINAL stops' alpha values, activated right before the (still alpha-blind, RGB)
+// color shading's `sh`.
+
+it('renders an alpha color-stop shading STILL opaque in its own color Function (r/g/b only, no alpha channel there)', function () {
     $gradient = new Gradient(GradientKind::Linear, 90.0, [
         new GradientStop(new Color(255, 0, 0, 0.5), 0.0),
         new GradientStop(new Color(0, 0, 255), 100.0),
@@ -663,8 +666,189 @@ it('renders an alpha color-stop OPAQUE in the Function (r/g/b only, no alpha cha
     $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
         $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
     });
+    expect($pdf)->toContain('/ColorSpace /DeviceRGB');
     expect($pdf)->toContain('/C0 [1.000 0.000 0.000] /C1 [0.000 0.000 1.000] /N 1');
     expect($pdf)->not->toContain('/ca');
+});
+
+it('builds a parallel GRAY shading whose stops are the alpha values (0.5, then 1.0 for the opaque second stop)', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0, 0.5), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain('/ColorSpace /DeviceGray');
+    // second stop has no declared alpha (null) -- reads as 1.0 (fully opaque), same convention as
+    // Color::$alpha === null everywhere else in this engine.
+    expect($pdf)->toContain('/C0 [0.500] /C1 [1.000] /N 1');
+});
+
+it('wraps the gray shading in a DeviceGray transparency-group Form XObject and an ExtGState /SMask /Luminosity', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0, 0.5), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain('/Group << /S /Transparency /CS /DeviceGray >>');
+    expect($pdf)->toMatch('#/SMask << /Type /Mask /S /Luminosity /G \d+ 0 R >>#');
+    // The `gs` (soft mask) is activated right before the COLOR shading's own `sh`, inside the same
+    // q/Q clip scope paintGradient() already opens.
+    expect($pdf)->toMatch('#/GS\d+ gs\n/Sh\d+ sh\n#');
+});
+
+it('dedups TWO paintGradient() calls sharing the same rect+alpha-Gradient into a SINGLE mask Form/ExtGState pair', function () {
+    $stops = [new GradientStop(new Color(255, 0, 0, 0.5), 0.0), new GradientStop(new Color(0, 0, 255), 100.0)];
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($stops): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), new Gradient(GradientKind::Linear, 90.0, $stops));
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), new Gradient(GradientKind::Linear, 90.0, $stops));
+    });
+    expect(substr_count($pdf, '/Type /ExtGState'))->toBe(1);
+    expect(substr_count($pdf, '/Group << /S /Transparency /CS /DeviceGray >>'))->toBe(1);
+    expect(substr_count($pdf, " gs\n"))->toBe(2); // same /GSn activated before EACH call's own `sh`
+});
+
+it('restores the graphics state after an alpha gradient — a LATER opaque gradient carries no leftover /SMask (q/Q scoping)', function () {
+    $alphaGradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0, 0.5), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $opaqueGradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(0, 255, 0), 0.0),
+        new GradientStop(new Color(255, 255, 0), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($alphaGradient, $opaqueGradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $alphaGradient);
+        $canvas->paintGradient(new Rect(0, 0, 200, 100), $opaqueGradient);
+    });
+
+    // The second gradient's rect is 200x100 (unique "150.00 75.00 re W n" clip bytes, ×0.75pt) --
+    // locate ITS OWN q..Q block and prove no `gs` (soft mask) leaked into it from the first call.
+    $marker = '150.00 75.00 re W n';
+    $markerPos = strpos($pdf, $marker);
+    if ($markerPos === false) {
+        throw new RuntimeException('expected the second gradient\'s own clip bytes in the PDF');
+    }
+    $qStart = strrpos(substr($pdf, 0, $markerPos), "q\n");
+    $qEnd = strpos($pdf, "Q\n", $markerPos);
+    if ($qStart === false || $qEnd === false) {
+        throw new RuntimeException('expected a q..Q block around the second gradient\'s clip bytes');
+    }
+    $block = substr($pdf, $qStart, $qEnd - $qStart + 2);
+    expect($block)->not->toContain(' gs');
+    expect($block)->toContain(' sh');
+});
+
+// --- M9-T3 (ISO 32000-1 §8.7.3.1, PatternType 1 tiling patterns): fillImagePattern() -------------
+// Replaces the old M8-T6/T8 drawImage()-per-tile loop (and its 2000-tile cap) for
+// background-repeat:repeat -- ONE /Pattern object, tiled by the PDF consumer itself. tiny.jpg
+// (resources/images/tiny.jpg) is a real 4x3px fixture, same one BackgroundImageTest.php uses.
+
+it('emits /PatternType 1 with hand-computed /BBox, /XStep, /YStep, and a Y-flipped /Matrix anchor, plus /Pattern cs /Pn scn + re f', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $rect = new Rect(10.0, 20.0, 40.0, 30.0);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($rect, $imagePath): void {
+        $canvas->fillImagePattern($rect, $imagePath, 4.0, 3.0, 1.0);
+    });
+
+    $tileWPt = 4.0 * 0.75; // 3.00
+    $tileHPt = 3.0 * 0.75; // 2.25
+    // Matrix anchor = bottom-left, in PDF pt, of the box's OWN top-left tile (same flip-Y formula
+    // fillRect()/drawImage() use for a rect's bottom-left corner, tile-sized instead of box-sized).
+    $originX = 10.0 * 0.75; // 7.50
+    $originY = (PaperSize::A4->heightPx() - 20.0 - 3.0) * 0.75;
+    $x = 10.0 * 0.75; // 7.50
+    $y = (PaperSize::A4->heightPx() - 20.0 - 30.0) * 0.75;
+    $w = 40.0 * 0.75; // 30.00
+    $h = 30.0 * 0.75; // 22.50
+
+    expect($pdf)->toContain('/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1');
+    expect($pdf)->toContain(sprintf('/BBox [0 0 %.2F %.2F]', $tileWPt, $tileHPt));
+    expect($pdf)->toContain(sprintf('/XStep %.2F /YStep %.2F', $tileWPt, $tileHPt));
+    expect($pdf)->toContain(sprintf('/Matrix [1 0 0 1 %.2F %.2F]', $originX, $originY));
+    expect($pdf)->toContain('/Pattern cs');
+    expect($pdf)->toContain('/P1 scn');
+    expect($pdf)->toContain(sprintf('%.2F %.2F %.2F %.2F re f', $x, $y, $w, $h));
+});
+
+it('anchors the pattern at the SAME point the old per-tile drawImage() loop used for its first tile (visual anchor equivalence)', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $rect = new Rect(10.0, 20.0, 40.0, 30.0);
+    $tileW = 4.0;
+    $tileH = 3.0;
+    // Old M8-T6 loop's FIRST tile was new Rect($rect->x, $rect->y, $tileW, $tileH), drawn via
+    // drawImage() -- same bottom-left-in-PDF-pt formula fillRect()/drawImage() use everywhere else.
+    $expectedOriginX = $rect->x * 0.75;
+    $expectedOriginY = (PaperSize::A4->heightPx() - $rect->y - $tileH) * 0.75;
+
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($rect, $imagePath, $tileW, $tileH): void {
+        $canvas->fillImagePattern($rect, $imagePath, $tileW, $tileH, 1.0);
+    });
+    expect($pdf)->toContain(sprintf('/Matrix [1 0 0 1 %.2F %.2F]', $expectedOriginX, $expectedOriginY));
+});
+
+it('dedups TWO fillImagePattern() calls sharing the same rect+image+tile into a SINGLE /Pattern object', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $rect = new Rect(0.0, 0.0, 40.0, 30.0);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($rect, $imagePath): void {
+        $canvas->fillImagePattern($rect, $imagePath, 4.0, 3.0, 1.0);
+        $canvas->fillImagePattern($rect, $imagePath, 4.0, 3.0, 1.0);
+    });
+    expect(substr_count($pdf, '/PatternType 1'))->toBe(1);
+    expect(substr_count($pdf, '/P1 scn'))->toBe(2);
+});
+
+it('registers TWO distinct /Pattern objects for two calls with different tile sizes (same rect+image)', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $rect = new Rect(0.0, 0.0, 40.0, 30.0);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($rect, $imagePath): void {
+        $canvas->fillImagePattern($rect, $imagePath, 4.0, 3.0, 1.0);
+        $canvas->fillImagePattern($rect, $imagePath, 8.0, 6.0, 1.0);
+    });
+    expect(substr_count($pdf, '/PatternType 1'))->toBe(2);
+    expect($pdf)->toContain('/P1 scn')->toContain('/P2 scn');
+});
+
+it('registers the pattern as a page /Resources /Pattern entry', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($imagePath): void {
+        $canvas->fillImagePattern(new Rect(0.0, 0.0, 40.0, 30.0), $imagePath, 4.0, 3.0, 1.0);
+    });
+    expect($pdf)->toContain('/Pattern <<')->toContain('/P1');
+});
+
+it('paints NOTHING (no /Pattern object at all) when the tile is smaller than 1px in either dimension (sanity floor replacing the old 2000-tile cap)', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($imagePath): void {
+        $canvas->fillImagePattern(new Rect(0.0, 0.0, 40.0, 30.0), $imagePath, 0.5, 3.0, 1.0);
+    });
+    expect($pdf)->not->toContain('/PatternType 1');
+});
+
+it('never caps or warns for a pathologically small (but >=1px) tile against a huge box -- O(1), same single /Pattern object', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    // Would have been 2000x2000 = 4,000,000 drawImage() calls under the old M8 loop (capped at
+    // 2000 with a warning) -- a single /Pattern object regardless of $rect's size.
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($imagePath): void {
+        $canvas->fillImagePattern(new Rect(0.0, 0.0, 2000.0, 2000.0), $imagePath, 1.0, 1.0, 1.0);
+    });
+    expect(substr_count($pdf, '/PatternType 1'))->toBe(1);
+    expect($pdf)->not->toContain('tiling capped');
+});
+
+it('inserts /GSn gs for opacity<1.0 right before /Pattern cs /Pn scn, and paints nothing at all for opacity<=0', function () {
+    $imagePath = __DIR__ . '/../../../resources/images/tiny.jpg';
+    $rect = new Rect(0.0, 0.0, 40.0, 30.0);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($rect, $imagePath): void {
+        $canvas->fillImagePattern($rect, $imagePath, 4.0, 3.0, 0.5);
+        $canvas->fillImagePattern($rect, $imagePath, 4.0, 3.0, 0.0);
+    });
+    expect($pdf)->toContain('/ca 0.500');
+    expect($pdf)->toMatch('#/GS\d+ gs\n/Pattern cs\n/P1 scn\n#');
+    expect(substr_count($pdf, '/P1 scn'))->toBe(1); // the opacity<=0 call painted NOTHING
 });
 
 // --- M8-T4 (css-backgrounds-3 §4.3, ISO 32000-1 §8.4.3.6): dashed/dotted border stroking ---------

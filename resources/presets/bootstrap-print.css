@@ -1,0 +1,24 @@
+/*
+ * pliego's own print addendum for the Bootstrap preset (M9-T4) -- OURS, not vendored from
+ * upstream Bootstrap (real bootstrap.min.css, resources/presets/bootstrap.min.css, ships
+ * NO @page rule at all -- it's a screen-first stylesheet). Engine::bootstrap() queues this
+ * sheet right after bootstrap.min.css and before any user ->stylesheet() call, so a
+ * document that opts into the preset gets a page with sane margins out of the box instead
+ * of Engine's own generic 48px default (chosen for arbitrary documents, not tuned for a
+ * Bootstrap-flavored one).
+ *
+ * Deliberately MINIMAL: just @page margins, nothing else. No body/background/typography
+ * rules here -- those belong to bootstrap.min.css itself (or the user's own stylesheet),
+ * this addendum's only job is the one thing upstream Bootstrap doesn't ship for print.
+ *
+ * Override contract: StylesheetParser resolves @page with "last rule in the document
+ * wins", ENTIRELY (not merged per side -- see its own docblock). Since this addendum is
+ * queued BEFORE every user ->stylesheet() call, any @page rule (even a partial one, e.g.
+ * just `@page { margin-top: 10mm }`) placed in a LATER ->stylesheet() call completely
+ * replaces this one, margins-not-redeclared falling back to Engine::margins()'s uniform
+ * default (48px) rather than back to this addendum's 15mm -- same "last @page wins whole"
+ * semantics a user already relies on without the preset (M2-T6).
+ */
+@page {
+  margin: 15mm;
+}
