@@ -950,6 +950,52 @@ it('unsets every longhand of a shorthand when its var() substitution fails, not 
     expect($warnings)->not->toBeEmpty();
 });
 
+// --- M10-T1 finding fix (css-variables-1 §7.3, css-cascade-4 §7.3): a custom property set to the
+// CSS-wide keyword `initial` is the GUARANTEED-INVALID value, not the literal string "initial" --
+// var(--x, fallback) must engage the fallback, var(--x) alone is IACVT (same machinery as the
+// unknown-custom-property/cyclic-reference cases above). Real-world driver: Bootstrap's own
+// `.table` reset (`--bs-table-bg-state: initial`) consumed through a 3-deep var() fallback chain.
+
+it('THE probe: --x:initial + var(--x, fallback) end to end resolves to the fallback, not the literal text "initial"', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --x: initial; } p { color: var(--x, #ff0000); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+});
+
+it('drops a declaration referencing a custom property set to "initial" with no fallback, with a warning (IACVT)', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        ':root { --x: initial; } p { color: var(--x); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // color inherits and falls to the initial value (black) — the "initial" keyword never
+    // substitutes as literal text.
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 0));
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('reproduces the real Bootstrap chain end to end: box-shadow color component resolves through a 3-deep var() fallback past two "initial" custom properties', function () {
+    [$doc, $map] = resolveDoc(
+        ':root {
+            --bs-table-bg-state: initial;
+            --bs-table-bg-type: initial;
+            --bs-table-accent-bg: transparent;
+        }
+        p { background-color: var(--bs-table-bg-state, var(--bs-table-bg-type, var(--bs-table-accent-bg))); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // "transparent" is a supported keyword for background-color -- resolves to alpha 0 (Color::
+    // fromCss()'s documented sentinel for the keyword), not the literal unsupported text "initial".
+    expect($map->get($p)->backgroundColor)->toEqual(new Color(0, 0, 0, 0.0));
+});
+
 // --- M7-T2: complete UA stylesheet (CSS 2.2 Appendix D, adapted) + cascade origin ---------------
 
 it('sizes and bolds h1..h6 per the UA stylesheet (2/1.5/1.17/1/.83/.75 em)', function () {

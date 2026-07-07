@@ -34,15 +34,30 @@ use Pliego\Engine;
  * M10-T1 (Selectors-4 §14.4) gave `:nth-of-type`/`:nth-last-of-type` real support (An+B reused
  * from `:nth-child`, counting only same-tagName siblings, see Css\PseudoClass::matchesNthOfType())
  * -- `tr:nth-of-type(odd)` now genuinely MATCHES and sets `--bs-table-bg-type` for real, with zero
- * warning. Verified by hand (see the task report): removing this file's compat CSS entirely and
- * re-rendering still paints NO visible stripe, because the OTHER ingredient -- inset box-shadow --
- * remains unsupported (dropped with a warning, "no inset support" since M8; the actual warning
- * text observed here is "Unsupported box-shadow component \"initial\": inset 0 0 0 9999px
- * initial", since `var(--bs-table-bg-state, var(--bs-table-bg-type, var(--bs-table-accent-bg)))`
- * resolves to the literal keyword `initial` when none of the three custom properties are set,
- * itself unsupported as a box-shadow component). So real `.table-striped`, used exactly as
- * upstream ships it, STILL paints no visible stripe through this engine today -- a narrower,
- * honestly re-audited capability gap (inset box-shadow ALONE, not "neither ingredient" anymore).
+ * warning.
+ *
+ * M10-T1 finding fix (css-variables-1 §7.3, css-cascade-4 §7.3): `Css\VarResolver` also gained
+ * real handling of `--x: initial` (the CSS-wide keyword, which sets a custom property to the
+ * GUARANTEED-INVALID value per spec) -- Bootstrap's `.table` reset (`--bs-table-bg-state: initial;
+ * --bs-table-bg-type: initial; ...`) used to have the LITERAL three-letter string "initial" win
+ * substitution instead of engaging the fallback chain, so `color:
+ * var(--bs-table-color-state, var(--bs-table-color-type, var(--bs-table-color)))` produced
+ * "Unsupported color for color: initial" (15/15 cells warned, one per `.table` cell) and
+ * `box-shadow: inset 0 0 0 9999px var(--bs-table-bg-state, var(--bs-table-bg-type,
+ * var(--bs-table-accent-bg)))` produced `Unsupported box-shadow component "initial": inset 0 0 0
+ * 9999px initial`. Both chains now resolve to their REAL fallback value (`transparent` for
+ * unstriped rows, the striped `rgba(...)` for odd rows) -- the color warning is gone entirely
+ * (correctness win, independent of the striping mechanism), and the box-shadow warning survives
+ * only because inset box-shadow ITSELF remains unsupported (M8), now correctly fed a real color
+ * instead of the bogus literal keyword (`Unsupported box-shadow (inset not supported in M8):
+ * inset 0 0 0 9999px <the real resolved color>`).
+ *
+ * Verified by hand (see the task report): removing this file's compat CSS entirely and
+ * re-rendering still paints NO visible stripe, because the striping-specific ingredient -- inset
+ * box-shadow -- remains unsupported. So real `.table-striped`, used exactly as upstream ships it,
+ * STILL paints no visible stripe through this engine today -- a narrower, honestly re-audited
+ * capability gap (inset box-shadow ALONE, not "neither ingredient" anymore, and not blocked by the
+ * `initial` keyword bug anymore either).
  * `components.html` uses `.table-striped` (so the real class and its rules -- now partially live,
  * `:nth-of-type` included -- are still exercised and warn exactly as they would in any consumer's
  * document) PLUS one extra tiny author-level compat rule (`.table-striped-compat tbody
@@ -112,12 +127,24 @@ it('renders the real Bootstrap components page as a single valid page, with the 
     // "Pseudo-class not supported yet: :nth-of-type" (Selectors-4 §14.4, now matches for real) --
     // see the M10-T1 report for the full delta) plus 49 more that only surface once declarations
     // are actually RESOLVED against real elements (unresolved var() chains on empty custom
-    // properties like `--bs-btn-font-family: ;`, a known IACVT gap already on record since M7; an
-    // `initial` keyword used as a box-shadow component, which is genuinely invalid CSS that real
-    // browsers also drop -- see the report for the full breakdown). A regression here (count
-    // changing) means either the vendored sheet changed or something in parse/style/layout started
-    // handling one of these constructs differently.
-    expect($report->warnings)->toHaveCount(919);
+    // properties like `--bs-btn-font-family: ;`, a known IACVT gap already on record since M7).
+    //
+    // M10-T1 finding fix (css-variables-1 §7.3): 919 pre-fix, minus 15 more now GONE --
+    // Css\VarResolver used to treat a custom property set to the CSS-wide keyword `initial` (e.g.
+    // Bootstrap's own `.table { --bs-table-bg-state: initial; ... }`) as a literal string, so
+    // `var(--bs-table-bg-state, var(--bs-table-bg-type, var(--bs-table-accent-bg)))` substituted
+    // the literal text "initial" instead of engaging the fallback chain -- 15 "Unsupported color
+    // for color: initial" warnings (one per `.table` cell, the class docblock's "15/15 cells warn"
+    // repro) vanish now that the chain resolves to a real color (`transparent` or the striped
+    // rgba()). NOTE: this does NOT change the `box-shadow-limitation` category's total count --
+    // the SAME 15 cells' box-shadow warning just changes its own message from `Unsupported
+    // box-shadow component "initial": inset 0 0 0 9999px initial` to `Unsupported box-shadow
+    // (inset not supported in M8): inset 0 0 0 9999px <the now-correctly-resolved color>`, because
+    // inset box-shadow itself is still unsupported (M8) regardless of what color feeds it -- see
+    // this file's class docblock for the honestly re-audited, narrower gap. A regression here
+    // (count changing) means either the vendored sheet changed or something in parse/style/layout
+    // started handling one of these constructs differently.
+    expect($report->warnings)->toHaveCount(904);
 });
 
 it('paints .btn-primary with real Bootstrap\'s own blue (#0d6efd), resolved through its full --bs-btn-bg/--bs-btn-color CSS-variable chain', function () {

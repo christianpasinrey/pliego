@@ -153,14 +153,25 @@ it('produces a pinned, categorized warning count for this exact page (honest cap
     expect(array_sum($byCategory))->toBe(count($report->warnings));
 
     // Pinned exact total, observed from a real run against this exact fixture (not guessed) --
-    // see this file's class docblock for why it differs from BootstrapRealComponentsTest's 919:
+    // see this file's class docblock for why it differs from BootstrapRealComponentsTest's 904:
     // a bigger, more varied page (six card variants, five badge/button variants, four alert
     // variants, a navbar) resolves MANY more distinct declarations against real elements than the
     // components showcase does, each capable of its own var()-resolution-time warning. (1175
     // pre-M10-T1; -25 for the same reason as BootstrapIngestionTest's golden and
-    // BootstrapRealComponentsTest's 919 -- vw/vh support + real :nth-of-type matching, see M10-T1's
+    // BootstrapRealComponentsTest's 904 -- vw/vh support + real :nth-of-type matching, see M10-T1's
     // report -- this page shares the vendored sheet's sheet-level parse warnings 1:1.)
-    expect($report->warnings)->toHaveCount(1150);
+    //
+    // M10-T1 finding fix (css-variables-1 §7.3): 1150 pre-fix, minus 105 more now GONE -- same
+    // Css\VarResolver fix as BootstrapRealComponentsTest's docblock (a custom property set to the
+    // CSS-wide keyword `initial` now correctly engages the var() fallback chain instead of
+    // substituting the literal string "initial"). This page's much bigger element mix (cards,
+    // buttons, badges, alerts, navbar, a 20-row table) hits Bootstrap's `--bs-*-color-state:
+    // initial`/`--bs-*-bg-state: initial` reset pattern far more often than the single-table
+    // components showcase (15 cells) does -- 105 "Unsupported color for color: initial" warnings
+    // vanish. `box-shadow-limitation`'s total is unaffected (same 113 before/after): inset
+    // box-shadow itself is still unsupported (M8), so those warnings survive, just fed a real
+    // resolved color now instead of the bogus literal keyword.
+    expect($report->warnings)->toHaveCount(1045);
 
     // Spot categories: a handful of the categories this page is EXPECTED to exercise, pinned
     // individually so a change in exactly WHICH kind of warning fires is caught, not just a total

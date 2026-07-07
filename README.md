@@ -115,12 +115,16 @@ used, and adds the couple of PDF primitives that stylesheet actually needs.
   sample) — `@media` blocks (skipped as a single aggregate warning, not one
   per block), unknown/unsupported pseudo-classes, unsupported
   properties/keywords/lengths/colors, invalid `calc()` expressions. Rendering
-  an actual page pushes the count higher still (919 for the M9-T2 component
-  showcase, 1150 for the full page used as oracle fixture 07) as more
+  an actual page pushes the count higher still (904 for the M9-T2 component
+  showcase, 1045 for the full page used as oracle fixture 07) as more
   declarations get resolved against real elements (unresolved `var()`
   chains, atomic flex fragments taller than a page, …) — this is the *whole
   point*: pliego tells you exactly what it didn't understand instead of
-  silently dropping it.
+  silently dropping it. (M10-T1 finding fix: a custom property set to the
+  CSS-wide keyword `initial` — e.g. Bootstrap's own `.table` reset — now
+  correctly engages the `var()` fallback chain instead of substituting the
+  literal string `"initial"`, dropping 105/15 of those two counts
+  respectively; see `Css\VarResolver`.)
 - **`PatternType 1` tiling patterns** (ISO 32000-1 §8.7.3.3, `/PaintType 1`):
   `PdfWriter::registerTilingPattern()` registers a small tile as a pattern
   cell once; `PdfCanvas` then fills a border box with `/Pattern cs`/`/Pn
