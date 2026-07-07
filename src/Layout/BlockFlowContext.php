@@ -12,6 +12,7 @@ use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -578,6 +579,9 @@ final class BlockFlowContext implements FormattingContext
             // TODOS sus descendientes al rect border-box final (YA clampeado arriba) -- ver
             // BoxFragment::$clipsChildren.
             clipsChildren: $style->overflow === 'hidden',
+            // M8-T2: % resuelto contra $borderBoxWidth (adjudicación M8, ver BorderRadius::
+            // fromCss()), clamp de solapes §5.5 contra el $height final YA calculado arriba.
+            borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
         );
 
         // M7-T6 (CSS 2.2 §9.4.3): position:relative -- shift visual PURO, aplicado DESPUÉS de que
@@ -1079,6 +1083,7 @@ final class BlockFlowContext implements FormattingContext
             [$imageFragment],
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
+            borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $borderBoxHeight),
         );
 
         // M7-T6: un <img> también puede ser position:relative -- mismo shift visual puro que un

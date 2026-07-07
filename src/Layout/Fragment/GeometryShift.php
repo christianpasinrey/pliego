@@ -46,6 +46,7 @@ final class GeometryShift
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius,
         );
     }
 
@@ -104,6 +105,7 @@ final class GeometryShift
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius,
         );
     }
 
@@ -145,6 +147,7 @@ final class GeometryShift
                     $child->opacity,
                     $child->isFirstSlice,
                     $child->isLastSlice,
+                    $child->borderRadius,
                 ),
                 default => throw new \LogicException('Unknown fragment leaf: ' . $child::class),
             };

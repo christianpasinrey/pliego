@@ -5,6 +5,8 @@ declare(strict_types=1);
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
@@ -64,6 +66,65 @@ final class RecordingCanvas implements Canvas
     public function restoreClip(): void
     {
         $this->calls[] = 'restoreClip()';
+    }
+
+    public function fillRoundedRect(Rect $rect, BorderRadius $radius, Color $color): void
+    {
+        $this->calls[] = sprintf(
+            'roundedRect(%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F,#%02x%02x%02x)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $radius->tl,
+            $radius->tr,
+            $radius->br,
+            $radius->bl,
+            $color->r,
+            $color->g,
+            $color->b,
+        );
+    }
+
+    public function fillRoundedRectRing(Rect $outerRect, BorderRadius $outerRadius, Rect $innerRect, BorderRadius $innerRadius, Color $color): void
+    {
+        $this->calls[] = sprintf(
+            'roundedRing(outer=%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F;inner=%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F,#%02x%02x%02x)',
+            $outerRect->x,
+            $outerRect->y,
+            $outerRect->width,
+            $outerRect->height,
+            $outerRadius->tl,
+            $outerRadius->tr,
+            $outerRadius->br,
+            $outerRadius->bl,
+            $innerRect->x,
+            $innerRect->y,
+            $innerRect->width,
+            $innerRect->height,
+            $innerRadius->tl,
+            $innerRadius->tr,
+            $innerRadius->br,
+            $innerRadius->bl,
+            $color->r,
+            $color->g,
+            $color->b,
+        );
+    }
+
+    public function clipRoundedRect(Rect $rect, BorderRadius $radius): void
+    {
+        $this->calls[] = sprintf(
+            'clipRounded(%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $radius->tl,
+            $radius->tr,
+            $radius->br,
+            $radius->bl,
+        );
     }
 }
 
@@ -465,4 +526,95 @@ it('multiplies an InlineBoxFragment background/border alpha by its own opacity',
     foreach (array_slice($canvas->calls, 1) as $call) {
         expect($call)->toContain('a=0.50');
     }
+});
+
+// --- M8-T2 (css-backgrounds-3 §5): border-radius painting ---------------------------------------
+
+it('paints a rounded background via fillRoundedRect() instead of fillRect() when borderRadius is non-zero', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none(), borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['roundedRect(0.00,0.00,100.00,50.00,r=10.00/10.00/10.00/10.00,#ff0000)']);
+});
+
+it('keeps plain fillRect() when borderRadius is zero (default), byte-identical to before this task', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
+});
+
+it('paints UNIFORM borders with non-zero radius as a single fillRoundedRectRing() call (outer minus inner)', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(5.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(20.0, 20.0, 20.0, 20.0));
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    // Inner rect inset by the uniform border width (5px each side); inner radius reduced by the
+    // SAME width (§5.3-style clamp, ver Painter::paintBorders()).
+    expect($canvas->calls)->toBe([
+        'roundedRing(outer=0.00,0.00,100.00,50.00,r=20.00/20.00/20.00/20.00;inner=5.00,5.00,90.00,40.00,r=15.00/15.00/15.00/15.00,#000000)',
+    ]);
+});
+
+it('falls back to the flat 4-rect border painting + a one-time warning when border widths/colors/styles are MIXED with a non-zero radius', function () {
+    $canvas = new RecordingCanvas();
+    $top = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $right = new BorderSide(4.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($top, $right, $top, $top);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    $page = new Page(1, [$box]);
+    $warnings = new WarningCollector();
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,2.00,#000000)',  // top
+        'rect(96.00,2.00,4.00,46.00,#000000)',  // right
+        'rect(0.00,48.00,100.00,2.00,#000000)', // bottom
+        'rect(0.00,2.00,2.00,46.00,#000000)',   // left
+    ]);
+    expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
+});
+
+it('does not paint a ring when a uniform border has radius but the border is not actually visible (style None/width 0)', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    expect($canvas->calls)->toBe([]);
+});
+
+it('clips with clipRoundedRect() instead of clipRect() when a clipsChildren box has a non-zero radius', function () {
+    $canvas = new RecordingCanvas();
+    $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [$innerText], BorderSet::none(), clipsChildren: true, borderRadius: new BorderRadius(8.0, 8.0, 8.0, 8.0));
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'clipRounded(0.00,0.00,100.00,50.00,r=8.00/8.00/8.00/8.00)',
+        'text(Hi)',
+        'restoreClip()',
+    ]);
+});
+
+it('paints a rounded InlineBoxFragment background+border the same way as a BoxFragment', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $page = new Page(1, [
+        new InlineBoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), $borders, 1.0, true, true, new BorderRadius(6.0, 6.0, 6.0, 6.0)),
+    ]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'roundedRect(0.00,0.00,100.00,50.00,r=6.00/6.00/6.00/6.00,#ff0000)',
+        'roundedRing(outer=0.00,0.00,100.00,50.00,r=6.00/6.00/6.00/6.00;inner=2.00,2.00,96.00,46.00,r=4.00/4.00/4.00/4.00,#000000)',
+    ]);
 });

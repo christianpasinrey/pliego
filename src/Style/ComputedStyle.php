@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Style;
 
 use Pliego\Css\DeclarationParser;
+use Pliego\Css\Value\BorderRadius;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\CalcExpr;
@@ -160,6 +161,16 @@ final readonly class ComputedStyle
         public ?LengthPercentage $right,
         public ?LengthPercentage $bottom,
         public ?LengthPercentage $left,
+        // M8-T2 (css-backgrounds-3 §5): NO hereda -- initial value real es 0 en las 4 esquinas
+        // (Css\Value\BorderRadius::zero()) cuando no hay declaración propia, nunca
+        // $parent->borderRadius (mismo patrón que box-sizing/overflow/opacity/top-right-bottom-
+        // left: cada elemento decide su PROPIO radio, un <div> dentro de un padre con
+        // border-radius no hereda nada). % SIGUE SIMBÓLICO aquí (LengthPercentage sin resolver,
+        // igual que width/margin/padding) -- Layout\Fragment\BorderRadius::fromCss() lo resuelve
+        // contra el border-box (adjudicación M8: % siempre contra el ANCHO) y aplica el clamp de
+        // solapes §5.5 una vez conocido el tamaño final de la caja (ver BlockFlowContext/
+        // FlexFormattingContext/TableFormattingContext/InlineFlowContext).
+        public BorderRadius $borderRadius,
         // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
         // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
         // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
@@ -292,6 +303,7 @@ final readonly class ComputedStyle
             null,
             null,
             null,
+            BorderRadius::zero(),
         );
     }
 
@@ -715,6 +727,18 @@ final readonly class ComputedStyle
         $right = $hasLengthPercentage('right') ? $lengthPercentage('right') : null;
         $left = $hasLengthPercentage('left') ? $lengthPercentage('left') : null;
 
+        // M8-T2 (css-backgrounds-3 §5): NO hereda -- $lengthPercentage() ya cae a $zero cuando la
+        // longhand no está en $declarations (mismo mecanismo que padding/margin, nunca
+        // $parent->borderRadius), así que "sin border-radius declarado" produce exactamente
+        // BorderRadius::zero() por construcción, sin rama especial. % sigue simbólico (resuelto
+        // en Layout, ver el docblock del constructor).
+        $borderRadius = new BorderRadius(
+            $lengthPercentage('border-top-left-radius'),
+            $lengthPercentage('border-top-right-radius'),
+            $lengthPercentage('border-bottom-right-radius'),
+            $lengthPercentage('border-bottom-left-radius'),
+        );
+
         // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
         // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
         // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
@@ -789,6 +813,7 @@ final readonly class ComputedStyle
             $right,
             $bottom,
             $left,
+            $borderRadius,
             $opacity,
             $customProperties,
         );

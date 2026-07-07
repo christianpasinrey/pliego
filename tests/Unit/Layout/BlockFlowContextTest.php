@@ -915,6 +915,45 @@ it('M7-T4: slices a bordered inline span across two wrapped lines (lateral borde
     expect($lastSlice->borders->bottom->widthPx)->toBeGreaterThan(0.0);
 });
 
+// M8-T2: exactamente la misma convención de slice que M7-T4 usa para los bordes laterales arriba,
+// aplicada a border-radius -- la PRIMERA slice conserva las esquinas IZQUIERDAS (tl/bl), la ÚLTIMA
+// conserva las DERECHAS (tr/br); en una caja de solo 2 slices no hay ninguna intermedia, así que
+// cada slice pierde exactamente el par de esquinas que no le toca.
+it('M8-T2: a .btn-like inline span with border-radius only rounds the OUTER corners on each slice (first=left, last=right)', function () {
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    $face = $catalog->select('default', 400, false);
+    $aaaSpaceWidth = $measurer->widthOf('aaa ', $face, 16.0);
+    $bbbWidth = $measurer->widthOf('bbb', $face, 16.0);
+    $availableWidth = $aaaSpaceWidth + $bbbWidth * 0.5;
+
+    $frag = layoutHtml(
+        '<body><p><span class="btn">aaa bbb</span></p></body>',
+        '.btn { border: 2px solid #000000; border-radius: 4px; }',
+        $availableWidth,
+    );
+    $p = $frag->children[0];
+    assert($p instanceof BoxFragment);
+
+    $boxes = inlineBoxFragments($p);
+    expect($boxes)->toHaveCount(2);
+    [$firstSlice, $lastSlice] = $boxes;
+
+    expect($firstSlice->isFirstSlice)->toBeTrue();
+    expect($firstSlice->isLastSlice)->toBeFalse();
+    expect($firstSlice->borderRadius->tl)->toBe(4.0);
+    expect($firstSlice->borderRadius->bl)->toBe(4.0);
+    expect($firstSlice->borderRadius->tr)->toBe(0.0);
+    expect($firstSlice->borderRadius->br)->toBe(0.0);
+
+    expect($lastSlice->isFirstSlice)->toBeFalse();
+    expect($lastSlice->isLastSlice)->toBeTrue();
+    expect($lastSlice->borderRadius->tr)->toBe(4.0);
+    expect($lastSlice->borderRadius->br)->toBe(4.0);
+    expect($lastSlice->borderRadius->tl)->toBe(0.0);
+    expect($lastSlice->borderRadius->bl)->toBe(0.0);
+});
+
 it('M7-T4: nested inline boxes (span > strong > em, distinct backgrounds) each get their own InlineBoxFragment, painted outer-before-inner', function () {
     $frag = layoutHtml(
         '<body><p><span class="a"><strong class="b"><em class="c">x</em></strong></span></p></body>',
@@ -1700,4 +1739,70 @@ it('Finding D: a plain <table> with no position declared emits neither the float
     );
     $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, '<table>'));
     expect($relevant)->toBeEmpty();
+});
+
+// --- M8-T2 (css-backgrounds-3 §5): border-radius resolved+clamped at layout time --------------
+
+it('a plain box with no border-radius declared carries a zero BorderRadius (byte-identical default)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 100px; height: 50px }');
+    $box = $frag->children[0];
+    assert($box instanceof BoxFragment);
+    expect($box->borderRadius->isZero())->toBeTrue();
+});
+
+// NOTA: este motor no honra `height` en un <div> normal (BlockFlowContext deriva SIEMPRE la
+// altura del contenido, hueco preexistente documentado en FlexFormattingContext -- ver
+// hasDefiniteCrossSize()) -- `min-height` SÍ se aplica (ver BlockFlowContext::layout()), así que
+// estos tests lo usan para fijar una altura final conocida sin depender de ese gap.
+it('resolves a px border-radius to the SAME px on the BoxFragment (no overlap, nothing to clamp)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 200px; min-height: 100px; border-radius: 10px }');
+    $box = $frag->children[0];
+    assert($box instanceof BoxFragment);
+    expect($box->rect->height)->toBe(100.0);
+    expect($box->borderRadius->tl)->toBe(10.0);
+    expect($box->borderRadius->tr)->toBe(10.0);
+    expect($box->borderRadius->br)->toBe(10.0);
+    expect($box->borderRadius->bl)->toBe(10.0);
+});
+
+// M8 adjudication: % SIEMPRE contra el ANCHO del border box, incluso el componente vertical --
+// 200px de ancho x 50% = 100px en las 4 esquinas, sin importar que la caja mida 400px de alto.
+it('resolves a % border-radius against the border box WIDTH (M8 adjudication, documented divergence)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 200px; min-height: 400px; border-radius: 50% }');
+    $box = $frag->children[0];
+    assert($box instanceof BoxFragment);
+    expect($box->rect->height)->toBe(400.0);
+    expect($box->borderRadius->tl)->toBe(100.0);
+    expect($box->borderRadius->tr)->toBe(100.0);
+    expect($box->borderRadius->br)->toBe(100.0);
+    expect($box->borderRadius->bl)->toBe(100.0);
+});
+
+// §5.5 hand-computed through the REAL pipeline (parse -> compute -> layout): 4 radios de 60px en
+// una caja de 40x200 (content-box + box-sizing:border-box para que 40px sea EXACTAMENTE el border
+// box) -- tl+tr=120 > width 40 (ratio 40/120=1/3), simétrico en bl+br; el eje vertical no limita
+// (tl+bl=120 <= height 200). Los 4 radios se escalan por 1/3: 60 * 1/3 = 20.0 exacto.
+it('clamps overlapping radii proportionally end to end (§5.5, hand-computed)', function () {
+    $frag = layoutHtml(
+        '<body><div>x</div></body>',
+        'div { width: 40px; min-height: 200px; box-sizing: border-box; border-radius: 60px }',
+    );
+    $box = $frag->children[0];
+    assert($box instanceof BoxFragment);
+    expect($box->rect->width)->toBe(40.0);
+    expect($box->rect->height)->toBe(200.0);
+    expect($box->borderRadius->tl)->toBe(20.0);
+    expect($box->borderRadius->tr)->toBe(20.0);
+    expect($box->borderRadius->br)->toBe(20.0);
+    expect($box->borderRadius->bl)->toBe(20.0);
+});
+
+it('resolves the 4-value border-radius shorthand per corner, clockwise from top-left', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 300px; height: 300px; border-radius: 1px 2px 3px 4px }');
+    $box = $frag->children[0];
+    assert($box instanceof BoxFragment);
+    expect($box->borderRadius->tl)->toBe(1.0);
+    expect($box->borderRadius->tr)->toBe(2.0);
+    expect($box->borderRadius->br)->toBe(3.0);
+    expect($box->borderRadius->bl)->toBe(4.0);
 });

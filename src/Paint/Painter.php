@@ -6,6 +6,9 @@ namespace Pliego\Paint;
 
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\Color;
+use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -25,7 +28,15 @@ final readonly class Painter
     private const float FALLBACK_UNDERLINE_POSITION_EM = -0.1;
     private const float FALLBACK_UNDERLINE_THICKNESS_EM = 0.05;
 
-    public function __construct(private FontCatalog $catalog) {}
+    /**
+     * M8-T2: $warnings es opcional (mismo patrón que Layout\*FormattingContext) — sigue siendo
+     * `null` en TODOS los tests preexistentes de esta clase (Painter nunca necesitó avisar de
+     * nada hasta esta tarea); Engine lo conecta al MISMO WarningCollector compartido que Style/
+     * Box/Layout (ver Engine::render()), así que el aviso de "mixed border widths with
+     * border-radius approximated" (ver paintBorders()) sale por el mismo canal que cualquier otro
+     * warning del render.
+     */
+    public function __construct(private FontCatalog $catalog, private ?WarningCollector $warnings = null) {}
 
     public function paint(Page $page, Canvas $canvas): void
     {
@@ -49,10 +60,8 @@ final readonly class Painter
             // withOpacity() — no-op si opacity es 1.0, ver su docblock) — los HIJOS (pintados más
             // abajo, vía recursión) NO reciben esta opacity (divergencia M6 documentada, ver
             // ComputedStyle::$opacity): cada uno trae la SUYA propia.
-            if ($fragment->background !== null) {
-                $canvas->fillRect($fragment->rect, $fragment->background->withOpacity($fragment->opacity));
-            }
-            $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $canvas);
+            $this->paintBackground($fragment->rect, $fragment->background, $fragment->opacity, $fragment->borderRadius, $canvas);
+            $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $fragment->borderRadius, $canvas);
             // M7-T5 (css-overflow-3): $clipsChildren envuelve SOLO a los descendientes en un
             // scope de recorte PDF (Canvas::clipRect()/restoreClip()) al rect BORDER-BOX de ESTA
             // caja — el fondo/borde propios, ya pintados arriba, no lo necesitan (coinciden
@@ -60,16 +69,16 @@ final readonly class Painter
             // NUNCA llega aquí descompuesta (mismo camino que $atomic, ver su docblock), así que
             // el subárbol completo bajo el clip siempre está intacto.
             //
-            // M8-T1 breadcrumb (preparando M8-T2, BorderRadius): clipRect() de más abajo recorta a
-            // un RECTÁNGULO puro -- correcto hoy porque ningún BoxFragment trae border-radius
-            // todavía. En cuanto M8-T2 añada BorderRadius a BoxFragment, un fragment con radios
-            // no-cero Y $clipsChildren tendrá que recortar a la forma de esquinas redondeadas de su
-            // border-box (CSS 2.2/css-backgrounds-3 §5), no a este rect -- este `if` es el sitio
-            // donde esa rama nueva se insertará (elegir clipRect() vs. el futuro
-            // clipRoundedRect()/equivalente según $fragment->borderRadius, ver PdfCanvas::
-            // clipRect() para el breadcrumb gemelo del lado PDF).
+            // M8-T2: $fragment->borderRadius decide clipRect() (radio cero, byte-idéntico a antes
+            // de esta tarea) vs. clipRoundedRect() (radio no-cero, recorta a la curva del
+            // border-box en vez de a su bounding box) -- ver el breadcrumb M8-T1 que este `if`
+            // resuelve.
             if ($fragment->clipsChildren) {
-                $canvas->clipRect($fragment->rect);
+                if ($fragment->borderRadius->isZero()) {
+                    $canvas->clipRect($fragment->rect);
+                } else {
+                    $canvas->clipRoundedRect($fragment->rect, $fragment->borderRadius);
+                }
                 foreach ($fragment->children as $child) {
                     $this->paintFragment($child, $canvas);
                 }
@@ -86,11 +95,11 @@ final readonly class Painter
             // ver su docblock de "orden de emisión"). Los lados de borde suprimidos por
             // box-decoration-break:slice (lateral en un slice no-extremo) ya llegan como
             // BorderStyle::None desde InlineFlowContext -- paintBorders() no necesita ninguna
-            // lógica de slice-awareness propia, solo pinta lo que trae el BorderSet.
-            if ($fragment->background !== null) {
-                $canvas->fillRect($fragment->rect, $fragment->background->withOpacity($fragment->opacity));
-            }
-            $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $canvas);
+            // lógica de slice-awareness propia, solo pinta lo que trae el BorderSet. M8-T2:
+            // $fragment->borderRadius llega YA con las esquinas no-extremas a cero (misma
+            // convención de slice, ver InlineFlowContext::buildInlineBoxFragment()).
+            $this->paintBackground($fragment->rect, $fragment->background, $fragment->opacity, $fragment->borderRadius, $canvas);
+            $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $fragment->borderRadius, $canvas);
         } elseif ($fragment instanceof TextFragment) {
             // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
             // rect->width === 0.0 para la línea vacía que deja un <br> forzado — nada que
@@ -149,6 +158,24 @@ final readonly class Painter
     }
 
     /**
+     * M8-T2: fondo de una caja (BoxFragment o InlineBoxFragment) — fillRect() cuando $radius es
+     * cero (byte-idéntico a antes de esta tarea), fillRoundedRect() en caso contrario (path
+     * Bézier, ver Pdf\PdfCanvas::roundedRectPathOps()).
+     */
+    private function paintBackground(Rect $rect, ?Color $background, float $opacity, BorderRadius $radius, Canvas $canvas): void
+    {
+        if ($background === null) {
+            return;
+        }
+        $color = $background->withOpacity($opacity);
+        if ($radius->isZero()) {
+            $canvas->fillRect($rect, $color);
+        } else {
+            $canvas->fillRoundedRect($rect, $radius, $color);
+        }
+    }
+
+    /**
      * css-backgrounds-3 §painting order: background, LUEGO bordes visibles (style Solid &&
      * widthPx > 0), antes que los hijos (que llegan después en el orden de flatten() de
      * Paginator). Orden entre lados: top, right, bottom, left (orden clockwise del shorthand
@@ -156,6 +183,18 @@ final readonly class Painter
      * verticales (left/right) encajan ENTRE ellos (alto = h - topW - bottomW). Esto deja una
      * junta simple sin solape en las esquinas, no un miter real (eso es un milestone de bordes
      * completos posterior).
+     *
+     * M8-T2 (css-backgrounds-3 §5): con $radius cero, comportamiento IDÉNTICO a antes de esta
+     * tarea (paintBordersFlat(), el mismo código de siempre). Con $radius no-cero:
+     *   - los 4 lados IDÉNTICOS (mismo ancho/estilo/color, ver bordersUniform()): un ÚNICO
+     *     Canvas::fillRoundedRectRing() (path anular outer-menos-inner, f* even-odd) -- el radio
+     *     interior se reduce por el ancho de borde, clampeado >= 0 (mismo criterio que
+     *     css-backgrounds-3 §5.3 para el border-box interior).
+     *   - los 4 lados NO idénticos (ancho/color/estilo heterogéneo): la geometría anular de un
+     *     solo color no representa un borde con lados distintos -- aproximación adjudicada M8:
+     *     paintBordersFlat() (los mismos 4 rects rectos de siempre, radios ignorados en el
+     *     pintado de bordes) + un warning UNA SOLA VEZ ("mixed border widths with border-radius
+     *     approximated", ver WarningCollector::addWarningOnce()).
      */
     /**
      * M7-T4: generalizado de `(BoxFragment $fragment)` a params sueltos (rect/borders/opacity) —
@@ -164,7 +203,50 @@ final readonly class Painter
      * docblock) pero no es un BoxFragment, así que ambos llamadores (paintFragment() para cada
      * uno) pasan sus propios campos homónimos en vez de compartir un tipo común.
      */
-    private function paintBorders(Rect $rect, BorderSet $borders, float $opacity, Canvas $canvas): void
+    private function paintBorders(Rect $rect, BorderSet $borders, float $opacity, BorderRadius $radius, Canvas $canvas): void
+    {
+        if ($radius->isZero() || !$borders->isVisible()) {
+            $this->paintBordersFlat($rect, $borders, $opacity, $canvas);
+            return;
+        }
+        $uniform = $this->bordersUniform($borders);
+        if ($uniform === null) {
+            $this->warnings?->addWarningOnce(
+                'mixed-border-widths-with-radius',
+                'mixed border widths with border-radius approximated',
+            );
+            $this->paintBordersFlat($rect, $borders, $opacity, $canvas);
+            return;
+        }
+        if ($uniform->color === null) {
+            // BorderSide::$color es ?Color por tipo, aunque ComputedStyle nunca produce null
+            // (T3: currentColor eager) -- guardia defensiva, mismo criterio que paintBorderSide().
+            return;
+        }
+        $bw = $uniform->widthPx;
+        $inner = new Rect($rect->x + $bw, $rect->y + $bw, $rect->width - 2 * $bw, $rect->height - 2 * $bw);
+        $innerRadius = new BorderRadius(
+            max(0.0, $radius->tl - $bw),
+            max(0.0, $radius->tr - $bw),
+            max(0.0, $radius->br - $bw),
+            max(0.0, $radius->bl - $bw),
+        );
+        $canvas->fillRoundedRectRing($rect, $radius, $inner, $innerRadius, $uniform->color->withOpacity($opacity));
+    }
+
+    /** true (con el BorderSide común) solo si LOS 4 LADOS son idénticos (mismo ancho/estilo/
+     * color) -- el único caso en el que un ÚNICO path anular representa el borde real. */
+    private function bordersUniform(BorderSet $borders): ?BorderSide
+    {
+        if ($borders->top == $borders->right && $borders->top == $borders->bottom && $borders->top == $borders->left) {
+            return $borders->top;
+        }
+        return null;
+    }
+
+    /** El pintado de 4 rects rectos de siempre (pre-M8-T2) -- usado tanto para $radius cero como
+     * para la aproximación de anchos/colores mixtos con radio (ver paintBorders()). */
+    private function paintBordersFlat(Rect $rect, BorderSet $borders, float $opacity, Canvas $canvas): void
     {
         // Solo el ancho de los lados VISIBLES reserva espacio para el rect vertical entre ellos
         // (un lado con style None no ocupa hueco, igual que en el modelo de caja CSS 2.2 §8.5.3:

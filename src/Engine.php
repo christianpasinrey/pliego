@@ -163,7 +163,10 @@ final class Engine
             $fonts = new FontRegistry($writer, $catalog);
             $images = new ImageRegistry($writer, $imageLoader);
             $canvas = new PdfCanvas($writer, $fonts, $images, $this->paper, $marginLeft, $marginTop);
-            $painter = new Painter($catalog);
+            // M8-T2: comparte el MISMO WarningCollector que Style/Box/Layout (ver arriba) -- así
+            // "mixed border widths with border-radius approximated" sale por el mismo
+            // $layoutWarnings->drain() de más abajo, junto con cualquier otro warning del render.
+            $painter = new Painter($catalog, $layoutWarnings);
             // M2-T7: margin boxes with counter(pages) can't be painted while streaming (the total
             // page count is only known once every page is laid out) — see MarginBoxPainter's
             // docblock for the deferred-XObject design and PdfWriter's for the ordering contract

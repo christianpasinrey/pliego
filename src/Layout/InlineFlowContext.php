@@ -12,6 +12,7 @@ use Pliego\Box\TextRun;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -783,6 +784,19 @@ final class InlineFlowContext
             $style->borderBottom,
             $isFirstSlice ? $style->borderLeft : $noSide,
         );
+        // M8-T2: mismo criterio de slice que $borders arriba -- las esquinas IZQUIERDAS (tl/bl)
+        // solo sobreviven en la PRIMERA slice, las DERECHAS (tr/br) solo en la ÚLTIMA; una slice
+        // intermedia (ni primera ni última) queda con las 4 a cero, comportándose como un
+        // rectángulo recto (mismo "noSide" spirit que los bordes laterales suprimidos). % resuelto
+        // contra el ancho de ESTA slice (border-box propio del fragmento que se está pintando, ver
+        // el docblock de BorderRadius::fromCss()).
+        $rawRadius = BorderRadius::fromCss($style->borderRadius, $maxX - $minX, $rectHeight);
+        $radius = new BorderRadius(
+            $isFirstSlice ? $rawRadius->tl : 0.0,
+            $isLastSlice ? $rawRadius->tr : 0.0,
+            $isLastSlice ? $rawRadius->br : 0.0,
+            $isFirstSlice ? $rawRadius->bl : 0.0,
+        );
         return new InlineBoxFragment(
             new Rect($minX, $rectY, $maxX - $minX, $rectHeight),
             $style->backgroundColor,
@@ -790,6 +804,7 @@ final class InlineFlowContext
             $style->opacity,
             $isFirstSlice,
             $isLastSlice,
+            $radius,
         );
     }
 
@@ -808,6 +823,7 @@ final class InlineFlowContext
                 $fragment->atomic,
                 $fragment->opacity,
                 $fragment->clipsChildren,
+                $fragment->borderRadius,
             );
         }
         if ($fragment instanceof TextFragment) {
@@ -837,6 +853,7 @@ final class InlineFlowContext
                 $fragment->opacity,
                 $fragment->isFirstSlice,
                 $fragment->isLastSlice,
+                $fragment->borderRadius,
             );
         }
         throw new \LogicException('Unknown fragment kind: ' . $fragment::class);

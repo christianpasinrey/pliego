@@ -988,3 +988,94 @@ it('rejects a percentage top/bottom with a warning (containing height not tracke
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->toContain('Unsupported length for top: 50%');
 });
+
+// --- M8-T2 (css-backgrounds-3 §5 reducido): border-radius shorthand + 4 longhands -------------
+
+it('expands a single-value border-radius shorthand to all 4 corners', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(10.0),
+        'border-top-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-left-radius' => LengthPercentage::px(10.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands a 2-value border-radius shorthand (tl/br pair, tr/bl pair)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px 5%');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(10.0),
+        'border-top-right-radius' => LengthPercentage::percent(5.0),
+        'border-bottom-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-left-radius' => LengthPercentage::percent(5.0),
+    ]);
+});
+
+it('expands a 3-value border-radius shorthand (tl, tr+bl, br)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '1px 2px 3px');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(1.0),
+        'border-top-right-radius' => LengthPercentage::px(2.0),
+        'border-bottom-right-radius' => LengthPercentage::px(3.0),
+        'border-bottom-left-radius' => LengthPercentage::px(2.0),
+    ]);
+});
+
+it('expands a 4-value border-radius shorthand (tl, tr, br, bl clockwise)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '1px 2px 3px 4px');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(1.0),
+        'border-top-right-radius' => LengthPercentage::px(2.0),
+        'border-bottom-right-radius' => LengthPercentage::px(3.0),
+        'border-bottom-left-radius' => LengthPercentage::px(4.0),
+    ]);
+});
+
+it('parses each border-*-radius longhand independently', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-top-left-radius', '8px'))->toEqual(['border-top-left-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->parse('border-top-right-radius', '8px'))->toEqual(['border-top-right-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->parse('border-bottom-right-radius', '8px'))->toEqual(['border-bottom-right-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->parse('border-bottom-left-radius', '8px'))->toEqual(['border-bottom-left-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and drops an elliptical border-radius shorthand ("/" horizontal/vertical split, unsupported in M8)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px / 20px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('warns and drops an elliptical border-*-radius longhand (2 space-separated values, unsupported in M8)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-top-left-radius', '10px 20px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('rejects a negative value anywhere in the border-radius shorthand with one warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px -5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('rejects a negative border-*-radius longhand with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-top-left-radius', '-5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns on an unparsable border-radius shorthand token', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', 'banana');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});

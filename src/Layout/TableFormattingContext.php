@@ -8,6 +8,7 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\TableBox;
 use Pliego\Box\TableRowBox;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\GeometryShift;
@@ -234,6 +235,7 @@ final readonly class TableFormattingContext
             $rowFragments,
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
+            borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
         );
     }
 
@@ -481,6 +483,7 @@ final readonly class TableFormattingContext
             $stretched->atomic,
             $stretched->opacity,
             $stretched->clipsChildren,
+            $stretched->borderRadius,
         );
     }
 
@@ -489,6 +492,8 @@ final readonly class TableFormattingContext
      * entre ambas clases porque no comparten ninguna otra cosa que justifique un trait): agranda
      * el rect de un fragmento de celda ya calculado sin re-layoutear su contenido (que queda
      * anclado arriba — alignCell() se encarga después de desplazarlo si vertical-align no es top).
+     * M8-T2: $borderRadius se preserva tal cual, mismo criterio documentado en el gemelo de
+     * FlexFormattingContext.
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
@@ -500,6 +505,7 @@ final readonly class TableFormattingContext
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius,
         );
     }
 

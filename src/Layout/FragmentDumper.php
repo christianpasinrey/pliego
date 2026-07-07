@@ -7,6 +7,7 @@ namespace Pliego\Layout;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -49,7 +50,7 @@ final class FragmentDumper
      */
     private function dumpInlineBox(InlineBoxFragment $fragment): array
     {
-        return [
+        $dump = [
             'type' => 'inline-box',
             'rect' => $this->rect($fragment->rect),
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
@@ -57,6 +58,10 @@ final class FragmentDumper
             'isFirstSlice' => $fragment->isFirstSlice,
             'isLastSlice' => $fragment->isLastSlice,
         ];
+        if (!$fragment->borderRadius->isZero()) {
+            $dump['borderRadius'] = $this->borderRadius($fragment->borderRadius);
+        }
+        return $dump;
     }
 
     /**
@@ -79,14 +84,34 @@ final class FragmentDumper
      */
     private function dumpBox(BoxFragment $fragment): array
     {
-        return [
+        $dump = [
             'type' => 'box',
             'rect' => $this->rect($fragment->rect),
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
             'borders' => $fragment->borders->isVisible() ? $this->borders($fragment->borders) : null,
             'atomic' => $fragment->atomic,
             'clipsChildren' => $fragment->clipsChildren,
-            'children' => array_map($this->dump(...), $fragment->children),
+        ];
+        // M8-T2: 'borderRadius' es ADITIVA solo cuando no es cero (a diferencia de 'atomic'/
+        // 'clipsChildren', que SIEMPRE aparecen con su valor real, incl. false) -- omitirla del
+        // todo en el caso común (radio cero, la inmensa mayoría de las cajas) mantiene los 14
+        // goldens M1-M7 preexistentes byte-idénticos SIN regenerarlos (ninguno usa border-radius
+        // todavía, ver el brief de esta tarea).
+        if (!$fragment->borderRadius->isZero()) {
+            $dump['borderRadius'] = $this->borderRadius($fragment->borderRadius);
+        }
+        $dump['children'] = array_map($this->dump(...), $fragment->children);
+        return $dump;
+    }
+
+    /** @return array{tl: float, tr: float, br: float, bl: float} */
+    private function borderRadius(BorderRadius $radius): array
+    {
+        return [
+            'tl' => round($radius->tl, 2),
+            'tr' => round($radius->tr, 2),
+            'br' => round($radius->br, 2),
+            'bl' => round($radius->bl, 2),
         ];
     }
 

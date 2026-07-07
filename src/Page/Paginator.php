@@ -97,8 +97,12 @@ final readonly class Paginator
         }
         // T5: una caja sin fondo pero con borde visible también necesita una hoja paintable
         // (antes de T5 solo se emitía por background !== null y el borde se perdía).
+        // M8-T2: $borderRadius se preserva (no add nada a la condición de arriba -- un radio sin
+        // background/borde visible no pinta nada por sí solo, exactamente igual que antes de esta
+        // tarea; una caja clipsChildren con radio SIEMPRE sale por la rama de arriba, nunca llega
+        // aquí, ver el docblock de esta clase).
         if ($box->background !== null || $box->borders->isVisible()) {
-            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity);
+            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity, borderRadius: $box->borderRadius);
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -137,6 +141,7 @@ final readonly class Paginator
                 $leaf->atomic,
                 $leaf->opacity,
                 $leaf->clipsChildren,
+                $leaf->borderRadius,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se
@@ -153,6 +158,7 @@ final readonly class Paginator
                 $leaf->opacity,
                 $leaf->isFirstSlice,
                 $leaf->isLastSlice,
+                $leaf->borderRadius,
             ),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };

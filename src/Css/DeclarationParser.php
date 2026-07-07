@@ -86,6 +86,13 @@ final class DeclarationParser
         // M7-T5 (CSS 2.2 §10.4/§10.7): negativo no tiene interpretación válida para ninguna de las
         // 4 -- mismo criterio de signo que width/height, reutilizando la guarda existente.
         'min-width', 'max-width', 'min-height', 'max-height',
+        // M8-T2 (css-backgrounds-3 §5): un radio negativo no tiene interpretación válida -- mismo
+        // criterio que border-*-width. Necesario aquí (y no solo en el chequeo literal ad-hoc de
+        // parseBorderRadiusLonghand()/expandBorderRadiusShorthand()) para que ComputedStyle::
+        // compute() re-chequee el signo de un calc(em/rem) una vez conocido el font-size propio,
+        // igual que el resto de propiedades de esta lista (ver $resolveCalcLengthPercentage).
+        'border-top-left-radius', 'border-top-right-radius',
+        'border-bottom-right-radius', 'border-bottom-left-radius',
     ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
@@ -158,6 +165,14 @@ final class DeclarationParser
 
     private const array BORDER_SIDES = ['top', 'right', 'bottom', 'left'];
     private const array BORDER_WIDTH_KEYWORDS = ['thin' => 1.0, 'medium' => 3.0, 'thick' => 5.0];
+    /** M8-T2 (css-backgrounds-3 §5, reducido): orden CLOCKWISE del shorthand -- tl, tr, br, bl --
+     * a diferencia de margin/padding (TRBL, ver expandBoxShorthand()), border-radius empieza en la
+     * esquina superior-izquierda y va en sentido horario (spec real, no una elección de este
+     * motor). */
+    private const array BORDER_RADIUS_LONGHANDS = [
+        'border-top-left-radius', 'border-top-right-radius',
+        'border-bottom-right-radius', 'border-bottom-left-radius',
+    ];
 
     /** @var list<string> */
     private array $warnings = [];
@@ -191,6 +206,12 @@ final class DeclarationParser
         }
         if ($property === 'border' || in_array($property, ['border-top', 'border-right', 'border-bottom', 'border-left'], true)) {
             return $this->expandBorderShorthand($property, $value);
+        }
+        if ($property === 'border-radius') {
+            return $this->expandBorderRadiusShorthand($value);
+        }
+        if (in_array($property, self::BORDER_RADIUS_LONGHANDS, true)) {
+            return $this->parseBorderRadiusLonghand($property, $value);
         }
         if ($property === 'list-style') {
             return $this->parseListStyleShorthand($value);
@@ -605,6 +626,75 @@ final class DeclarationParser
             }
         }
         return $result;
+    }
+
+    /**
+     * M8-T2 (css-backgrounds-3 §5, reducido): `border-radius: <length-percentage>{1,4}` -- 1-4
+     * valores, orden CLOCKWISE tl/tr/br/bl (ver BORDER_RADIUS_LONGHANDS), mismo patrón de
+     * expansión 1/2/3/4 que expandBoxShorthand() salvo por el orden (TRBL ahí, TL-TR-BR-BL aquí --
+     * spec real, no elección de este motor). Un '/' en cualquier parte del valor es la sintaxis
+     * elíptica completa (`border-radius: <h>{1,4} / <v>{1,4}`, radios horizontal/vertical
+     * distintos por esquina) -- fuera de alcance M8 (solo se soporta el radio circular, ver
+     * Css\Value\BorderRadius), así que se rechaza ENTERO con un único warning antes de tokenizar
+     * nada más (splitTopLevel() no sabe de '/', trataría "/ 20px" como tokens propios y produciría
+     * un error de shorthand confuso en vez de este mensaje específico).
+     *
+     * @return array<string, mixed>
+     */
+    private function expandBorderRadiusShorthand(string $value): array
+    {
+        if (str_contains($value, '/')) {
+            return $this->warn("Elliptical border-radius not supported: $value");
+        }
+        $parts = self::splitTopLevel(trim($value));
+        $lengths = array_map($this->parseLengthPercentage(...), $parts);
+        if ($parts === [] || in_array(null, $lengths, true) || count($lengths) > 4) {
+            return $this->warn("Unsupported shorthand for border-radius: $value");
+        }
+        /** @var list<LengthPercentage|CssLength|CalcExpr> $lengths */
+        foreach ($lengths as $length) {
+            if (self::rawValueOf($length) < 0.0) {
+                return $this->warn("Negative value not allowed for border-radius: $value");
+            }
+        }
+        [$tl, $tr, $br, $bl] = match (count($lengths)) {
+            1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
+            2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],
+            3 => [$lengths[0], $lengths[1], $lengths[2], $lengths[1]],
+            default => [$lengths[0], $lengths[1], $lengths[2], $lengths[3]],
+        };
+        return [
+            'border-top-left-radius' => $tl, 'border-top-right-radius' => $tr,
+            'border-bottom-right-radius' => $br, 'border-bottom-left-radius' => $bl,
+        ];
+    }
+
+    /**
+     * M8-T2: longhand individual -- UN solo valor (radio circular). Dos valores separados por
+     * espacio (`border-top-left-radius: 10px 20px`, la forma elíptica del longhand, css-
+     * backgrounds-3 §5) caen al mismo warning "elliptical... not supported" que el '/' del
+     * shorthand, en vez del warning genérico de shorthand -- mensaje distinto a propósito (no hay
+     * ningún shorthand aquí, un autor viendo "Unsupported shorthand" en un longhand sería confuso).
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBorderRadiusLonghand(string $property, string $value): array
+    {
+        $parts = self::splitTopLevel(trim($value));
+        if (count($parts) === 2) {
+            return $this->warn("Elliptical border-radius not supported for $property: $value");
+        }
+        if (count($parts) !== 1) {
+            return $this->warn("Unsupported $property: $value");
+        }
+        $length = $this->parseLengthPercentage($parts[0]);
+        if ($length === null) {
+            return $this->warn("Unsupported length for $property: $value");
+        }
+        if (self::rawValueOf($length) < 0.0) {
+            return $this->warn("Negative value not allowed for $property: $value");
+        }
+        return [$property => $length];
     }
 
     /**

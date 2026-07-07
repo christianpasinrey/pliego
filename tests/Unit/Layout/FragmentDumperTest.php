@@ -6,9 +6,11 @@ declare(strict_types=1);
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\ImageFragment;
+use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\FragmentDumper;
 use Pliego\Layout\Geometry\Rect;
@@ -117,6 +119,49 @@ it('dumps a box fragment with clipsChildren true (M7-T5 overflow:hidden, M8-T1 h
         'atomic' => false,
         'clipsChildren' => true,
         'children' => [],
+    ]);
+});
+
+// --- M8-T2: 'borderRadius' -- ADITIVA, omitida por completo cuando el radio es cero -----------
+
+it('omits the "borderRadius" key entirely for a box with the default zero radius (golden stability)', function () {
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], BorderSet::none());
+    $dump = new FragmentDumper()->dump($box);
+    expect($dump)->not->toHaveKey('borderRadius');
+});
+
+it('dumps a non-zero border-radius as a rounded {tl,tr,br,bl} object, right before "children"', function () {
+    $box = new BoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, [], BorderSet::none(), borderRadius: new BorderRadius(1.234, 2.0, 3.0, 4.0));
+    $dump = new FragmentDumper()->dump($box);
+    expect($dump)->toBe([
+        'type' => 'box',
+        'rect' => [0.0, 0.0, 100.0, 50.0],
+        'background' => null,
+        'borders' => null,
+        'atomic' => false,
+        'clipsChildren' => false,
+        'borderRadius' => ['tl' => 1.23, 'tr' => 2.0, 'br' => 3.0, 'bl' => 4.0],
+        'children' => [],
+    ]);
+});
+
+it('omits "borderRadius" for an inline-box with the default zero radius too', function () {
+    $box = new InlineBoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, BorderSet::none(), 1.0, true, true);
+    $dump = new FragmentDumper()->dump($box);
+    expect($dump)->not->toHaveKey('borderRadius');
+});
+
+it('dumps a non-zero border-radius on an inline-box, appended after isLastSlice', function () {
+    $box = new InlineBoxFragment(new Rect(0.0, 0.0, 100.0, 50.0), null, BorderSet::none(), 1.0, true, false, new BorderRadius(5.0, 0.0, 0.0, 5.0));
+    $dump = new FragmentDumper()->dump($box);
+    expect($dump)->toBe([
+        'type' => 'inline-box',
+        'rect' => [0.0, 0.0, 100.0, 50.0],
+        'background' => null,
+        'borders' => null,
+        'isFirstSlice' => true,
+        'isLastSlice' => false,
+        'borderRadius' => ['tl' => 5.0, 'tr' => 0.0, 'br' => 0.0, 'bl' => 5.0],
     ]);
 });
 

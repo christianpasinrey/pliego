@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Pdf;
 
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\PaperSize;
@@ -14,6 +15,10 @@ use Pliego\Paint\Canvas;
 final class PdfCanvas implements Canvas
 {
     private const float PX_TO_PT = 0.75;
+    /** css-backgrounds-3 §5 / M8-T2: constante estándar para aproximar un cuarto de círculo con
+     * UNA curva Bézier cúbica (4 curvas cubren las 4 esquinas de un rect) -- error máximo ~0.03%
+     * del radio, imperceptible. Ver PdfCanvas::roundedRectPathOps(). */
+    private const float BEZIER_K = 0.5522847498;
     private string $ops = '';
     /** @var array<string, int> resource name (e.g. "XO1") => object id, used by THIS page only */
     private array $xobjectRefs = [];
@@ -70,6 +75,37 @@ final class PdfCanvas implements Canvas
     }
 
     /**
+     * M8-T2 (css-backgrounds-3 §5): idéntico a fillRect() salvo por el path -- roundedRectPathOps()
+     * (4 líneas + hasta 4 curvas Bézier, k=BEZIER_K) en vez de un `re` puro, cerrado con `f`
+     * (nonzero winding, un único subpath simple no necesita even-odd). Painter solo llama a este
+     * método cuando el BorderRadius del fragmento NO es zero (ver su docblock) -- el caso
+     * zero-radius sigue siendo fillRect(), byte a byte idéntico a antes de esta tarea.
+     */
+    public function fillRoundedRect(Rect $rect, BorderRadius $radius, Color $color): void
+    {
+        $body = $this->rg($color) . "\n" . $this->roundedRectPathOps($rect, $radius) . "f\n";
+        $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
+     * M8-T2 (ISO 32000-1 §8.5.3.1, "Even-Odd Rule"): un ÚNICO path con DOS subpaths cerrados
+     * (outer, luego inner) rellenado con `f*` -- la regla par-impar cuenta cruces de raya: un
+     * punto DENTRO del outer pero FUERA del inner cruza el path UNA vez (impar -> se pinta); un
+     * punto dentro de AMBOS (el hueco interior) cruza DOS veces (par -> NO se pinta). El resultado
+     * es exactamente el anillo (outer menos inner) sin que este método tenga que calcular esa
+     * resta geométricamente -- la regla del propio operador de pintado la resuelve. Sin `q`/`W n`
+     * de por medio: esto PINTA directamente (a diferencia de clipRoundedRect()).
+     */
+    public function fillRoundedRectRing(Rect $outerRect, BorderRadius $outerRadius, Rect $innerRect, BorderRadius $innerRadius, Color $color): void
+    {
+        $body = $this->rg($color) . "\n"
+            . $this->roundedRectPathOps($outerRect, $outerRadius)
+            . $this->roundedRectPathOps($innerRect, $innerRadius)
+            . "f*\n";
+        $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
      * M7-T5 (ISO 32000-1 §8.5.4, "Clipping Path Operators"): `q` abre un scope propio (recortes
      * PDF son parte del graphics state, revertidos por el `Q` de restoreClip() -- nunca deben
      * "escaparse" al resto de la página), luego el rect en pt (misma transformación px CSS -> pt
@@ -107,6 +143,17 @@ final class PdfCanvas implements Canvas
     public function restoreClip(): void
     {
         $this->ops .= "Q\n";
+    }
+
+    /**
+     * M8-T2: variante de clipRect() para border-radius no-cero -- mismo scope q/W n (cerrado por
+     * el MISMO restoreClip()) pero con el path de esquinas redondeadas de roundedRectPathOps() en
+     * vez de un `re` puro, así que el recorte sigue la curva del border-box (ver el breadcrumb de
+     * M8-T1 en clipRect(), que anunciaba este método).
+     */
+    public function clipRoundedRect(Rect $rect, BorderRadius $radius): void
+    {
+        $this->ops .= "q\n" . $this->roundedRectPathOps($rect, $radius) . "W n\n";
     }
 
     public function fillText(TextFragment $text): void
@@ -260,5 +307,94 @@ final class PdfCanvas implements Canvas
     private function rgStroke(Color $color): string
     {
         return sprintf('%.3F %.3F %.3F RG', $color->r / 255, $color->g / 255, $color->b / 255);
+    }
+
+    /**
+     * M8-T2 (css-backgrounds-3 §5): construye el path de un rect de esquinas redondeadas -- `m`
+     * al punto justo a la derecha de la esquina superior-izquierda, luego (por cada lado, en
+     * sentido horario: top, right, bottom, left) una línea recta hasta justo ANTES de la
+     * siguiente esquina y, SI esa esquina tiene radio > 0, una curva `c` que la rodea; una esquina
+     * con radio 0 se salta la curva por completo (la línea del lado siguiente ya llega exactamente
+     * a ese punto, produciendo una esquina recta sin más código) -- así, una caja con SOLO alguna
+     * esquina redondeada (el caso de InlineBoxFragment por slice, ver su docblock) produce el
+     * número EXACTO de curvas que le corresponde, ni una de más. Termina con `h` (closepath),
+     * SIN el operador de pintado/recorte final -- eso lo decide el llamador (`f` en
+     * fillRoundedRect(), `f*` tras dos subpaths en fillRoundedRectRing(), `W n` en
+     * clipRoundedRect()).
+     *
+     * Cada curva usa el control point estándar de aproximación de un cuarto de círculo con una
+     * Bézier cúbica: partiendo del punto de tangencia sobre el lado recto, el primer control point
+     * se desplaza k×r HACIA la esquina (k=BEZIER_K); el segundo, ya en el lado perpendicular, se
+     * desplaza k×r DESDE la esquina hacia el punto final -- equivalente a "x ± r×(1-k)" medido
+     * desde el vértice geométrico de la esquina (fórmula citada en el brief), la misma cantidad
+     * expresada desde el otro extremo.
+     */
+    private function roundedRectPathOps(Rect $rect, BorderRadius $radius): string
+    {
+        $xLeft = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $xRight = $xLeft + $rect->width * self::PX_TO_PT;
+        $yBottom = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+        $yTop = $yBottom + $rect->height * self::PX_TO_PT;
+        $k = self::BEZIER_K;
+        $tl = $radius->tl * self::PX_TO_PT;
+        $tr = $radius->tr * self::PX_TO_PT;
+        $br = $radius->br * self::PX_TO_PT;
+        $bl = $radius->bl * self::PX_TO_PT;
+
+        $ops = sprintf("%.2F %.2F m\n", $xLeft + $tl, $yTop);
+
+        $ops .= sprintf("%.2F %.2F l\n", $xRight - $tr, $yTop);
+        if ($tr > 0.0) {
+            $ops .= sprintf(
+                "%.2F %.2F %.2F %.2F %.2F %.2F c\n",
+                $xRight - $tr + $k * $tr,
+                $yTop,
+                $xRight,
+                $yTop - $tr + $k * $tr,
+                $xRight,
+                $yTop - $tr,
+            );
+        }
+
+        $ops .= sprintf("%.2F %.2F l\n", $xRight, $yBottom + $br);
+        if ($br > 0.0) {
+            $ops .= sprintf(
+                "%.2F %.2F %.2F %.2F %.2F %.2F c\n",
+                $xRight,
+                $yBottom + $br - $k * $br,
+                $xRight - $br + $k * $br,
+                $yBottom,
+                $xRight - $br,
+                $yBottom,
+            );
+        }
+
+        $ops .= sprintf("%.2F %.2F l\n", $xLeft + $bl, $yBottom);
+        if ($bl > 0.0) {
+            $ops .= sprintf(
+                "%.2F %.2F %.2F %.2F %.2F %.2F c\n",
+                $xLeft + $bl - $k * $bl,
+                $yBottom,
+                $xLeft,
+                $yBottom + $bl - $k * $bl,
+                $xLeft,
+                $yBottom + $bl,
+            );
+        }
+
+        $ops .= sprintf("%.2F %.2F l\n", $xLeft, $yTop - $tl);
+        if ($tl > 0.0) {
+            $ops .= sprintf(
+                "%.2F %.2F %.2F %.2F %.2F %.2F c\n",
+                $xLeft,
+                $yTop - $tl + $k * $tl,
+                $xLeft + $tl - $k * $tl,
+                $yTop,
+                $xLeft + $tl,
+                $yTop,
+            );
+        }
+
+        return $ops . "h\n";
     }
 }

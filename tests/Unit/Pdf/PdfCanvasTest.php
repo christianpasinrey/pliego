@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 use Pliego\Css\Value\Color;
 use Pliego\Image\ImageLoader;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\PaperSize;
@@ -345,4 +346,70 @@ it('leaves NO residual gs state after an alpha\'d op: the very next opaque op st
     expect(substr_count($pdf, "q\n"))->toBe(1);
     expect(substr_count($pdf, "Q\n"))->toBe(1);
     expect(substr_count($pdf, '/GS1 gs'))->toBe(1);
+});
+
+// M8-T2 (css-backgrounds-3 §5): rounded rect paths -- 4 lines + 4 Bézier curves (k=0.5522847498).
+
+it('fillRoundedRect emits EXACTLY 4 "c" curve ops for a fully-rounded rect (one per corner)', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRoundedRect(new Rect(0, 0, 100, 100), new BorderRadius(20.0, 20.0, 20.0, 20.0), new Color(255, 0, 0));
+    });
+    expect(substr_count($pdf, " c\n"))->toBe(4);
+    expect(substr_count($pdf, " l\n"))->toBe(4);
+    expect($pdf)->toContain(" m\n")->toContain("h\nf\n");
+});
+
+// Hand-computed (brief: "control point arithmetic... x+r(1-k) formula") for the TOP-RIGHT corner
+// of a Rect(0,0,200,100) with a 40px (=30.00pt) radius on every corner: k*r = 30 * 0.5522847498 =
+// 16.568542... -> 16.57pt (2 decimals). The curve leaving the top edge starts at
+// (xRight-r, yTop) = (150.00-30.00, yTop) = (120.00, yTop) and its first control point is
+// (xRight - r*(1-k), yTop) = (150.00 - (30.00-16.57), yTop) = (136.57, yTop); the curve ends at
+// (xRight, yTop-r) = (150.00, yTop-30.00), with a symmetric second control point
+// (xRight, yTop - r*(1-k)) = (150.00, yTop-13.43).
+it('hand-computes the top-right corner control points via x+r(1-k) (k=0.5522847498)', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRoundedRect(new Rect(0, 0, 200, 100), new BorderRadius(40.0, 40.0, 40.0, 40.0), new Color(0, 0, 0));
+    });
+    $yTop = PaperSize::A4->heightPx() * 0.75;
+    expect($pdf)->toContain(sprintf('%.2F %.2F l', 120.00, $yTop));
+    expect($pdf)->toContain(sprintf('%.2F %.2F %.2F %.2F %.2F %.2F c', 136.57, $yTop, 150.00, $yTop - 13.43, 150.00, $yTop - 30.00));
+});
+
+it('draws a sharp (non-curved) corner with a straight line when its OWN radius is zero, even if other corners are rounded', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        // Only top-left (tl) is rounded; tr/br/bl are all 0.
+        $canvas->fillRoundedRect(new Rect(0, 0, 100, 100), new BorderRadius(tl: 20.0), new Color(0, 0, 0));
+    });
+    expect(substr_count($pdf, " c\n"))->toBe(1);
+});
+
+it('clipRoundedRect emits q + the rounded path + W n (no fill operator)', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->clipRoundedRect(new Rect(0, 0, 100, 100), new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    });
+    expect($pdf)->toContain("q\n");
+    expect(substr_count($pdf, " c\n"))->toBe(4);
+    expect($pdf)->toContain("h\nW n\n");
+    expect($pdf)->not->toContain("h\nf\n");
+});
+
+it('fillRoundedRectRing emits ONE f* fill with 2 subpaths (outer + inner), 8 curve ops total', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRoundedRectRing(
+            new Rect(0, 0, 100, 100),
+            new BorderRadius(20.0, 20.0, 20.0, 20.0),
+            new Rect(5, 5, 90, 90),
+            new BorderRadius(15.0, 15.0, 15.0, 15.0),
+            new Color(0, 0, 0),
+        );
+    });
+    expect(substr_count($pdf, " c\n"))->toBe(8);
+    expect($pdf)->toContain("h\nf*\n");
+});
+
+it('emits a /GSn gs for fillRoundedRect with an alpha color, same emitWithAlpha() contract as fillRect', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillRoundedRect(new Rect(0, 0, 100, 100), new BorderRadius(10.0, 10.0, 10.0, 10.0), new Color(255, 0, 0, 0.5));
+    });
+    expect($pdf)->toContain('/GS1 gs')->toContain('/ca 0.500');
 });

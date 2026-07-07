@@ -38,6 +38,17 @@ final readonly class BoxFragment implements Fragment
      * Ortogonal a $atomic: una caja puede ser clipsChildren sin ser un contenedor flex (el caso
      * normal, un <div> con overflow:hidden), y viceversa.
      */
+    /**
+     * M8-T2 (css-backgrounds-3 §5): $borderRadius llega YA resuelto a px y clampeado (§5.5) --
+     * ver Layout\Fragment\BorderRadius::fromCss(), invocado por cada FormattingContext que
+     * construye un BoxFragment a partir de un ComputedStyle propio (BlockFlowContext/
+     * FlexFormattingContext/TableFormattingContext). Default "new BorderRadius()" (PHP 8.1+ "new
+     * in initializers", sin argumentos -> las 4 esquinas caen a su propio default 0.0) para que
+     * los ~40 construction sites preexistentes (tests + GeometryShift/Paginator, ver grep) seguir
+     * compilando sin tocarlos: sin radio, el comportamiento de pintado es BYTE IDÉNTICO al de
+     * antes de esta tarea (ver Paint\Painter: $radius->isZero() hace caer el pintado por el mismo
+     * camino fillRect/paintBordersFlat pre-M8-T2).
+     */
     /** @param list<Fragment> $children */
     public function __construct(
         public Rect $rect,
@@ -47,6 +58,7 @@ final readonly class BoxFragment implements Fragment
         public bool $atomic = false,
         public float $opacity = 1.0,
         public bool $clipsChildren = false,
+        public BorderRadius $borderRadius = new BorderRadius(),
     ) {}
 
     public function rect(): Rect

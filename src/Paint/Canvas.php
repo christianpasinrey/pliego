@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Paint;
 
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 
@@ -12,6 +13,29 @@ use Pliego\Layout\Geometry\Rect;
 interface Canvas
 {
     public function fillRect(Rect $rect, Color $color): void;
+
+    /**
+     * M8-T2 (css-backgrounds-3 §5): idéntico contrato a fillRect(), pero el path es un
+     * rectángulo de esquinas redondeadas (4 líneas rectas + hasta 4 curvas Bézier, k=
+     * 0.5522847498 -- ver PdfCanvas) en vez de un `re` puro. $radius YA llega resuelto a px y
+     * clampeado (§5.5, ver Layout\Fragment\BorderRadius::fromCss()) -- este método nunca resuelve
+     * % ni aplica el clamp de solapes, solo dibuja el path con los 4 radios tal cual se le pasan.
+     * Painter solo llama a este método cuando $radius->isZero() es false; el caso zero sigue
+     * usando fillRect() sin cambios (mismos bytes que antes de esta tarea).
+     */
+    public function fillRoundedRect(Rect $rect, BorderRadius $radius, Color $color): void;
+
+    /**
+     * M8-T2 (css-backgrounds-3 §5, bordes con border-radius uniforme): pinta el ANILLO entre
+     * $outerRect/$outerRadius y $innerRect/$innerRadius (border-box exterior menos el border-box
+     * interior, ya reducido por el ancho de borde -- ver Paint\Painter::paintBorders()) como UN
+     * solo path con DOS subpaths (outer + inner) y regla par-impar (`f*`, ISO 32000-1 §8.5.3.1),
+     * que el propio operador ya deja resuelto en "outer menos inner" sin necesidad de que este
+     * Canvas calcule la resta geométricamente. Solo tiene sentido cuando los 4 lados de borde son
+     * IDÉNTICOS (mismo ancho/estilo/color) -- un ancho de borde heterogéneo con radius cae a la
+     * aproximación de 4 rects existente (ver Painter), que no usa este método.
+     */
+    public function fillRoundedRectRing(Rect $outerRect, BorderRadius $outerRadius, Rect $innerRect, BorderRadius $innerRadius, Color $color): void;
 
     public function fillText(TextFragment $text): void;
 
@@ -40,6 +64,16 @@ interface Canvas
      * después de pintar ese subárbol (mismo contrato q/Q que el resto de scopes de este Canvas).
      */
     public function clipRect(Rect $rect): void;
+
+    /**
+     * M8-T2: variante de clipRect() para overflow:hidden con border-radius no-cero -- mismo
+     * contrato q/W n/Q (ver clipRect()) pero el path es el rectángulo de esquinas redondeadas
+     * (ver fillRoundedRect()) en vez de un `re` puro, así que el recorte sigue la curva del
+     * border-box en vez de su bounding box (css-backgrounds-3 §5, el breadcrumb de M8-T1 en
+     * PdfCanvas::clipRect() anunciaba este método). Painter elige entre clipRect()/
+     * clipRoundedRect() según $fragment->borderRadius->isZero().
+     */
+    public function clipRoundedRect(Rect $rect, BorderRadius $radius): void;
 
     /** Cierra el scope de recorte abierto por la llamada a clipRect() inmediatamente anterior
      * (`Q`) — ver su docblock. */

@@ -12,6 +12,7 @@ use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -175,7 +176,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         if ($items === []) {
             $lineCross = $declaredContentHeight ?? 0.0;
             $height = $lineCross + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
-            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity);
+            $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
+            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius);
         }
 
         if ($style->flexDirection === FlexDirection::Column) {
@@ -237,7 +239,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         $contentBottom = $contentTop + $totalCross;
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity);
+        $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius);
     }
 
     /**
@@ -456,6 +459,10 @@ final readonly class FlexFormattingContext implements FormattingContext
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
+        // M8-T2: $borderRadius se PRESERVA tal cual (mismo criterio "geometry-only" que $atomic/
+        // $opacity/$clipsChildren arriba) -- ya venía resuelto/clampeado (§5.5) contra la altura
+        // NATURAL del fragmento original; este ajuste no lo re-resuelve contra la nueva altura
+        // (simplificación documentada, coherente con que este método tampoco re-layoutea nada más).
         return new BoxFragment(
             new Rect($fragment->rect->x, $fragment->rect->y, $fragment->rect->width, $height),
             $fragment->background,
@@ -464,6 +471,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius,
         );
     }
 
@@ -992,7 +1000,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         $contentBottom = $contentTop + $lineCross;
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity);
+        $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius);
     }
 
     /**
