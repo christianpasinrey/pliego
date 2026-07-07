@@ -1161,7 +1161,7 @@ parameters:
 		-
 			message: '#^Cannot access property \$lineHeightPx on mixed\.$#'
 			identifier: property.nonObject
-			count: 6
+			count: 12
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1323,13 +1323,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 158
+			count: 164
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 144
+			count: 150
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

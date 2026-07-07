@@ -97,6 +97,17 @@ final readonly class ComputedStyle
         public int $fontWeight,
         public FontStyle $fontStyle,
         public ?float $lineHeightPx,
+        // M10-T2 (navbar/card investigation, CSS 2.2 §10.8.1 / css-inline-3 §5.2): a `line-height`
+        // declared as a bare <number> (e.g. Bootstrap's `body{line-height:1.5}`) inherits AS THE
+        // NUMBER, not as its resolved px value at the declaring element -- css-inline-3 §5.2 is
+        // explicit: "if the property value is a <number>... the used value... is inherited [as
+        // that number]". null here means the CURRENT $lineHeightPx is an ABSOLUTE value (declared
+        // with a Length/%/em/rem/vw/vh/calc()/'normal', or inherited from an ancestor whose own
+        // line-height was itself absolute) that inherits UNCHANGED; a non-null float is the
+        // pending multiplier a descendant with a DIFFERENT own font-size must reapply against
+        // ITS OWN $fontSizePx, never blindly reuse the ancestor's already-resolved px (see
+        // compute()'s own line-height block for where this bit is set/consumed).
+        public ?float $lineHeightMultiplier,
         public TextAlign $textAlign,
         public bool $underline,
         // M7-T2 (CSS 2.2 §16.6, reducido a normal|pre): SÍ hereda (a diferencia de la mayoría de
@@ -349,6 +360,7 @@ final readonly class ComputedStyle
             ['default'],
             400,
             FontStyle::Normal,
+            null,
             null,
             TextAlign::Left,
             false,
@@ -652,9 +664,29 @@ final readonly class ComputedStyle
             default => $parent->textTransform,
         };
 
-        $lineHeightPx = $parent->lineHeightPx;
+        // M10-T2 fix (root cause found investigating fixture 07's card-row height, oracle task):
+        // when THIS element has no own `line-height` declaration, inheritance must reproduce
+        // css-inline-3 §5.2 exactly -- if the nearest ancestor's line-height was declared as a
+        // bare NUMBER (multiplier), that NUMBER (not its px, resolved against the ANCESTOR's own
+        // font-size) is what inherits, and it must be reapplied against THIS element's OWN
+        // $fontSizePx. Before this fix, a plain `$lineHeightPx = $parent->lineHeightPx` here
+        // carried the ancestor's ALREADY-RESOLVED px straight down regardless of a smaller/larger
+        // own font-size -- e.g. Bootstrap's `body{line-height:1.5}` (16px root -> 24px) leaking
+        // unchanged onto `.small`/`.card-text` (14px own font-size, should recompute to 21px, not
+        // stay at 24px) any time the descendant left line-height undeclared, which is the common
+        // case (only a handful of Bootstrap rules -- headings, .card-title, .badge -- declare
+        // their own line-height at all).
+        $lineHeightMultiplier = $parent->lineHeightMultiplier;
+        $lineHeightPx = $lineHeightMultiplier !== null
+            ? $lineHeightMultiplier * $fontSizePx
+            : $parent->lineHeightPx;
         if (array_key_exists('line-height', $declarations)) {
             $lineHeightValue = $declarations['line-height'];
+            // Only a bare <number> re-normalizes against a DESCENDANT's own font-size on further
+            // inheritance (see the property's own docblock) -- every other branch below resolves
+            // to an ABSOLUTE px (or null, for 'normal') at THIS element, so the multiplier resets
+            // to null for all of them, same as a declared Length/%/em/rem/vw/vh/calc() always has.
+            $lineHeightMultiplier = is_float($lineHeightValue) ? $lineHeightValue : null;
             $lineHeightPx = match (true) {
                 $lineHeightValue === null => null,
                 $lineHeightValue instanceof Length => $lineHeightValue->px,
@@ -1003,6 +1035,7 @@ final readonly class ComputedStyle
             $fontWeight,
             $fontStyle,
             $lineHeightPx,
+            $lineHeightMultiplier,
             $textAlign,
             $underline,
             $whiteSpace,

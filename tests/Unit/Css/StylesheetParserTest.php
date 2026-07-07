@@ -453,8 +453,22 @@ it('still skips @media only screen -- "only" does not make an otherwise-excluded
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
 
-it('skips a @media (min-width: ...) block, with one aggregated warning', function () {
+// --- M10-T2 (css-mediaqueries-4, reduced): real min-width/max-width evaluation -------------------
+// Detailed grammar coverage (rem/em, 'and', comma lists) lives in MediaQueryEvaluatorTest -- these
+// StylesheetParser-level tests only confirm the wiring: $pageWidthPx threads through to the parsed
+// ParseResult (block kept vs. dropped, warning aggregation unaffected). parse()'s default page
+// width is A4 (793.70px, same as Engine::render()'s real default paper) unless a caller threads a
+// different one explicitly (see the dedicated threading tests further below).
+
+it('applies a @media (min-width: ...) block that holds against the default (A4) page width', function () {
     $result = new StylesheetParser()->parse('@media (min-width: 768px) { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->warnings)->toBe([]);
+});
+
+it('skips a @media (min-width: ...) block that does not hold against the default (A4) page width', function () {
+    $result = new StylesheetParser()->parse('@media (min-width: 992px) { p { color: red } }');
     expect($result->rules)->toBe([]);
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
@@ -465,18 +479,41 @@ it('skips a plain @media screen block, with one aggregated warning', function ()
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
 
-it('skips @media (prefers-reduced-motion: reduce) (a feature query, not print/all)', function () {
+it('skips @media (prefers-reduced-motion: reduce) (an unknown feature query)', function () {
     $result = new StylesheetParser()->parse('@media (prefers-reduced-motion: reduce) { .x { color: red } }');
     expect($result->rules)->toBe([]);
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
 
 it('aggregates multiple skipped @media blocks into a SINGLE warning with the total count', function () {
-    $css = '@media (min-width: 768px) { a { color: red } } @media screen { b { color: blue } }
-        @media (max-width: 991.98px) { c { color: green } }';
+    $css = '@media (min-width: 1200px) { a { color: red } } @media screen { b { color: blue } }
+        @media (prefers-reduced-motion: reduce) { c { color: green } }';
     $result = new StylesheetParser()->parse($css);
     expect($result->rules)->toBe([]);
     expect($result->warnings)->toBe(['3 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('mixes applying and skipped @media blocks in the same sheet, aggregating only the skipped ones', function () {
+    $css = '@media (min-width: 768px) { a { color: red } } @media (min-width: 1200px) { b { color: blue } }
+        @media (max-width: 991.98px) { c { color: green } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect(array_map(static fn($r) => $r->declarations['color'], $result->rules))->toEqual([
+        new Color(255, 0, 0), new Color(0, 128, 0),
+    ]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('threads an explicit non-default page width into min-width/max-width evaluation', function () {
+    $css = '@media (min-width: 768px) { p { color: red } }';
+    // A narrow page (400px) makes a 768px min-width breakpoint NOT apply, unlike the A4 default.
+    $narrow = new StylesheetParser()->parse($css, 400.0);
+    expect($narrow->rules)->toBe([]);
+    expect($narrow->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+
+    $wide = new StylesheetParser()->parse($css, 1000.0);
+    expect($wide->rules)->toHaveCount(1);
+    expect($wide->warnings)->toBe([]);
 });
 
 it('preserves in-file author order across an applying @media block (rules before/inside/after keep ascending $order)', function () {

@@ -41,8 +41,14 @@ final class BoxTreeBuilder
     {
         $this->warnIfInlineStyleAttribute($element);
         $style = $styles->get($element);
-        $children = $this->collectChildren($element, $styles, $style);
-        if ($style->display === Display::Flex) {
+        $isFlex = $style->display === Display::Flex;
+        // M10-T2 (navbar investigation, css-flexbox-1 §4): $isFlex threads into collectChildren()
+        // so a DIRECT Display::Inline child is treated as its own flex item (blockified) instead
+        // of flattened into the InlineBoxStart/pending-run sequence — see collectChildren()'s own
+        // docblock for the full rationale (root cause of the navbar box-model mismatch this task
+        // investigated: two adjacent boxed inline siblings used to merge into ONE flex item).
+        $children = $this->collectChildren($element, $styles, $style, $isFlex);
+        if ($isFlex) {
             $children = $this->wrapAnonymousFlexItems($children, $style);
         }
         return new BlockBox($style, $children, strtolower($element->tagName), self::parseListStart($element));
@@ -73,9 +79,36 @@ final class BoxTreeBuilder
      * Display es Table construye un TableBox (buildTable()) en vez de recursar como BlockBox
      * plano — ver buildChildBox().
      *
+     * M10-T2 (navbar investigation, css-flexbox-1 §4 "each in-flow child of a flex container
+     * becomes a flex item"): $parentIsFlex (new, defaults false — buildTableCell()'s call site
+     * never passes it, a cell is not itself a flex container just because ITS ANCESTOR might be,
+     * see this method's own class docblock reference above) changes exactly ONE decision: when
+     * true AND a direct child is Display::Inline, that child is treated EXACTLY like a
+     * Display::Block child (flush + buildChildBox(), the same fallback branch a real block element
+     * already takes at the bottom of this method) instead of being flattened into the
+     * InlineBoxStart/pending-run sequence at all. Root cause this fixes (found investigating
+     * fixture 07's navbar, M10-T2's oracle task): `.navbar-brand`/`.navbar-text` (an `<a>`/`<span>`,
+     * UA-default Display::Inline, both with real Bootstrap padding) are two ADJACENT direct
+     * children of a `display:flex` container — before this fix, wrapAnonymousFlexItems() treated
+     * their InlineBoxStart/InlineBoxEnd tokens exactly like bare TextRun (see that method's own
+     * docblock), merging BOTH into ONE shared anonymous flex item instead of two separate ones,
+     * breaking both their cross-axis placement (justify-content:space-between never saw two items
+     * to space apart) and the container's auto height (one blended inline-flow line instead of two
+     * items each sized to their own line-height). Un-gated by hasVisibleInlineBox() -- this now
+     * also fixes the BOXLESS case (two plain `<span>`s with no box CSS at all), which the old
+     * flattened-sequence representation could never have told apart anyway (their boundary
+     * information is genuinely gone once flattened, see hasVisibleInlineBox()'s own docblock on
+     * the M7-T4 fast path this still reuses for the NON-flex-parent case).
+     *
+     * Documented, UNCHANGED scope: a Display::InlineBlock direct child of a flex container still
+     * coalesces into the shared anonymous item alongside adjacent text/inline content (same
+     * pending-run path as before this task) -- no verified regression traces to that case (fixture
+     * 07's navbar uses two Display::Inline elements, not inline-block), so widening the fix to
+     * cover it too is left out of this task's narrowly-verified scope.
+     *
      * @return list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd>
      */
-    private function collectChildren(\Dom\Element $element, StyleMap $styles, ComputedStyle $style): array
+    private function collectChildren(\Dom\Element $element, StyleMap $styles, ComputedStyle $style, bool $parentIsFlex = false): array
     {
         $children = [];
         /**
@@ -135,7 +168,7 @@ final class BoxTreeBuilder
                 $pending[] = $this->buildBlock($node, $styles);
                 continue;
             }
-            if ($childStyle->display === Display::Inline) {
+            if ($childStyle->display === Display::Inline && !$parentIsFlex) {
                 $this->warnIfUnsupportedSubOrSup($tag);
                 $this->warnIfFloatOrPositionOnInline($childStyle);
                 $hasBox = self::hasVisibleInlineBox($childStyle);
@@ -148,6 +181,10 @@ final class BoxTreeBuilder
                 }
                 continue;
             }
+            // M10-T2: a Display::Inline child falls through to here too when $parentIsFlex --
+            // buildChildBox() below builds it as its own top-level BlockBox (blockified flex
+            // item, see this method's own docblock), exactly like any Display::Block child always
+            // has.
             $flush();
             $children[] = $this->buildChildBox($node, $styles, $childStyle);
         }

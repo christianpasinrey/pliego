@@ -143,8 +143,21 @@ it('renders the real Bootstrap components page as a single valid page, with the 
     // inset box-shadow itself is still unsupported (M8) regardless of what color feeds it -- see
     // this file's class docblock for the honestly re-audited, narrower gap. A regression here
     // (count changing) means either the vendored sheet changed or something in parse/style/layout
-    // started handling one of these constructs differently.
-    expect($report->warnings)->toHaveCount(904);
+    // started handling one of these constructs differently. (904 post-M10-T1's `initial` fix.)
+    //
+    // M10-T2 (css-mediaqueries-4, reduced): 904 -> 1100 (+196), the EXACT same +196 delta as
+    // BootstrapIngestionTest's golden (unlike BootstrapPageTest's +195, this fixture's grid uses
+    // plain `.col` with no `row-cols-md-*` breakpoint class, so it has no atomic-fragment warning
+    // to lose -- see BootstrapPageTest's own docblock for that one-warning difference). Every one
+    // of the +196 warnings is a real Bootstrap responsive-utility declaration inside one of the 30
+    // @media blocks that now correctly apply at this page's A4 width (793.70px, exactly like
+    // Chrome printing an A4 page) -- min-width:576/768 and max-width:991.98/1199.98/1399.98 all
+    // hold, min-width:992/1200/1400 and max-width:575.98/767.98 do not (see
+    // MediaQueryEvaluatorTest for the grammar and StylesheetParserTest/BootstrapIngestionTest for
+    // the sheet-wide breakdown: +29 unsupported-keyword `position: sticky`, +42 unsupported-length
+    // `width/right: auto`, +106 unsupported-property-other `z-index`/`visibility`/`overflow-y`,
+    // +17 unsupported-property-transform, +2 unsupported-shorthand `margin: auto`).
+    expect($report->warnings)->toHaveCount(1100);
 });
 
 it('paints .btn-primary with real Bootstrap\'s own blue (#0d6efd), resolved through its full --bs-btn-bg/--bs-btn-color CSS-variable chain', function () {

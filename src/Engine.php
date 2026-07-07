@@ -133,7 +133,13 @@ final class Engine
             // (nikic/php-parser v4.19.1) no reconoce el encadenamiento sin paréntesis y
             // marca el fichero entero "Syntax Error", dejando sin cubrir el grafo de
             // dependencias de Engine (`--fail-on-uncovered` deja de verificar nada aquí).
-            $parseResult = (new StylesheetParser())->parse($this->assembledCss());
+            // M10-T2 (css-mediaqueries-4, reduced): the paper's own CSS-px WIDTH threads into
+            // StylesheetParser::parse() too, one line below where it already threads into
+            // StyleResolver for vw/vh (M10-T1, see that call's own comment) -- (min-width: N)/
+            // (max-width: N)/(width: N) media features evaluate against this SAME number
+            // (Css\MediaQueryEvaluator), so a print of this page at $this->paper's size sees
+            // exactly the breakpoints Chrome would apply printing a page of the same CSS-px width.
+            $parseResult = (new StylesheetParser())->parse($this->assembledCss(), $this->paper->widthPx());
             $document = HtmlParser::parse($html);
             // M5-T1 (housekeeping) + M6-T4: un ÚNICO WarningCollector, compartido entre
             // StyleResolver (var()/calc(), M6-T4), BoxTreeBuilder (imágenes),

@@ -411,6 +411,114 @@ it('recurses into a nested flex container, each level with its own anonymous ite
     expect($innerBlock->tag)->toBe('div');
 });
 
+// --- M10-T2 (navbar investigation, css-flexbox-1 §4): a Display::Inline ELEMENT child of a flex
+// container becomes its OWN flex item, never merged with an adjacent inline sibling -------------
+//
+// Root cause found while investigating fixture 07's navbar (oracle): `.navbar-brand`/`.navbar-text`
+// (an `<a>`/`<span>`, UA-default Display::Inline, both with real Bootstrap padding, so both used
+// to reach the InlineBoxStart/InlineBoxEnd path added by M7-T4) sit as two ADJACENT direct
+// children of `.navbar > .container-fluid` (itself `display:flex` via Bootstrap). Before this fix,
+// wrapAnonymousFlexItems() treated InlineBoxStart/InlineBoxEnd EXACTLY like bare TextRun/
+// LineBreakRun tokens (see its own docblock, M7-T4's `<span class="badge">x</span>` example) --
+// correct for a SINGLE loose inline child, but wrong once there are TWO adjacent boxed inline
+// siblings: both got folded into ONE shared anonymous flex item instead of becoming two separate
+// items, which broke BOTH their cross-axis alignment (justify-content:space-between never sees two
+// items to space apart) AND the container's auto height (a single merged inline-flow line uses one
+// blended line-height instead of each item sizing to its own font/line-height, see the M10-T2
+// report for the exact px delta this caused against Chrome).
+//
+// css-flexbox-1 §4: "each in-flow child of the flex container becomes a flex item" -- this holds
+// regardless of the child's OWN specified display (inline is blockified); only bare TEXT NODES
+// directly inside the flex container merge into a shared anonymous item. The fix: collectChildren()
+// now takes whether ITS OWN container is a flex container -- when it is, a Display::Inline child
+// is treated exactly like a Display::Block child (flush + buildChildBox(), same fallback branch
+// already used for real block elements), never entering the InlineBoxStart/pending token path at
+// all. Scope, documented: Display::InlineBlock direct children of a flex container are UNCHANGED
+// (still coalesced into the shared anonymous item, M7-T4's original documented behavior) -- no
+// verified regression traces to that case, so it stays out of this fix's scope.
+
+it('two adjacent Display::Inline children with their OWN visible box CSS (padding) each become a SEPARATE flex item, not one merged anonymous wrapper', function () {
+    $root = buildTree(
+        '<body><nav class="flex"><a class="brand">Brand</a><span class="text">Text</span></nav></body>',
+        '.flex { display: flex } .brand { padding: 4px } .text { padding: 8px }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(2);
+    [$brand, $text] = $flex->children;
+    assert($brand instanceof BlockBox && $text instanceof BlockBox);
+    expect($brand->tag)->toBe('a');
+    expect($text->tag)->toBe('span');
+    expect($brand->tag)->not->toBe('anonymous');
+    expect($text->tag)->not->toBe('anonymous');
+});
+
+it('a Display::Inline child of a flex container keeps its OWN computed style (padding survives, not the container-inherited anonymous style)', function () {
+    $root = buildTree(
+        '<body><div class="flex"><span class="badge">x</span></div></body>',
+        '.flex { display: flex } .badge { padding: 6px; color: #ff0000 }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(1);
+    $badge = $flex->children[0];
+    assert($badge instanceof BlockBox);
+    expect($badge->tag)->toBe('span');
+    expect($badge->style->paddingTop->value)->toBe(6.0);
+    expect($badge->style->color->r)->toBe(255);
+});
+
+it('loose text directly in a flex container still merges into ONE shared anonymous item, unaffected by the per-element inline fix', function () {
+    $root = buildTree(
+        '<body><div class="flex">hello <span class="badge">x</span> world</div></body>',
+        '.flex { display: flex } .badge { padding: 6px }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    // Three items: the loose "hello " text, the boxed <span> (its own item), the loose " world"
+    // text -- exactly like a real BlockBox/ImageBox already cut a text run in two (M4-T2's own
+    // "wraps a mixed text+div+img flex container" test just above), a boxed inline sibling now
+    // does too.
+    expect($flex->children)->toHaveCount(3);
+    [$before, $badge, $after] = $flex->children;
+    assert($before instanceof BlockBox && $badge instanceof BlockBox && $after instanceof BlockBox);
+    expect($before->tag)->toBe('anonymous');
+    expect($badge->tag)->toBe('span');
+    expect($after->tag)->toBe('anonymous');
+});
+
+it('an inline element with NO visible box CSS inside a flex container ALSO becomes its own item now (blockified per spec, not just the boxed case)', function () {
+    $root = buildTree(
+        '<body><div class="flex"><span>a</span><span>b</span></div></body>',
+        '.flex { display: flex }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    // Before this fix, two boxless <span>s would have flattened into ONE shared anonymous item
+    // (M7-T4's original fast path never distinguished element boundaries at all for boxless
+    // inline content) -- collectChildren() now treats EVERY Display::Inline direct child of a
+    // flex container as its own item, boxed or not, so this also gets the fix.
+    expect($flex->children)->toHaveCount(2);
+    [$a, $b] = $flex->children;
+    assert($a instanceof BlockBox && $b instanceof BlockBox);
+    expect($a->tag)->toBe('span');
+    expect($b->tag)->toBe('span');
+});
+
+it('Display::InlineBlock direct children of a flex container still coalesce into a shared anonymous item (documented, unchanged scope)', function () {
+    $root = buildTree(
+        '<body><div class="flex"><span class="ib">a</span><span class="ib">b</span></div></body>',
+        '.flex { display: flex } .ib { display: inline-block }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(1);
+    $anon = $flex->children[0];
+    assert($anon instanceof BlockBox);
+    expect($anon->tag)->toBe('anonymous');
+    expect($anon->children)->toHaveCount(2);
+});
+
 // M5-T3: css-tables-3 §2 — un elemento con Display::Table (UA default para <table>, ver
 // ComputedStyle::TABLE_DISPLAY_BY_TAG del M5-T2) construye un TableBox en vez de un BlockBox
 // plano; sus filas <tr> reales construyen TableCellBox por cada td/th. thead/tbody son

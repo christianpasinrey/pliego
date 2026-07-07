@@ -67,11 +67,11 @@ insensitive family lookup) — everything a Bootstrap-derived `.card`/`.btn`/
 `.badge`/`.display-*` document needs to look, not just lay out, like the
 real thing. M9 closes the loop opened by M6-M8's hand-picked "Bootstrap-
 flavored" CSS: it ingests the **real, unmodified, vendored upstream
-`bootstrap.min.css` (5.3.6)** end to end (870 warnings from parsing the
-232KB sheet alone as of M10-T1 — 895 as of M9, before `vw`/`vh` and
-`:nth-of-type`/`:nth-last-of-type` gained real support, see below — every
-one categorized and pinned as a golden — a
-complete, honest partition, not a sample), exposes it as
+`bootstrap.min.css` (5.3.6)** end to end (1066 warnings from parsing the
+232KB sheet alone as of M10-T2 — 870 as of M10-T1, 895 as of M9, before
+`vw`/`vh`, `:nth-of-type`/`:nth-last-of-type` and width `@media` queries
+gained real support, see below — every one categorized and pinned as a
+golden — a complete, honest partition, not a sample), exposes it as
 `Engine::bootstrap()` (a preset that stacks author-order before your own
 `->stylesheet()` calls, see [Presets](#presets)), adds the two PDF primitives
 a real striped/gradiented Bootstrap page actually needs — `PatternType 1`
@@ -104,19 +104,29 @@ used, and adds the couple of PDF primitives that stylesheet actually needs.
   same-specificity overrides win by cascade order alone, no `!important`
   needed. Full detail, including what it deliberately does **not** do (no
   JS, no sheet rewriting), in [Presets](#presets).
-- **Honest capability audit**: parsing the vendored sheet alone produces 870
-  warnings (M10-T1; 895 as of M9 — `vw`/`vh` viewport units and
-  `:nth-of-type`/`:nth-last-of-type` gained real support in M10-T1,
-  css-values-4 §5.1.1 / Selectors-4 §14.4, removing 25 of the old 895:
-  9 "Unsupported length" + 15 "Invalid calc() expression" for `vw`/`vh`, plus
-  1 "Pseudo-class not supported yet: :nth-of-type"), every one bucketed by a
+- **Honest capability audit**: parsing the vendored sheet alone produces
+  1066 warnings (M10-T2; 870 as of M10-T1, 895 as of M9). M10-T1 removed 25
+  of the old 895 (`vw`/`vh` viewport units and `:nth-of-type`/
+  `:nth-last-of-type` gaining real support, css-values-4 §5.1.1 /
+  Selectors-4 §14.4: 9 "Unsupported length" + 15 "Invalid calc() expression"
+  for `vw`/`vh`, plus 1 "Pseudo-class not supported yet: :nth-of-type").
+  M10-T2 ADDS 196 (real `min-width`/`max-width` evaluation against the
+  page's own CSS-px width, `Css\MediaQueryEvaluator` — 30 of the sheet's
+  108 non-print/all `@media` blocks now genuinely apply at A4 width instead
+  of being uniformly skipped, e.g. Bootstrap's `.row-cols-md-3` responsive
+  grid; those 30 blocks' own real declarations surface 196 genuinely new
+  instances of already-documented gaps — `position: sticky`, `width: auto`,
+  `z-index`, `transform`, `margin: auto` shorthand — not new KINDS of gaps,
+  see `MediaQueryEvaluatorTest`/`BootstrapIngestionTest` for the exact
+  per-category breakdown), every one bucketed by a
   regex-per-category classifier and pinned as a golden snapshot with a
   `'other'`-must-be-empty safety net (i.e. a *complete* partition, not a
-  sample) — `@media` blocks (skipped as a single aggregate warning, not one
-  per block), unknown/unsupported pseudo-classes, unsupported
-  properties/keywords/lengths/colors, invalid `calc()` expressions. Rendering
-  an actual page pushes the count higher still (904 for the M9-T2 component
-  showcase, 1045 for the full page used as oracle fixture 07) as more
+  sample) — `@media` blocks that don't apply (skipped as a single aggregate
+  warning, not one per block), unknown/unsupported pseudo-classes,
+  unsupported properties/keywords/lengths/colors, invalid `calc()`
+  expressions. Rendering an actual page pushes the count higher still (1100
+  for the M9-T2 component showcase, 1240 for the full page used as oracle
+  fixture 07) as more
   declarations get resolved against real elements (unresolved `var()`
   chains, atomic flex fragments taller than a page, …) — this is the *whole
   point*: pliego tells you exactly what it didn't understand instead of
@@ -931,9 +941,14 @@ What it does:
 What it does **not** do:
 
 - It doesn't add Bootstrap's JS (no interactivity exists in a PDF) or any
-  `:hover`/`:focus`/responsive breakpoint behavior — this engine targets a
-  single paged medium, so screen-only `@media` rules are dropped and dynamic
-  pseudo-classes are permanently excluded (see the M9 warning audit).
+  `:hover`/`:focus` behavior — dynamic pseudo-classes are permanently
+  excluded (see the M9 warning audit) and `screen`-typed `@media` rules
+  (and any feature this engine doesn't evaluate — `hover`,
+  `prefers-reduced-motion`, `prefers-color-scheme`, …) are dropped. Width
+  breakpoints (`min-width`/`max-width`/`width`, M10-T2) DO genuinely
+  evaluate, though, against the page's own CSS-px width (`Css\
+  MediaQueryEvaluator`) — the same width Chrome would use printing a page
+  of that size, no viewport/device emulation involved.
 - It doesn't rewrite or subset the vendored sheet — the file is the real,
   unmodified upstream release; unsupported constructs (inset `box-shadow`,
   `transform`, …) simply warn and get skipped, same as any CSS you'd write
@@ -995,10 +1010,10 @@ aspirational targets:
 | 01 | Typography | Headings/paragraphs/lists, DejaVu Sans regular+bold+italic, numeric line-heights | 0.790% | 1.5% | Sub-pixel text metric rounding only; no structural gap |
 | 02 | Table striped | `border-collapse`, `:nth-child(odd)` striping, auto column widths | 3.270% | 4.0% | `border-collapse` unsupported (separated-borders model always used) + the auto column-width algorithm's own rounding |
 | 03 | Card, buttons, badges | `border-radius`, `box-shadow`, inline-block `.btn`/`.badge` | 1.529% | 2.5% | Approximated (non-Gaussian, 4-layer) `box-shadow` blur vs. Chrome's real blur convolution |
-| 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 1.471% | 2.0% | Minor cross-axis rounding in the flex subset |
+| 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 0.089% | 0.5% | Near pixel-perfect since M10-T2's flex-item fix (was 1.471%/2.0% — two adjacent inline elements inside a flex container used to merge into ONE flex item instead of two, see fixture 07's own row below) |
 | 05 | Blockquote / monospace | `blockquote`, `pre`/`code`, `white-space: pre` | 0.144% | 1.0% | Near pixel-perfect — smallest, simplest fixture |
 | 06 | Gradients / shadows | Linear/radial `/Shading` gradients, `box-shadow` | 0.151% | 1.0% | Near pixel-perfect — native PDF shadings match Chrome's own gradient rendering closely |
-| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 5.654% | 5.5% (stale, see below) | **Still the worst fixture, for a different reason now.** Pre-M10-T1, `vw` had no meaning in this engine — `h1,.h1{font-size:calc(1.375rem + 1.5vw)}` (and h2-h6 likewise) was rejected outright, so every heading fell back to the plain UA stylesheet's `h1{font-size:2em;font-weight:bold}` (diff was 4.665-4.704% then). M10-T1 (css-values-4 §5.1.1) resolves `vw`/`vh` against the paper's own CSS-px size, the SAME 794×1123 viewport `tools/oracle/render-chrome.mjs` already used for Chrome's screenshot — headings now use Bootstrap's real fluid size instead of the UA fallback, a genuine correctness fix. The measured diff went UP anyway (4.665% → 5.654%, now over the not-yet-recalibrated 5.5% threshold): a font-size change this early in a long, single-page document reflows every line below it, and pixel-diff metrics are sensitive to *any* cumulative vertical drift regardless of which rendering is more "correct" per-declaration. Threshold recalibration against this new, more-correct baseline is deliberately deferred (M10-T2) rather than done reflexively alongside the fix. |
+| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 2.641% | 3.5% | **Was still the worst fixture through M10-T1; three real fixes later (M10-T2), it comfortably passes.** History: 4.665% (pre-M10-T1) → 5.654% (M10-T1's `vw`/`vh` fix, a genuine correctness win for headings that UNMASKED a pre-existing, unrelated navbar bug instead of fixing it — see M10-T1's own report) → 5.558% (M10-T2 PART 1, real `min-width`/`max-width` evaluation against the page's own 793.70px A4 width — `Css\MediaQueryEvaluator`, e.g. Bootstrap's `.row-cols-md-3` grid now genuinely applies) → 5.523% (M10-T2 PART 2's navbar fix — see below — barely moved 07's own number because a second, larger issue below the navbar dominated the diff mass by then) → **2.641%** (a line-height inheritance fix found while investigating why the navbar fix barely moved the number). Two real M10-T2 root causes, found via `tools/oracle/probe-*.mjs` (Playwright `getComputedStyle()` dumps, not part of the oracle pipeline) diffed against `Layout\FragmentDumper` dumps of pliego's own box tree: (1) `Box\BoxTreeBuilder`'s flex-item construction merged TWO adjacent `Display::Inline` children (`.navbar-brand`/`.navbar-text`, both real elements with their own Bootstrap padding) into ONE shared anonymous flex item instead of two separate ones (css-flexbox-1 §4 violation) — pliego's navbar rendered 40px tall against Chrome's real 56px, now hand-verified identical; (2) `Style\ComputedStyle`'s line-height inheritance carried an ancestor's ALREADY-RESOLVED px value straight down the tree instead of re-deriving a bare-NUMBER `line-height` (css-inline-3 §5.2 — e.g. Bootstrap's `body{line-height:1.5}`) against each descendant's OWN font-size: `.small`/`.card-text` (14px) inherited the body's 24px (16×1.5) unchanged instead of the correct 21px (14×1.5), a small per-line drift that compounded across every line below the card row into the fixture's dominant remaining diff mass. Both fixes are general (not fixture-07-specific): the flex-item fix alone dropped fixture 04 (a flex-layout fixture unrelated to Bootstrap) from 1.471% to 0.089%. |
 
 Fixture 07 is deliberately kept to content that still fits **one** page
 (`OracleFixturesSmokeTest.php` hard-requires every oracle fixture to render

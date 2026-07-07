@@ -1,5 +1,5 @@
 {
-    "total": 870,
+    "total": 1066,
     "byCategory": {
         "box-shadow-limitation": 8,
         "invalid-calc": 2,
@@ -14,12 +14,12 @@
         "unsupported-border-component": 2,
         "unsupported-color": 6,
         "unsupported-font-weight": 14,
-        "unsupported-keyword": 39,
-        "unsupported-length": 63,
+        "unsupported-keyword": 68,
+        "unsupported-length": 105,
         "unsupported-line-height": 3,
-        "unsupported-property-other": 308,
-        "unsupported-property-transform": 17,
-        "unsupported-shorthand": 1,
+        "unsupported-property-other": 414,
+        "unsupported-property-transform": 34,
+        "unsupported-shorthand": 3,
         "unsupported-text-align": 7,
         "unsupported-text-decoration": 2,
         "unsupported-vertical-align": 14

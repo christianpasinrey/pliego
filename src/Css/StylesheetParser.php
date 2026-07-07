@@ -35,26 +35,31 @@ use Sabberworm\CSS\Parser as SabberwormParser;
  * css principal); @media en cambio necesita DECIDIR si su contenido vuelve a quedar en el css que
  * sabberworm procesará (medium aplica) o se descarta (no aplica) -- ver resolveMediaBlocks().
  *
- * Adjudicado (RESTRICCIONES GLOBALES M9-T2): evaluación de media query MÍNIMA, sin listas de
- * features reales -- 'print' y 'all' (case-insensitive, ignorando espacios) APLICAN sus reglas al
- * mismo nivel de autor que el resto de la hoja (orden de documento preservado, ver más abajo);
- * M10-T1 (css-mediaqueries-3 §2.3): un prefijo 'only' (p.ej. 'only print'/'only all') se
- * NORMALIZA fuera antes de esa comparación -- 'only' no aporta semántica de evaluación propia
- * (solo existe para ocultar la query completa a UAs pre-css3), así que 'only print'/'only all'
- * aplican exactamente igual que 'print'/'all' sin el prefijo, y 'only screen' sigue sin aplicar,
- * igual que 'screen' a secas (ver mediaQueryApplies());
- * cualquier otra cosa (`screen`, cualquier feature-query entre paréntesis como
- * `(min-width: 768px)`, `(prefers-reduced-motion: reduce)`, `hover`, etc.) se DESCARTA en
- * silencio, sin logging individual -- solo UN warning agregado al final de parse() con el total de
- * bloques descartados (bootstrap real dispara ~108 de estos; un warning por bloque sería ruido
- * puro, no información accionable). @media anidado hereda la decisión del @media exterior: si el
- * exterior no aplica, su cuerpo entero se descarta sin mirar dentro (ni siquiera para contar
- * anidados por separado -- "1 bloque descartado", no "1 + los que tuviera dentro"); si el exterior
- * SÍ aplica, cualquier @media anidado en su cuerpo se evalúa de forma independiente y recursiva
- * (puede perfectamente ser `@media print { @media (hover: hover) { ... } }`, descartándose solo el
- * anidado). "Aplican al mismo nivel de autor, orden preservado" se logra literalmente: el cuerpo de
- * un bloque que aplica se PEGA de vuelta en el css, en el mismo sitio donde estaba el `@media
- * print { ... }` -- así StylesheetParser::parse() ve un css COMPLETAMENTE PLANO (sin @media
+ * Adjudicado (RESTRICCIONES GLOBALES M9-T2): evaluación de media query -- 'print' y 'all'
+ * (case-insensitive, ignorando espacios) APLICAN sus reglas al mismo nivel de autor que el resto
+ * de la hoja (orden de documento preservado, ver más abajo); M10-T1 (css-mediaqueries-3 §2.3): un
+ * prefijo 'only' (p.ej. 'only print'/'only all') se NORMALIZA fuera antes de esa comparación --
+ * 'only' no aporta semántica de evaluación propia (solo existe para ocultar la query completa a
+ * UAs pre-css3), así que 'only print'/'only all' aplican exactamente igual que 'print'/'all' sin
+ * el prefijo, y 'only screen' sigue sin aplicar, igual que 'screen' a secas.
+ * M10-T2 (css-mediaqueries-4, reducido): la evaluación en sí se EXTRAE a MediaQueryEvaluator (ya no
+ * vive en este fichero, ver esa clase para la gramática completa) y deja de ser dos-valores-fijos --
+ * `(min-width: N)`/`(max-width: N)`/`(width: N)` (px/rem/em) se comparan REALMENTE contra el ancho
+ * de página en CSS px ($pageWidthPx, threadeado desde Engine::render() -> parse(), MISMO patrón que
+ * vw/vh de M10-T1 -- ver parse()'s propio parámetro), y combinadores 'and'/listas separadas por
+ * comas (OR) se resuelven de verdad. `screen` (sola o combinada) sigue sin aplicar NUNCA, y
+ * cualquier feature desconocida (`hover`, `prefers-reduced-motion`, `prefers-color-scheme`, ...)
+ * sigue siendo un DESCARTE conservador -- sin logging individual, solo UN warning agregado al
+ * final de parse() con el total de bloques descartados (bootstrap real dispara 78 de estos tras
+ * esta tarea, ver MediaQueryEvaluatorTest/BootstrapIngestionTest para el desglose exacto; antes de
+ * esta tarea eran 108, todos los no-print/all). @media anidado hereda la decisión del @media
+ * exterior: si el exterior no aplica, su cuerpo entero se descarta sin mirar dentro (ni siquiera
+ * para contar anidados por separado -- "1 bloque descartado", no "1 + los que tuviera dentro"); si
+ * el exterior SÍ aplica, cualquier @media anidado en su cuerpo se evalúa de forma independiente y
+ * recursiva (puede perfectamente ser `@media print { @media (hover: hover) { ... } }`, descartándose
+ * solo el anidado). "Aplican al mismo nivel de autor, orden preservado" se logra literalmente: el
+ * cuerpo de un bloque que aplica se PEGA de vuelta en el css, en el mismo sitio donde estaba el
+ * `@media print { ... }` -- así StylesheetParser::parse() ve un css COMPLETAMENTE PLANO (sin @media
  * supervivientes) en el mismo orden textual del fichero original, y el $order++ de siempre (ver
  * parse()) cae exactamente donde caería sin este paso.
  */
@@ -67,13 +72,31 @@ final class StylesheetParser
     ];
     private const array PAGE_MARGIN_LONGHANDS = ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'];
 
-    public function parse(string $css): ParseResult
+    /**
+     * M10-T2 (css-mediaqueries-4, reduced): default page width for a parse() call that doesn't
+     * thread one explicitly (mostly tests, plus UserAgentStylesheet::css() which has no @media at
+     * all) — A4 in CSS px, SAME literal/formula StyleResolver's own DEFAULT_PAGE_WIDTH_PX and
+     * Page\PaperSize::widthPx() use, duplicated here because Css cannot depend on Page (deptrac
+     * boundary, see that class's own docblock for the identical reasoning). Engine::render()
+     * threads the REAL configured paper width explicitly (see its own call site) — this default
+     * only matters for callers that don't.
+     */
+    private const float DEFAULT_PAGE_WIDTH_PX = 210.0 / 25.4 * 96.0;
+
+    private readonly MediaQueryEvaluator $mediaQueryEvaluator;
+
+    public function __construct()
+    {
+        $this->mediaQueryEvaluator = new MediaQueryEvaluator();
+    }
+
+    public function parse(string $css, float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX): ParseResult
     {
         $css = $this->stripComments($css);
         // M9-T2: @media resuelto ANTES de @font-face/@page (ver docblock de clase) -- un bloque
         // `@media print { @font-face { ... } }` (raro, pero legal) debe quedar aplanado a un
         // `@font-face` de nivel superior para que extractAtRuleBlocks() lo vea a continuación.
-        [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css);
+        [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css, $pageWidthPx);
         [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
         $fontFaceRules = [];
         $fontFaceWarnings = [];
@@ -313,7 +336,7 @@ final class StylesheetParser
      *
      * @return array{0: string, 1: int} [cssConMediaResuelto, bloquesDescartadosTotal]
      */
-    private function resolveMediaBlocks(string $css): array
+    private function resolveMediaBlocks(string $css, float $pageWidthPx): array
     {
         $skipped = 0;
         $offset = 0;
@@ -326,8 +349,8 @@ final class StylesheetParser
                 break;
             }
             $body = substr($css, $openBrace + 1, $closeBrace - $openBrace - 1);
-            if ($this->mediaQueryApplies($query)) {
-                [$resolvedBody, $nestedSkipped] = $this->resolveMediaBlocks($body);
+            if ($this->mediaQueryEvaluator->applies($query, $pageWidthPx)) {
+                [$resolvedBody, $nestedSkipped] = $this->resolveMediaBlocks($body, $pageWidthPx);
                 $skipped += $nestedSkipped;
                 $css = substr($css, 0, $matchStart) . $resolvedBody . substr($css, $closeBrace + 1);
             } else {
@@ -337,38 +360,6 @@ final class StylesheetParser
             $offset = $matchStart;
         }
         return [$css, $skipped];
-    }
-
-    /**
-     * Evaluación MÍNIMA adjudicada (RESTRICCIONES GLOBALES M9-T2, ver docblock de clase): una media
-     * query list (css-mediaqueries-3, separada por comas -- cualquier query de la lista que aplique
-     * hace que toda la lista aplique, semántica OR) aplica si y solo si alguna de sus queries,
-     * normalizada (trim + minúsculas), es exactamente 'all' o 'print'. CUALQUIER feature-query entre
-     * paréntesis (min-width/max-width/hover/prefers-color-scheme/...), 'screen', o cualquier combinación de
-     * ambos (p.ej. "screen and (min-width: 768px)") no aplica -- no hay evaluación real de
-     * features (bootstrap.min.css real no las necesita para imprimirse correctamente: sus
-     * breakpoints responsive son, por definición, irrelevantes en un documento paginado de tamaño
-     * fijo). Explode(',', ...) es seguro aquí: ninguna media feature real usa una coma dentro de sus
-     * paréntesis (a diferencia de una lista de valores CSS normal), así que no hay riesgo de partir
-     * una query compuesta por la mitad.
-     */
-    private function mediaQueryApplies(string $query): bool
-    {
-        foreach (explode(',', $query) as $part) {
-            $normalized = strtolower(trim($part));
-            // M10-T1 (css-mediaqueries-3 §2.3, 'only' normalization): the 'only' prefix exists
-            // purely to hide a media-type-plus-feature query from pre-css3 UAs that would
-            // otherwise apply just the leading type and ignore the feature -- it carries no
-            // evaluation semantics of its own. 'only print'/'only all' apply exactly like
-            // 'print'/'all' without the prefix; 'only screen' still does NOT apply, exactly like
-            // bare 'screen' -- stripping the prefix before the two-value comparison below handles
-            // both cases uniformly, with no separate branch needed.
-            $normalized = preg_replace('/^only\s+/', '', $normalized) ?? $normalized;
-            if ($normalized === 'all' || $normalized === 'print') {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

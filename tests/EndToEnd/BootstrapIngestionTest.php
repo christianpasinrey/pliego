@@ -16,7 +16,11 @@ use Pliego\Css\StylesheetParser;
  *     StylesheetParser -- no exception, bounded time (a real timeout/hang would mean some
  *     brace-matcher or regex went quadratic on ~230KB of real-world minified CSS, the whole point
  *     of testing against something bigger than our own hand-written fixtures).
- *  2. Warning audit: every one of the ~900 warnings the real sheet produces gets bucketed by a
+ *  2. Warning audit: every one of the ~1066 warnings the real sheet produces (M10-T2: min-width/
+ *     max-width media features now evaluated for real against the page's CSS-px width, see
+ *     Css\MediaQueryEvaluator -- 30 of bootstrap.min.css's 108 non-print/all @media blocks now
+ *     apply at A4 width instead of being uniformly skipped, surfacing genuinely new instances of
+ *     already-documented gaps from their real declarations) gets bucketed by a
  *     regex-per-category classifier (bootstrapIngestionCategorizeWarning() below) and the resulting
  *     category => count table is pinned as a golden snapshot, WITH a total -- this is the "honest
  *     capability audit" the milestone asks for: a stable, at-a-glance map of exactly what real
