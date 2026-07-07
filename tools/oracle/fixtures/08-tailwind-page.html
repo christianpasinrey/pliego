@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- M10-T5: the real vendored Tailwind v4.3.2 CLI build (tests/Fixtures/tailwind/tailwind-output.css,
+     M10-T3), pulled in via <link> -- same convention as fixture 07's real Bootstrap sheet (a real
+     consumer's own document would <link> its build too; Playwright's file:// navigation resolves this
+     relative href exactly like a real page load, see render-chrome.mjs's own docblock). Every class
+     used below was hand-verified present in that exact vendored build (grep the file, don't guess --
+     Tailwind v4's CLI content-scans, so a class not in the build silently no-ops for pliego while
+     Chrome sees nothing either, hiding a real gap rather than exercising it).
+     Landmines DELIBERATELY avoided (see m10-task-3-report.md / m10-task-4-report.md's own findings,
+     and the README's "what doesn't, and why" Tailwind section): no `hover:`/`odd:`/`even:`-style
+     variant classes (SelectorParser can't match Tailwind's backslash-escaped `\:` in the class name);
+     no fraction classes (`w-1/2`); no grid utilities (`grid`, `grid-cols-*`); no all-sides `border`/
+     `border-{color}` shorthand (`.border`, `.border-slate-300` -- DeclarationParser only recognizes
+     the 4-part per-side longhands, `border-t`/`border-b-2` below are exactly that, deliberately
+     colorless so no all-sides `border-color` declaration is ever emitted). -->
+<link rel="stylesheet" href="../../../tests/Fixtures/tailwind/tailwind-output.css">
+<style>
+  /* DejaVu Sans loaded as a real @font-face in BOTH engines (Chrome here, pliego via the same rule
+     parsed by StylesheetParser), AFTER the <link> so both renderers pick the exact same glyph
+     outlines/metrics -- same pattern as fixture 07. Applied directly on body: the vendored build has
+     no `font-sans` utility class in its content-scanned surface (checked), so there is no Tailwind
+     class to hang this on; a plain author rule is the honest equivalent of a real consumer setting
+     their own `font-family` override, same shape as fixture 07's `--bs-body-font-family` override. */
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans.ttf); font-weight: 400; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Bold.ttf); font-weight: 700; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Oblique.ttf); font-weight: 400; font-style: italic; }
+  @page { margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body { width: 794px; font-family: 'DejaVu Sans', sans-serif; }
+</style>
+</head>
+<body class="bg-white">
+  <div class="bg-slate-900 p-4">
+    <div class="flex flex-row items-center justify-between">
+      <span class="text-xl font-bold tracking-wide uppercase text-white">Pliego Reports</span>
+      <span class="text-sm text-white">Tailwind Fixture 08</span>
+    </div>
+  </div>
+
+  <div class="p-4">
+    <div class="text-2xl font-bold tracking-wide text-slate-900 mb-2">Quarterly Snapshot</div>
+    <div class="text-sm text-slate-700 leading-normal mb-3">A real Tailwind v4 utility page: rounded shadow cards, colored buttons, spacing and gap utilities, flex rows, an uppercase tracked heading and a simple table &mdash; the oracle's 8th fixture.</div>
+
+    <div class="flex flex-row gap-4 mb-3">
+      <div class="bg-slate-50 rounded-lg shadow-md p-4">
+        <div class="text-xs font-semibold tracking-wide uppercase text-slate-700">Revenue</div>
+        <div class="text-2xl font-bold text-slate-900">$128,400</div>
+      </div>
+      <div class="bg-slate-50 rounded-lg shadow-md p-4">
+        <div class="text-xs font-semibold tracking-wide uppercase text-slate-700">Churn</div>
+        <div class="text-2xl font-bold text-slate-900">2.1%</div>
+      </div>
+      <div class="bg-slate-50 rounded-lg shadow-md p-4">
+        <div class="text-xs font-semibold tracking-wide uppercase text-slate-700">Growth</div>
+        <div class="text-2xl font-bold text-slate-900">+14.6%</div>
+      </div>
+    </div>
+
+    <div class="flex flex-row gap-2 mb-3">
+      <span class="bg-blue-500 text-white font-semibold text-sm p-2 rounded-md shadow-sm">Primary</span>
+      <span class="bg-blue-600 text-white font-semibold text-sm p-2 rounded-md shadow-sm">Secondary</span>
+      <span class="bg-red-600 text-white font-semibold text-sm p-2 rounded-md shadow-sm">Danger</span>
+    </div>
+
+    <table class="w-full border-collapse">
+      <thead>
+        <tr class="bg-slate-100">
+          <th class="p-2 text-left text-xs font-semibold tracking-wide uppercase text-slate-700 border-b-2">Account</th>
+          <th class="p-2 text-left text-xs font-semibold tracking-wide uppercase text-slate-700 border-b-2">Status</th>
+          <th class="p-2 text-left text-xs font-semibold tracking-wide uppercase text-slate-700 border-b-2">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="p-2 text-sm text-slate-700">Acme Corp</td>
+          <td class="p-2 text-sm text-slate-700">Active</td>
+          <td class="p-2 text-sm text-slate-700">$42,000</td>
+        </tr>
+        <tr class="bg-slate-50">
+          <td class="p-2 text-sm text-slate-700">Globex Inc</td>
+          <td class="p-2 text-sm text-slate-700">Active</td>
+          <td class="p-2 text-sm text-slate-700">$61,200</td>
+        </tr>
+        <tr>
+          <td class="p-2 text-sm text-slate-700">Initech</td>
+          <td class="p-2 text-sm text-slate-700">Overdue</td>
+          <td class="p-2 text-sm text-slate-700">$25,200</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
