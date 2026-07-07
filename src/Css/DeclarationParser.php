@@ -187,11 +187,33 @@ final class DeclarationParser
     /** @var list<string> */
     private array $warnings = [];
 
+    /**
+     * M9-T2 (RESTRICCIONES GLOBALES): `transition`/`animation` (shorthand y cualquier longhand,
+     * vendor-prefijado o no -- `-webkit-transition`, `transition-property`, `animation-name`, ...)
+     * son SILENCIO ADJUDICADO, no warning: un motor de paginación estático no tiene estados
+     * dinámicos que transicionar/animar (no hay hover real, no hay tiempo que transcurra en un PDF),
+     * así que estas declaraciones son un no-op LEGÍTIMO en media print -- exactamente igual de
+     * legítimo que el `@keyframes` que las acompaña (que sabberworm ya ignora sin más: `KeyFrame`
+     * extiende `CSSList` directamente, no `CSSBlockList`, así que `Document::
+     * getAllDeclarationBlocks()` nunca desciende a su cuerpo -- ver el docblock de clase de
+     * StylesheetParser para el contraste con @media, que SÍ hereda de CSSBlockList y por eso
+     * necesitó su propio manejo). Antes de esta tarea cada una caía al fallback genérico
+     * "Unsupported property: $property" (bootstrap.min.css real dispara ~24 de estos: transition,
+     * -webkit-transition, -moz-transition, transition-property, animation) -- puro ruido para una
+     * propiedad que nunca podría tener efecto observable aquí ni aunque se soportara. Regex
+     * case-insensitive porque `$property` YA llega en minúsculas (ver abajo) pero la constante del
+     * patrón se declara una vez, no en cada llamada.
+     */
+    private const string TRANSITION_ANIMATION_PATTERN = '/^(-webkit-|-moz-|-o-|-ms-)?(transition|animation)(-.+)?$/';
+
     /** @return array<string, mixed> */
     public function parse(string $property, string $value): array
     {
         $property = strtolower(trim($property));
         $value = trim($value);
+        if (preg_match(self::TRANSITION_ANIMATION_PATTERN, $property) === 1) {
+            return [];
+        }
         // M7-T5 (CSS 2.2 §10.4): 'auto' es el initial value real de min-width/min-height ("sin
         // mínimo"), 'none' el de max-width/max-height ("sin máximo") -- ambos colapsan al MISMO
         // null que "propiedad no declarada en absoluto" en ComputedStyle::compute() (ver

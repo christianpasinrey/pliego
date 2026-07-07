@@ -1685,3 +1685,39 @@ it('parses text-transform none/uppercase/lowercase/capitalize and warns on an un
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M9-T2: transition/animation are a SILENT no-op in print media (RESTRICCIONES GLOBALES) -----
+// A static paginated document has no dynamic state to transition between and no time axis to
+// animate over -- these declarations are a legitimate print no-op, same spirit as @keyframes
+// (already skipped for free -- KeyFrame doesn't extend CSSBlockList, see StylesheetParser's
+// docblock) -- so unlike every OTHER unsupported property, they must NOT warn at all.
+
+it('silently drops transition (shorthand) with no warning and no declaration recorded', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('transition', 'color .15s ease-in-out, background-color .15s ease-in-out');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toBe([]);
+});
+
+it('silently drops transition longhands and vendor-prefixed variants, with no warning', function () {
+    $parser = new DeclarationParser();
+    foreach (['transition-property', 'transition-duration', '-webkit-transition', '-moz-transition', '-o-transition'] as $property) {
+        expect($parser->parse($property, 'opacity'))->toBe([]);
+    }
+    expect($parser->drainWarnings())->toBe([]);
+});
+
+it('silently drops animation (shorthand) and longhands, with no warning', function () {
+    $parser = new DeclarationParser();
+    foreach (['animation', 'animation-name', 'animation-duration', '-webkit-animation'] as $property) {
+        expect($parser->parse($property, 'spin 1s linear infinite'))->toBe([]);
+    }
+    expect($parser->drainWarnings())->toBe([]);
+});
+
+it('does not silence an unrelated property that merely starts with "trans" (no false-positive match)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('transform', 'rotate(45deg)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
