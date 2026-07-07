@@ -214,6 +214,20 @@ final class DeclarationParser
         if (preg_match(self::TRANSITION_ANIMATION_PATTERN, $property) === 1) {
             return [];
         }
+        // M10-T3 (css-color-4 §16, RESTRICCIONES GLOBALES M10): color-mix() only ever appears in a
+        // color-valued position, so ONE check here (before dispatching to whichever branch below
+        // actually handles $property) covers every call site that resolves a color through
+        // Color::fromCss() -- border-*-color, the generic COLOR_PROPERTIES branch, box-shadow/
+        // border shorthand color components, and background/gradient-stop colors -- without
+        // duplicating the check at each of those ~6 sites. Color::fromCss('color-mix(...)') itself
+        // stays silent (see its own docblock -- Color has no WarningCollector), it just resolves to
+        // the first color argument; THIS is the only place that raises the warning, exactly once
+        // per declaration regardless of how many color-mix() calls it contains (a shorthand could
+        // technically have more than one, but Tailwind/real-world CSS never does -- one warning per
+        // DECLARATION, not per occurrence, matches every other warn() in this class).
+        if (stripos($value, 'color-mix(') !== false) {
+            $this->warnings[] = "color-mix() is not supported; falling back to its first color: $value";
+        }
         // M7-T5 (CSS 2.2 §10.4): 'auto' es el initial value real de min-width/min-height ("sin
         // mínimo"), 'none' el de max-width/max-height ("sin máximo") -- ambos colapsan al MISMO
         // null que "propiedad no declarada en absoluto" en ComputedStyle::compute() (ver

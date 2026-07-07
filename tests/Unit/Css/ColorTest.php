@@ -132,3 +132,95 @@ it('withOpacity(1.0) is a no-op, returning the exact same instance', function ()
     $color = new Color(255, 0, 0, 0.5);
     expect($color->withOpacity(1.0))->toBe($color);
 });
+
+// --- M10-T3: oklch() (css-color-4 §10), Tailwind v4's default color function ---------------------
+
+/**
+ * Asserts every channel is within +-1/255 of expected (brief M10-T3's stated tolerance) -- the
+ * table below is pinned EXACT (computed to match, see the report for the by-hand matrix
+ * derivation + the independent `culori` npm library cross-check), so this helper's tolerance is a
+ * safety margin for float rounding-mode edge cases, not an acknowledgment of imprecision.
+ */
+function expectOklchWithinOneChannel(string $css, int $r, int $g, int $b): void
+{
+    $color = Color::fromCss($css);
+    if ($color === null) {
+        throw new RuntimeException("expected a valid oklch() color for: $css");
+    }
+    expect(abs($color->r - $r))->toBeLessThanOrEqual(1, "red channel for $css");
+    expect(abs($color->g - $g))->toBeLessThanOrEqual(1, "green channel for $css");
+    expect(abs($color->b - $b))->toBeLessThanOrEqual(1, "blue channel for $css");
+}
+
+it('converts oklch() spec achromatic table values (white/black/mid-gray) exactly', function () {
+    expectOklchWithinOneChannel('oklch(100% 0 0)', 255, 255, 255);
+    expectOklchWithinOneChannel('oklch(0% 0 0)', 0, 0, 0);
+    // L=0.5, C=0/H=anything (achromatic) -- hand-derivable in closed form (see class docblock's
+    // oklchToSrgb() matrix-sums-to-identity note for achromatic input): 0.5^3 linear on all three
+    // channels, gamma-encoded -> #636363.
+    expectOklchWithinOneChannel('oklch(50% 0 0)', 0x63, 0x63, 0x63);
+});
+
+it('accepts a bare-number lightness (0-1), equivalent to the same value as a percentage', function () {
+    expect(Color::fromCss('oklch(0.623 0.214 259.815)'))
+        ->toEqual(Color::fromCss('oklch(62.3% 0.214 259.815)'));
+});
+
+it('accepts an optional "deg" suffix on the hue component, identical to the bare number', function () {
+    expect(Color::fromCss('oklch(62.3% 0.214 259.815deg)'))
+        ->toEqual(Color::fromCss('oklch(62.3% 0.214 259.815)'));
+});
+
+it('parses an optional alpha component after a slash, as a 0-1 number or a percentage', function () {
+    expect(Color::fromCss('oklch(62.3% 0.214 259.815 / 0.5)')?->alpha)->toBe(0.5);
+    expect(Color::fromCss('oklch(62.3% 0.214 259.815 / 50%)')?->alpha)->toBe(0.5);
+});
+
+/**
+ * css-color-4 §10, Tailwind v4's OWN generated theme colors (tests/Fixtures/tailwind/
+ * tailwind-output.css's `--color-*` custom properties, verbatim) -- hand-verified against the
+ * full OKLCH->OKLab->LMS->linear-sRGB->gamma pipeline (see Color::oklchToSrgb()'s docblock) AND
+ * cross-checked with the independent `culori` npm package (MIT). NOTE: these do NOT match
+ * Tailwind v3's old hex palette (e.g. v3's blue-500 was #3b82f6) -- v4's palette was recomputed
+ * directly in OKLCH space for wider-gamut displays, so it is only visually close to v3's sRGB
+ * values, never byte-identical. See the M10-T3 report for the full derivation.
+ */
+it('converts every Tailwind v4 color scale referenced by the fixture, within +-1/255 per channel', function () {
+    expectOklchWithinOneChannel('oklch(62.3% 0.214 259.815)', 0x2b, 0x7f, 0xff); // blue-500
+    expectOklchWithinOneChannel('oklch(54.6% 0.245 262.881)', 0x15, 0x5d, 0xfc); // blue-600
+    expectOklchWithinOneChannel('oklch(57.7% 0.245 27.325)', 0xe7, 0x00, 0x0b); // red-600
+    expectOklchWithinOneChannel('oklch(20.8% 0.042 265.755)', 0x0f, 0x17, 0x2b); // slate-900
+    expectOklchWithinOneChannel('oklch(92.9% 0.013 255.508)', 0xe2, 0xe8, 0xf0); // slate-200
+    expectOklchWithinOneChannel('oklch(82.8% 0.189 84.429)', 0xff, 0xb9, 0x00); // amber-400
+    expectOklchWithinOneChannel('oklch(72.3% 0.219 149.579)', 0x00, 0xc9, 0x50); // green-500
+    expectOklchWithinOneChannel('oklch(58.5% 0.233 277.117)', 0x61, 0x5f, 0xff); // indigo-500
+    expectOklchWithinOneChannel('oklch(59.6% 0.145 163.225)', 0x00, 0x99, 0x66); // emerald-600
+});
+
+it('clamps an out-of-sRGB-gamut oklch() color via a simple per-channel clamp (documented, not proper gamut mapping)', function () {
+    // High chroma at this hue pushes linear-sRGB red past 1.0 -- clamped to the pure-red corner.
+    expectOklchWithinOneChannel('oklch(70% 0.4 30)', 255, 0, 0);
+});
+
+it('rejects a malformed oklch() (wrong argument shape, unsupported %-chroma)', function () {
+    expect(Color::fromCss('oklch(50%)'))->toBeNull();
+    expect(Color::fromCss('oklch(50% 20% 0)'))->toBeNull(); // C as a % is out of the reduced contract
+});
+
+// --- M10-T3: color-mix() (css-color-4 §16) -- reduced to "warning + first color" ------------------
+
+it('color-mix() resolves to its FIRST color argument verbatim (no warning at the Color layer -- see DeclarationParserTest)', function () {
+    expect(Color::fromCss('color-mix(in oklab, currentcolor 50%, transparent)'))
+        ->toEqual(Color::currentColor());
+    expect(Color::fromCss('color-mix(in srgb, red 50%, blue)'))
+        ->toEqual(new Color(255, 0, 0));
+});
+
+it('color-mix() first-color extraction is comma-depth-aware (a nested rgb() argument does not confuse the split)', function () {
+    expect(Color::fromCss('color-mix(in srgb, rgb(0, 0, 0) 50%, white)'))
+        ->toEqual(new Color(0, 0, 0));
+});
+
+it('rejects a malformed color-mix() (missing "in <space>," prefix)', function () {
+    expect(Color::fromCss('color-mix(red, blue)'))->toBeNull();
+});

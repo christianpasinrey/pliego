@@ -558,3 +558,120 @@ it('has no @media warning at all when the stylesheet has no @media blocks', func
     $result = new StylesheetParser()->parse('p { color: red }');
     expect($result->warnings)->toBe([]);
 });
+
+// --- M10-T3: @layer (css-cascade-5, reduced) -----------------------------------------------------
+
+it('unwraps a single named @layer block, rules parse normally', function () {
+    $result = new StylesheetParser()->parse('@layer base { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe([]);
+});
+
+it('orders rules by DECLARATION order of layer names (a bare @layer a, b; statement), not textual block order', function () {
+    // "utilities" is declared FIRST in the bare statement (rank 0), "base" SECOND (rank 1) -- even
+    // though the "utilities" BLOCK appears before the "base" block textually, "base" outranks it.
+    $css = '@layer utilities, base; @layer utilities { p { color: blue } } @layer base { p { color: red } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[0]->order)->toBeLessThan($result->rules[1]->order);
+});
+
+it('un-layered rules always come AFTER every named layer, winning ties regardless of layer declaration order', function () {
+    $css = '@layer a { p { color: red } } p { color: blue }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->rules[0]->order)->toBeLessThan($result->rules[1]->order);
+});
+
+it('an anonymous @layer {} gets its OWN rank slot, distinct from any named layer', function () {
+    $css = '@layer { p { color: red } } @layer named { p { color: blue } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('blue'));
+});
+
+it('two @layer blocks with the SAME name accumulate into that layer\'s single rank, in encounter order, grouped together', function () {
+    // Registration order: base (rank 0, first seen), utilities (rank 1). The SECOND "base" block
+    // (color: purple) is textually AFTER the "utilities" block, but still lands in base's bucket
+    // -- reopening an earlier layer does not bump its rank, and its content stays grouped with the
+    // first base block, both BEFORE utilities' content in the final flattened stream.
+    $css = '@layer base { p { color: red } } @layer utilities { p { color: green } } @layer base { p { color: purple } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(3);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('purple'));
+    expect($result->rules[2]->declarations['color'])->toEqual(Color::fromCss('green'));
+});
+
+it('a bare @layer name; statement with NO body registers the rank but contributes no rules', function () {
+    $result = new StylesheetParser()->parse('@layer empty; @layer named { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('warns ONCE, with adjudicated fixed wording, when !important appears inside a layer (simplified, non-inverted precedence)', function () {
+    $result = new StylesheetParser()->parse('@layer base { p { color: red !important } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->important)->toBeTrue();
+    $layerWarnings = array_values(array_filter(
+        $result->warnings,
+        static fn(string $w): bool => str_contains($w, 'layered !important uses simplified precedence'),
+    ));
+    expect($layerWarnings)->toHaveCount(1);
+});
+
+it('does not warn about layered !important when no layer contains one', function () {
+    $result = new StylesheetParser()->parse('@layer base { p { color: red } } p { color: blue !important }');
+    expect($result->warnings)->toBe([]);
+});
+
+it('reproduces Tailwind v4\'s exact bootstrap shape: two bare declarations pin 5 layer ranks before any block exists', function () {
+    $css = <<<'CSS'
+    @layer properties;
+    @layer theme, base, components, utilities;
+    @layer utilities { .u { color: blue } }
+    @layer theme { .t { color: red } }
+    @layer properties { .p { color: green } }
+    CSS;
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(3);
+    // properties(0) < theme(1) < base(2) < components(3) < utilities(4) -- "properties" and
+    // "theme" both got their rank from the BARE statements, before either ever had a body.
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('green')); // properties
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('red'));   // theme
+    expect($result->rules[2]->declarations['color'])->toEqual(Color::fromCss('blue'));  // utilities
+});
+
+// --- M10-T3: @property (css-properties-values-api-1) -- parse-skip + ONE aggregated warning -------
+
+it('drops a single @property rule with one warning, other rules parse normally', function () {
+    $css = '@property --foo { syntax: "<color>"; inherits: false; initial-value: red; } p { color: red }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['1 @property rule blocks skipped (not supported)']);
+});
+
+it('aggregates multiple @property rules into a SINGLE warning with the total count', function () {
+    $css = '@property --a { syntax: "*"; inherits: false; } @property --b { syntax: "*"; inherits: false; } p { color: red }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['2 @property rule blocks skipped (not supported)']);
+});
+
+it('has no @property warning at all when the stylesheet declares none', function () {
+    $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});
+
+it('drops @property rules found inside a @layer block too (layer resolution runs before @property extraction)', function () {
+    $css = '@layer base { @property --foo { syntax: "*"; inherits: false; } p { color: red } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['1 @property rule blocks skipped (not supported)']);
+});

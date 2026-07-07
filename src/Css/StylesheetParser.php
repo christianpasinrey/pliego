@@ -93,10 +93,26 @@ final class StylesheetParser
     public function parse(string $css, float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX): ParseResult
     {
         $css = $this->stripComments($css);
+        // M10-T3 (css-cascade-5, reduced -- see resolveLayers()'s own docblock for the full
+        // algorithm): @layer resolved FIRST, before @media -- a real Tailwind v4 build's layers
+        // (theme/base/components/utilities) never nest a @media inside a @layer in practice, but
+        // if one did, flattening layers first means @media's own brace-matching (below) sees
+        // perfectly ordinary top-level text, no special-casing needed on that side.
+        [$css, $importantInLayer] = $this->resolveLayers($css);
         // M9-T2: @media resuelto ANTES de @font-face/@page (ver docblock de clase) -- un bloque
         // `@media print { @font-face { ... } }` (raro, pero legal) debe quedar aplanado a un
         // `@font-face` de nivel superior para que extractAtRuleBlocks() lo vea a continuación.
         [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css, $pageWidthPx);
+        // M10-T3 (css-properties-values-api-1, out of scope): @property registers a custom
+        // property's syntax/inheritance/initial-value for typed-custom-property animation and
+        // validation -- none of which this static print engine implements (no animation, and a
+        // custom property's VALUE already flows through unchanged regardless of its declared
+        // syntax, see VarResolver). Extracted and dropped exactly like @font-face/@page (same
+        // extractAtRuleBlocks() brace-matcher), but with ONE aggregated warning (like @media's
+        // skip count) rather than one per rule -- a real Tailwind v4 build emits dozens of these
+        // (one per animatable custom property, e.g. every `--tw-rotate-x`/`--tw-gradient-from`),
+        // and they are all the same kind of gap, not 40 distinct ones worth reading individually.
+        [$css, $propertyBodies] = $this->extractAtRuleBlocks($css, 'property');
         [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
         $fontFaceRules = [];
         $fontFaceWarnings = [];
@@ -132,6 +148,23 @@ final class StylesheetParser
         // que el mensaje sea grep-eable con un patrón estable independientemente del conteo.
         if ($mediaSkippedCount > 0) {
             $warnings[] = "$mediaSkippedCount @media rule blocks skipped (screen/interactive-only media)";
+        }
+        // M10-T3: same "one aggregated warning" shape as @media's skip count above -- see parse()'s
+        // own docblock comment at the extraction call site.
+        if ($propertyBodies !== []) {
+            $propertySkippedCount = count($propertyBodies);
+            $warnings[] = "$propertySkippedCount @property rule blocks skipped (not supported)";
+        }
+        // M10-T3 (css-cascade-5 §4.4, reduced -- see resolveLayers()'s docblock): a real cross-
+        // layer !important INVERTS layer order (an !important in an earlier-declared layer beats
+        // one in a later layer); this engine does NOT implement that inversion -- !important is
+        // applied with its NORMAL (non-inverted) precedence regardless of which layer it came
+        // from, same as StyleResolver already does for every other important-tier declaration.
+        // ONE warning for the whole document (not one per !important-in-a-layer occurrence,
+        // deliberately noisier-averse like the two aggregated warnings above) -- adjudicated exact
+        // wording per the M10-T3 brief.
+        if ($importantInLayer) {
+            $warnings[] = 'layered !important uses simplified precedence (no cross-layer inversion, css-cascade-5 §4.4)';
         }
         $order = 0;
         foreach ($document->getAllDeclarationBlocks() as $block) {
@@ -360,6 +393,110 @@ final class StylesheetParser
             $offset = $matchStart;
         }
         return [$css, $skipped];
+    }
+
+    /**
+     * M10-T3 (css-cascade-5 §4.4, reduced -- "Tailwind solo necesita theme<base<components<
+     * utilities", per the brief's own RESTRICCIONES GLOBALES): Tailwind v4's CLI output wraps
+     * EVERYTHING (its custom-property theme, the preflight reset, and every utility class) in
+     * named `@layer` blocks, plus two BARE declaration statements up front with no body at all
+     * (`@layer properties;` then `@layer theme, base, components, utilities;`) that exist purely
+     * to PIN the cascade order of those five layer names before any of them is ever given a body
+     * -- css-cascade-5's actual rule: "the order of layers is the order in which the FIRST
+     * `@layer` (block OR bare statement) for that name appears anywhere in the stylesheet",
+     * completely independent of where each layer's declarations physically sit in the file
+     * afterwards.
+     *
+     * Design (brief's own words: "simplest correct = reorder the extracted blocks' rules into the
+     * output stream by layer rank, stable within layer"): a single top-level, offset-driven scan
+     * (same brace-matching machinery as resolveMediaBlocks()/extractAtRuleBlocks()) walks the css
+     * once, and for every `@layer` construct it finds:
+     *  - a BARE statement (`@layer a, b, c;`, no body) registers each comma-separated name in
+     *    $order (if not already present) and is removed from the css with no body to carry.
+     *  - a NAMED block (`@layer name { ... }`) registers `name` in $order (if new) and APPENDS its
+     *    body text to that name's bucket in $bodies -- "appends" because css-cascade-5 allows the
+     *    SAME layer name to reopen with more than one block; every occurrence contributes to the
+     *    SAME layer rank (the first one it ever saw), never a new one, so a later re-opening of an
+     *    EARLIER-ranked layer does not "bump" it -- see StylesheetParserTest's multi-block case.
+     *  - an ANONYMOUS block (`@layer { ... }`, no name) gets a synthetic, never-colliding key
+     *    (`"\0anon0"`, `"\0anon1"`, ...) registered at ITS OWN textual position -- "its own rank
+     *    slot" per the milestone interface note, since an anonymous layer can never be reopened by
+     *    name (nothing else can ever reference it) so every occurrence is necessarily distinct.
+     *
+     * After the scan, $css itself (with every @layer construct removed, replaced by a single
+     * space each) holds whatever text was NEVER inside any @layer at all -- concatenating the
+     * ordered per-layer buckets FIRST and this un-layered remainder LAST is the entire mechanism
+     * that makes "un-layered rules win at equal specificity" true: StylesheetParser::parse()'s own
+     * `$order++` counter (below, in the caller) then assigns the un-layered rules the HIGHEST
+     * $order values of the whole document, and StyleResolver already treats a higher $order as the
+     * tie-breaking winner at equal specificity (same mechanism that makes "later rule in the same
+     * file wins" true for ordinary un-layered CSS, completely unchanged by this task).
+     *
+     * Recursion note (documented divergence, brief-adjudicated "reduced"): this method does NOT
+     * recurse into an already-extracted layer body to resolve a NESTED `@layer` inside it --
+     * Tailwind v4's real generated output never nests one (verified against the vendored fixture,
+     * see tests/Fixtures/tailwind/tailwind-output.css), so this is a deliberate scope narrowing,
+     * not an oversight; a hand-authored stylesheet that nests `@layer` INSIDE another `@layer`
+     * block would have that inner construct pass through unresolved into whatever consumes the
+     * outer layer's body next (@media resolution, then sabberworm) — likely misinterpreted, same
+     * "reduced, documented" spirit as every other explicitly-scoped-down at-rule in this class.
+     *
+     * !important note: this method ALSO detects (via a single case-insensitive substring scan per
+     * collected body -- declarations are still raw text here, sabberworm has not tokenized them
+     * yet) whether ANY declaration inside ANY named/anonymous layer body used `!important`, so the
+     * caller (parse()) can raise the ONE adjudicated warning about simplified (non-inverted)
+     * cross-layer !important precedence -- see that call site's own docblock for why the
+     * PRECEDENCE ITSELF is not touched here, only the DETECTION.
+     *
+     * @return array{0: string, 1: bool} [cssConLayersResueltos, huboImportantDentroDeUnLayer]
+     */
+    private function resolveLayers(string $css): array
+    {
+        /** @var list<string> $order */
+        $order = [];
+        /** @var array<string, string> $bodies */
+        $bodies = [];
+        $importantInLayer = false;
+        $anonCounter = 0;
+        $offset = 0;
+        while (preg_match('/@layer\b([^{;]*)([{;])/i', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
+            $matchStart = (int) $m[0][1];
+            $namesPart = trim((string) $m[1][0]);
+            $terminator = $m[2][0];
+            if ($terminator === ';') {
+                $statementEnd = $matchStart + strlen((string) $m[0][0]);
+                foreach (explode(',', $namesPart) as $name) {
+                    $name = trim($name);
+                    if ($name !== '' && !in_array($name, $order, true)) {
+                        $order[] = $name;
+                    }
+                }
+                $css = substr($css, 0, $matchStart) . ' ' . substr($css, $statementEnd);
+                $offset = $matchStart;
+                continue;
+            }
+            $openBrace = $matchStart + strlen((string) $m[0][0]) - 1;
+            $closeBrace = $this->findMatchingBrace($css, $openBrace);
+            if ($closeBrace === null) {
+                break;
+            }
+            $body = substr($css, $openBrace + 1, $closeBrace - $openBrace - 1);
+            $key = $namesPart === '' ? "\0anon" . $anonCounter++ : $namesPart;
+            if (!in_array($key, $order, true)) {
+                $order[] = $key;
+            }
+            $bodies[$key] = ($bodies[$key] ?? '') . ' ' . $body;
+            if (!$importantInLayer && preg_match('/!\s*important/i', $body) === 1) {
+                $importantInLayer = true;
+            }
+            $css = substr($css, 0, $matchStart) . ' ' . substr($css, $closeBrace + 1);
+            $offset = $matchStart;
+        }
+        $layered = '';
+        foreach ($order as $key) {
+            $layered .= ($bodies[$key] ?? '') . ' ';
+        }
+        return [$layered . $css, $importantInLayer];
     }
 
     /**

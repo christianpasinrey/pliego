@@ -1421,3 +1421,9 @@ parameters:
 			identifier: argument.type
 			count: 1
 			path: tests/Unit/Text/TtfFontTest.php
+
+		-
+			message: '#^Call to an undefined method Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy\:\:markTestSkipped\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: tests/EndToEnd/TailwindIngestionTest.php

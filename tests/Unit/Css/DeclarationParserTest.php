@@ -1721,3 +1721,29 @@ it('does not silence an unrelated property that merely starts with "trans" (no f
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M10-T3: color-mix() (css-color-4 §16) -- warning + fallback to the first color -------------
+
+it('warns and resolves color-mix() to its first color argument (background-color)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-color', 'color-mix(in srgb, red 50%, blue)');
+    expect($result['background-color'])->toEqual(Color::fromCss('red'));
+    $warnings = $parser->drainWarnings();
+    expect($warnings)->toHaveCount(1);
+    expect($warnings[0])->toContain('color-mix() is not supported');
+    expect($warnings[0])->toContain('falling back to its first color');
+});
+
+it('warns and resolves color-mix() to currentcolor for the Tailwind preflight ::placeholder shape', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('color', 'color-mix(in oklab, currentcolor 50%, transparent)');
+    expect($result['color'])->toEqual(Color::currentColor());
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('warns exactly once per declaration for color-mix() used as a border shorthand color component', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border', '1px solid color-mix(in srgb, green 50%, black)');
+    expect($result['border-top-color'] ?? null)->toEqual(Color::fromCss('green'));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
