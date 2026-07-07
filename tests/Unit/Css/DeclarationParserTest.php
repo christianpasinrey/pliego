@@ -1281,12 +1281,12 @@ it('falls back to circle-at-center + a warning for a complex radial-gradient() f
     expect($parser->drainWarnings())->toHaveCount(1);
 });
 
-it('warns and renders opaque for a gradient color-stop with alpha (soft masks are a later milestone)', function () {
+it('keeps the alpha channel of a gradient color-stop, with NO warning (M9-T3: soft masks support it)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('background-image', 'linear-gradient(rgba(255, 0, 0, 0.5), blue)');
     $stops = gradientFrom($result)->stops;
-    expect($stops[0]->color)->toEqual(new Color(255, 0, 0));
-    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($stops[0]->color)->toEqual(new Color(255, 0, 0, 0.5));
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
 it('rejects a gradient with fewer than 2 color stops with a warning', function () {

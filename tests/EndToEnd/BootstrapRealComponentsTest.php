@@ -82,14 +82,16 @@ it('renders the real Bootstrap components page as a single valid page, with the 
     expect($report->pageCount)->toBe(1);
 
     // Pinned exact total (deterministic, same vendored sheet + same fixture html + same compat
-    // shim every run): 902 from parsing the real sheet alone (see BootstrapIngestionTest's golden)
+    // shim every run): 895 from parsing the real sheet alone (see BootstrapIngestionTest's golden --
+    // 902 pre-M9-T3, minus the 7 "Gradient color-stop alpha not supported" warnings, now GONE:
+    // rgba() gradient stops are supported via /SMask /Luminosity, see Pdf\PdfCanvas::paintGradient())
     // plus 49 more that only surface once declarations are actually RESOLVED against real elements
     // (unresolved var() chains on empty custom properties like `--bs-btn-font-family: ;`, a known
     // IACVT gap already on record since M7; an `initial` keyword used as a box-shadow component,
     // which is genuinely invalid CSS that real browsers also drop -- see the report for the full
     // breakdown). A regression here (count changing) means either the vendored sheet changed or
     // something in parse/style/layout started handling one of these constructs differently.
-    expect($report->warnings)->toHaveCount(951);
+    expect($report->warnings)->toHaveCount(944);
 });
 
 it('paints .btn-primary with real Bootstrap\'s own blue (#0d6efd), resolved through its full --bs-btn-bg/--bs-btn-color CSS-variable chain', function () {

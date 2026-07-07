@@ -89,18 +89,27 @@ it('clips a background-image to a rounded border-box when border-radius is decla
     expect($pdf)->toContain('/Im1 Do');
 });
 
-it('tiles a background-image with background-repeat:repeat as multiple Do calls sharing ONE XObject, end to end', function () {
+it('tiles a background-image with background-repeat:repeat as a SINGLE PatternType 1 object referencing ONE XObject, end to end (M9-T3)', function () {
     // M8 final-review Finding A integration audit: same `display: flex` workaround removed as the
     // cover test above, now that a plain block honors `height` for real -- a plain `<div>` gets
-    // the EXACT 20x15 box the hand-verified n=5/m=5=25 tile count below depends on.
+    // the EXACT 20x15 box this test depends on.
+    //
+    // M9-T3: no more N Do calls (nor the old n=5/m=5=25 hand count) -- background-repeat now emits
+    // ONE /Pattern object (PatternType 1, ISO 32000-1 §8.7.3.1) that tiles the SAME 4x3px image
+    // XObject via `/Im1 Do` inside the pattern's own content stream, painted with `/Pn scn` + `re f`
+    // instead of a drawImage() grid.
     $css = '.box { width: 20px; height: 15px; background-image: url(tiny.jpg); background-repeat: repeat; }';
     $html = '<body><div class="box"></div></body>';
     [$pdf, $report] = backgroundImageRenderToPdfString($css, $html);
 
     expect($report->warnings)->toBe([]);
-    // tiny.jpg is 4x3px -> n=ceil(20/4)=5, m=ceil(15/3)=5 -> 25 tiles, ONE XObject definition.
     expect(substr_count($pdf, '/Subtype /Image'))->toBe(1);
-    expect(substr_count($pdf, '/Im1 Do'))->toBe(25);
+    expect($pdf)->toContain('/PatternType 1');
+    expect(substr_count($pdf, '/PatternType 1'))->toBe(1);
+    expect($pdf)->toContain('/Pattern cs')->toContain('/P1 scn');
+    // The image is Do-ed exactly ONCE -- inside the pattern's own private content stream (its tile
+    // definition), NOT once per visual tile like the old M8 loop (which would have been 25 here).
+    expect(substr_count($pdf, '/Im1 Do'))->toBe(1);
 });
 
 it('dedups an <img> and a sibling background-image pointing at the SAME file into a single XObject, end to end', function () {

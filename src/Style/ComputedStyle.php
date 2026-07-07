@@ -202,7 +202,8 @@ final readonly class ComputedStyle
         // tiempo de pintado, contra el border-box final del fragmento -- igual división de
         // responsabilidades Css-vs-Layout/Pdf que BorderRadius). Pinta POR ENCIMA de
         // $backgroundColor (ambos pueden coexistir: el color sirve de fallback visible en los
-        // huecos de un gradiente con alpha, aunque M8 no soporta alpha en stops todavía -- ver
+        // huecos de un gradiente con alpha -- soportado vía /SMask desde M9-T3, ver
+        // Pdf\PdfCanvas::paintGradient() -- y de fondo tras un gradiente translúcido -- ver
         // Paint\Painter::paintBackground()).
         public ?Gradient $backgroundGradient = null,
         // M8-T4 (css-backgrounds-3 §6 reducido): NO hereda -- initial value real es "none" (sin

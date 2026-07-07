@@ -1,8 +1,7 @@
 {
-    "total": 902,
+    "total": 895,
     "byCategory": {
         "box-shadow-limitation": 8,
-        "gradient-alpha-unsupported": 7,
         "invalid-calc": 17,
         "invalid-selector": 117,
         "media-skipped": 1,

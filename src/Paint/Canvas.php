@@ -108,6 +108,22 @@ interface Canvas
     public function drawImage(Rect $rectPx, string $imageKey, float $opacity = 1.0): void;
 
     /**
+     * M9-T3 (ISO 32000-1 §8.7.3.1, PatternType 1 tiling patterns): pinta $imageKey repetido en una
+     * rejilla de tiles de $tileWidthPx×$tileHeightPx dentro de $rect (px CSS, top-left origin) —
+     * reemplaza el bucle de drawImage()-por-tile de M8-T6/T8 (y su cap de 2000 tiles) por un ÚNICO
+     * patrón, O(1) en tamaño/tiempo sin importar cuántos tiles quepan. El llamador (Paint\Painter)
+     * ya abrió el clip del border-box (clipRect()/clipRoundedRect(), rounded-aware) ANTES de esta
+     * llamada y lo cierra con restoreClip() inmediatamente después — este método pinta DENTRO de
+     * ese scope, sin abrir/cerrar uno propio.
+     *
+     * $opacity (0-1, default no declarado por ningún caller anterior a esta tarea — misma opacity
+     * PROPIA del elemento que drawImage() ya recibía) < 1.0 activa el ExtGState /ca correspondiente
+     * (ISO 32000-1 §8.4.5), acotado por el q/Q del llamador; <=0 (completamente transparente) no
+     * pinta nada.
+     */
+    public function fillImagePattern(Rect $rect, string $imageKey, float $tileWidthPx, float $tileHeightPx, float $opacity): void;
+
+    /**
      * M7-T5 (css-overflow-3): abre un scope de recorte PDF (`q` + `x y w h re W n`, ISO 32000-1
      * §8.5.4) al rect BORDER-BOX $rect (px CSS) — TODO lo pintado después de esta llamada, hasta
      * el restoreClip() que la cierra, queda recortado a ese rectángulo. Usado por Paint\Painter

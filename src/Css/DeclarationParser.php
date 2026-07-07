@@ -1304,15 +1304,11 @@ final class DeclarationParser
                 }
                 $position = max(0.0, min(100.0, (float) $m[1]));
             }
-            // M8-T3 (RESTRICCIONES GLOBALES M8, shadings con alpha -> M9): un stop con alpha
-            // declarado (rgba()/hsla() con canal alpha<1) no puede representarse en un
-            // /FunctionType 2/3 de PDF (RGB puro, sin canal alfa) sin un soft mask -- se avisa y
-            // se pinta OPACO (mismo color RGB, alpha descartado) en vez de fallar el gradiente
-            // entero.
-            if ($color->alpha !== null && $color->alpha < 1.0) {
-                $this->warnings[] = "Gradient color-stop alpha not supported (rendered opaque; soft masks are a later milestone): $stopArg";
-                $color = new Color($color->r, $color->g, $color->b);
-            }
+            // M9-T3 (ISO 32000-1 §11.6.5.2, luminosity soft masks): un stop con alpha declarado
+            // (rgba()/hsla() con canal alpha<1) ya NO se fuerza a opaco -- Pdf\PdfCanvas::
+            // paintGradient() detecta el alpha y pinta un /SMask /Luminosity (shading gris paralelo,
+            // ver su docblock) en vez de descartarlo con un warning (comportamiento M8-T3, ya
+            // retirado). $color conserva su alpha tal cual lo dejó Color::fromCss().
             $rawStops[] = [$color, $position];
         }
         return self::distributeStopPositions($rawStops);

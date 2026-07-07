@@ -63,6 +63,9 @@ final class PdfCanvas implements Canvas
             // M8-T3: mismo patrón "acumula globalmente, sobre-incluye en cada página" que
             // extGStatePageResources() — ver el docblock de PdfWriter::shadingPageResources().
             $this->writer->shadingPageResources(),
+            // M9-T3: += /Pattern (tiling backgrounds) -- mismo patrón, ver
+            // PdfWriter::patternPageResources().
+            $this->writer->patternPageResources(),
         );
     }
 
@@ -122,37 +125,95 @@ final class PdfCanvas implements Canvas
      * FIRMA de contenido (rect + Gradient, ver gradientSignature()) -- dos elementos con el mismo
      * rect y el mismo Gradient CSS comparten un único objeto /Shading, sin recalcular ni
      * reescribir su(s) función(es) subyacente(s).
+     *
+     * M9-T3 (ISO 32000-1 §11.6.5.2, luminosity soft masks): cuando ALGÚN stop trae alpha<1 (ver
+     * gradientHasAlpha()), un `/GSn gs` (ExtGState /SMask /Luminosity, ver softMaskResourceName())
+     * se inserta justo ANTES del `/ShN sh` de color -- dentro del MISMO scope q/Q que el clip, así
+     * que el `Q` final restaura el soft mask a su valor anterior (normalmente /None) sin necesidad
+     * de un segundo ExtGState "reset" explícito (ISO 32000-1 §8.4: /SMask es parte del graphics
+     * state, revertido por `Q` igual que cualquier otro parámetro -- mismo principio que
+     * emitWithAlpha() ya explota para /ca). El shading de color en sí NUNCA lleva alpha (un
+     * FunctionType 2/3 de PDF es RGB puro) -- es el SMask quien modula su opacidad píxel a píxel
+     * según la luminosidad del shading GRIS paralelo (gray = alpha de cada stop, ver
+     * buildGrayShadingDict()).
      */
     public function paintGradient(Rect $rect, Gradient $gradient, ?BorderRadius $radius = null): void
     {
         $signature = $this->gradientSignature($rect, $gradient);
         $name = $this->writer->shadingResourceName($signature, fn(): string => $this->buildShadingDict($rect, $gradient));
 
-        $this->ops .= "q\n";
-        if ($radius !== null && !$radius->isZero()) {
-            $this->ops .= $this->roundedRectPathOps($rect, $radius) . "W n\n";
-        } else {
-            $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
-            $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
-            $this->ops .= sprintf(
+        $clipOps = ($radius !== null && !$radius->isZero())
+            ? $this->roundedRectPathOps($rect, $radius) . "W n\n"
+            : sprintf(
                 "%.2F %.2F %.2F %.2F re W n\n",
-                $x,
-                $y,
+                ($rect->x + $this->offsetX) * self::PX_TO_PT,
+                ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT,
                 $rect->width * self::PX_TO_PT,
                 $rect->height * self::PX_TO_PT,
             );
+
+        $this->ops .= "q\n" . $clipOps;
+        if ($this->gradientHasAlpha($gradient)) {
+            $this->ops .= '/' . $this->softMaskResourceName($rect, $gradient, $clipOps) . " gs\n";
         }
         $this->ops .= "/$name sh\n";
         $this->ops .= "Q\n";
+    }
+
+    /** M9-T3: true si ALGÚN stop del gradiente trae alpha<1.0 -- ver el docblock de paintGradient(). */
+    private function gradientHasAlpha(Gradient $gradient): bool
+    {
+        foreach ($gradient->stops as $stop) {
+            if ($stop->color->alpha !== null && $stop->color->alpha < 1.0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * M9-T3: registra (dedup por firma, delegado en PdfWriter::registerSoftMaskGroup()) el par
+     * shading-gris + Form XObject + ExtGState /SMask /Luminosity para $gradient dentro de $rect, y
+     * devuelve el NOMBRE de recurso ("GS1", ...) del ExtGState -- listo para un `/GSn gs`.
+     *
+     * El shading gris se registra con PdfWriter::registerShading() (MISMO mecanismo de dedup que el
+     * shading de color, solo que con una firma distinta -- sufijo "|gray") -- termina en el
+     * /Resources /Shading GLOBAL de la página igual que cualquier otro shading (sobre-incluir un
+     * recurso que solo usa un Form XObject interno es inocuo, ISO 32000-1 §7.8.3, mismo criterio
+     * documentado en toda esta clase), pero el Form XObject de la máscara lo referencia por su
+     * PROPIO nombre local fijo "ShMask" en su propio /Resources autocontenido (ver
+     * PdfWriter::registerSoftMaskGroup()), independiente del nombre "ShN" que tenga en la página.
+     */
+    private function softMaskResourceName(Rect $rect, Gradient $gradient, string $clipOps): string
+    {
+        $baseSignature = $this->gradientSignature($rect, $gradient);
+        $graySignature = $baseSignature . '|gray';
+        $grayObjectId = $this->writer->registerShading($graySignature, fn(): string => $this->buildGrayShadingDict($rect, $gradient));
+
+        $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+        $bbox = sprintf('[%.2F %.2F %.2F %.2F]', $x, $y, $x + $rect->width * self::PX_TO_PT, $y + $rect->height * self::PX_TO_PT);
+        $formOps = "q\n" . $clipOps . "/ShMask sh\nQ\n";
+
+        $maskSignature = $baseSignature . '|mask';
+        return $this->writer->softMaskGroupResourceName($maskSignature, $bbox, $formOps, $grayObjectId);
     }
 
     /**
      * Firma de dedup: rect (redondeado a 2 decimales, la misma precisión con la que las /Coords
      * se escribirán en el PDF -- dos rects que solo difieren más allá de esa precisión producirían
      * bytes IDÉNTICOS de todas formas, así que compartir el shading es correcto) + kind + ángulo +
-     * cada stop (color + posición). Una cadena PLANA (sin serialize()/json_encode(), evita
+     * cada stop (color + alpha + posición). Una cadena PLANA (sin serialize()/json_encode(), evita
      * dependencias de formato) es suficiente: solo se usa como clave de un array, nunca se
      * decodifica.
+     *
+     * M9-T3: += alpha de cada stop (antes ausente -- M8-T3 nunca dejaba pasar un stop con alpha<1
+     * hasta aquí, DeclarationParser lo forzaba a opaco). Necesario para dedup correcto: dos
+     * gradientes con el MISMO rgb pero distinto alpha por stop pintan de forma visualmente distinta
+     * (uno con /SMask, el otro sin) y NO pueden compartir /Shading -- aunque en la práctica ya
+     * comparten /ShadingType (RGB puro, alpha-blind), esta firma es también la que
+     * softMaskResourceName() reutiliza (sufijada) para el shading gris/Form/ExtGState, y ESOS sí
+     * dependen del alpha exacto de cada stop.
      */
     private function gradientSignature(Rect $rect, Gradient $gradient): string
     {
@@ -171,7 +232,14 @@ final class PdfCanvas implements Canvas
             sprintf('%.2F,%.2F,%.2F,%.2F', $rect->x, $rect->y, $rect->width, $rect->height),
         ];
         foreach ($gradient->stops as $stop) {
-            $parts[] = sprintf('%d:%d:%d@%.2F', $stop->color->r, $stop->color->g, $stop->color->b, $stop->positionPct ?? 0.0);
+            $parts[] = sprintf(
+                '%d:%d:%d:%.3F@%.2F',
+                $stop->color->r,
+                $stop->color->g,
+                $stop->color->b,
+                $stop->color->alpha ?? 1.0,
+                $stop->positionPct ?? 0.0,
+            );
         }
         return implode('|', $parts);
     }
@@ -195,6 +263,28 @@ final class PdfCanvas implements Canvas
         [$cx, $cy, $r] = $this->radialGradientGeometryPt($rect);
         $coords = sprintf('%.2F %.2F 0 %.2F %.2F %.2F', $cx, $cy, $cx, $cy, $r);
         return "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
+    }
+
+    /**
+     * M9-T3 (ISO 32000-1 §11.6.5.2): variante EN GRIS de buildShadingDict() para la máscara de
+     * luminosidad de un gradiente con stops translúcidos -- MISMA geometría /Coords que el shading
+     * de color (misma $rect, mismo ángulo/kind resuelto -- la máscara debe cubrir EXACTAMENTE el
+     * mismo área con la misma dirección), pero /ColorSpace /DeviceGray y una /Function de 1
+     * componente cuyo valor en cada stop es su ALPHA (0=negro=totalmente transparente,
+     * 1=blanco=totalmente opaco -- ISO 32000-1 §11.6.5.2: la luminosidad del grupo enmascara la
+     * opacidad efectiva del contenido que envuelve el ExtGState).
+     */
+    private function buildGrayShadingDict(Rect $rect, Gradient $gradient): string
+    {
+        $functionId = $this->writeGrayFunctionDict($gradient->stops);
+        if ($gradient->kind === GradientKind::Linear) {
+            [[$x0, $y0], [$x1, $y1]] = $this->linearGradientEndpointsPt($rect, $this->resolveAngleDeg($gradient, $rect));
+            $coords = sprintf('%.2F %.2F %.2F %.2F', $x0, $y0, $x1, $y1);
+            return "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
+        }
+        [$cx, $cy, $r] = $this->radialGradientGeometryPt($rect);
+        $coords = sprintf('%.2F %.2F 0 %.2F %.2F %.2F', $cx, $cy, $cx, $cy, $r);
+        return "<< /ShadingType 3 /ColorSpace /DeviceGray /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
     }
 
     /**
@@ -383,6 +473,57 @@ final class PdfCanvas implements Canvas
                 $c1->g / 255,
                 $c1->b / 255,
             ),
+        );
+        return $objectId;
+    }
+
+    /**
+     * M9-T3: variante EN GRIS de writeFunctionDict() para la máscara de luminosidad -- MISMA
+     * estructura Type2/Type3 stitching (misma lógica de /Bounds/Encode), pero cada sub-función es
+     * writeGrayExponentialFunction() (1 componente = alpha del stop) en vez de writeExponentialFunction()
+     * (3 componentes RGB). Duplicada deliberadamente en vez de parametrizar writeFunctionDict() --
+     * mantiene el camino de color (ya cubierto por goldens/tests hand-computados) completamente
+     * intacto.
+     *
+     * @param list<GradientStop> $stops
+     */
+    private function writeGrayFunctionDict(array $stops): int
+    {
+        $n = count($stops);
+        if ($n === 2) {
+            return $this->writeGrayExponentialFunction($stops[0]->color, $stops[1]->color);
+        }
+        $subFunctionIds = [];
+        for ($i = 0; $i < $n - 1; $i++) {
+            $subFunctionIds[] = $this->writeGrayExponentialFunction($stops[$i]->color, $stops[$i + 1]->color);
+        }
+        $bounds = [];
+        for ($i = 1; $i < $n - 1; $i++) {
+            $bounds[] = sprintf('%.4F', ($stops[$i]->positionPct ?? 0.0) / 100.0);
+        }
+        $functionsRefs = implode(' ', array_map(static fn(int $id): string => "$id 0 R", $subFunctionIds));
+        $encodeStr = implode(' ', array_fill(0, $n - 1, '0 1'));
+        $boundsStr = implode(' ', $bounds);
+        $objectId = $this->writer->allocateObjectId();
+        $this->writer->writeObject(
+            $objectId,
+            "<< /FunctionType 3 /Domain [0 1] /Functions [$functionsRefs] /Bounds [$boundsStr] /Encode [$encodeStr] >>",
+        );
+        return $objectId;
+    }
+
+    /**
+     * M9-T3 (ISO 32000-1 §7.10.2, N=1): 1 SOLO componente (gris), valor = alpha del stop (null ->
+     * 1.0, totalmente opaco -- un stop SIN alpha declarado siempre debe leerse como "no enmascara
+     * nada" en la máscara de luminosidad, coherente con Color::$alpha === null significando opaco
+     * en todo el resto del motor).
+     */
+    private function writeGrayExponentialFunction(Color $c0, Color $c1): int
+    {
+        $objectId = $this->writer->allocateObjectId();
+        $this->writer->writeObject(
+            $objectId,
+            sprintf('<< /FunctionType 2 /Domain [0 1] /C0 [%.3F] /C1 [%.3F] /N 1 >>', $c0->alpha ?? 1.0, $c1->alpha ?? 1.0),
         );
         return $objectId;
     }
@@ -670,6 +811,60 @@ final class PdfCanvas implements Canvas
             ? sprintf("q\n/%s gs\n%.2F 0 0 %.2F %.2F %.2F cm /%s Do Q\n", $this->writer->extGStateResourceName($opacity), $wPt, $hPt, $xPt, $yPt, $ref->name)
             : sprintf("q %.2F 0 0 %.2F %.2F %.2F cm /%s Do Q\n", $wPt, $hPt, $xPt, $yPt, $ref->name);
         $this->xobjectRefs[$ref->name] = $ref->objectId;
+    }
+
+    /**
+     * M9-T3 (ISO 32000-1 §8.7.3.1, PatternType 1 tiling patterns): reemplaza el antiguo bucle de
+     * `drawImage()` por-tile de M8-T6/T8 (uno-por-tile, con un cap arbitrario de 2000 llamadas —
+     * ver el historial de Paint\Painter) por UN ÚNICO patrón que el propio motor de pintado de
+     * cualquier lector PDF replica infinitamente en las 2 direcciones — sin límite, sin warning: la
+     * operación es O(1) en tamaño de PDF/tiempo de pintado, sin importar cuántos tiles quepan
+     * visualmente en $rect.
+     *
+     * Llamador: Paint\Painter::paintBackgroundImage() -- YA abrió el clip (clipRect()/
+     * clipRoundedRect(), rounded-aware) ANTES de llamar aquí, y lo cerrará con restoreClip()
+     * inmediatamente después (mismo contrato q/Q que el resto de este Canvas) -- este método NO
+     * abre/cierra su propio scope, confía en el del llamador (así que el `/GSn gs` de opacidad, si
+     * lo hay, queda correctamente acotado por ESE `Q`, sin fuga).
+     *
+     * PATTERN MATRIX (ISO 32000-1 §8.7.3.1 nota): el /Matrix de un patrón mapea SIEMPRE al espacio
+     * de coordenadas POR DEFECTO de la página -- un `cm` antes del `scn` que lo pinta NO lo afecta
+     * (a diferencia de una imagen/Form XObject normal). El anclaje ($originX,$originY más abajo) es
+     * por tanto la esquina INFERIOR IZQUIERDA, en pt PDF, del tile top-left de $rect -- el MISMO
+     * punto que el bucle antiguo calculaba para su PRIMER drawImage() (mismo flip de Y + offsetX/
+     * offsetY + escala PX_TO_PT que cualquier otro punto de esta clase) -- así que el patrón tilea
+     * a partir de EXACTAMENTE la misma esquina visual que el bucle sustituido.
+     *
+     * Firma de dedup: object id de la imagen (no la ruta cruda -- dos rutas que resuelven al MISMO
+     * fichero comparten XObject vía ImageRegistry, y por tanto deben compartir patrón también) +
+     * tamaño de tile + punto de anclaje, todos ya en pt (2 decimales, misma precisión con la que se
+     * escriben los bytes del PDF).
+     *
+     * Salvaguarda de cordura (sustituye el cap de 2000 tiles, ya innecesario -- ver arriba): un
+     * tile por debajo de 1px de ancho o alto no se pinta (ni se registra el patrón) -- ISO 32000-1
+     * no lo prohíbe, pero un /XStep/YStep casi cero es un caso patológico sin valor visual real que
+     * no vale la pena representar.
+     */
+    public function fillImagePattern(Rect $rect, string $imageKey, float $tileWidthPx, float $tileHeightPx, float $opacity): void
+    {
+        if ($opacity <= 0.0 || $tileWidthPx < 1.0 || $tileHeightPx < 1.0) {
+            return;
+        }
+        $ref = $this->images->xobjectFor($imageKey);
+        $tileWPt = $tileWidthPx * self::PX_TO_PT;
+        $tileHPt = $tileHeightPx * self::PX_TO_PT;
+        $originX = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $originY = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $tileHeightPx) * self::PX_TO_PT;
+        $signature = sprintf('%d|%.2F|%.2F|%.2F|%.2F', $ref->objectId, $tileWPt, $tileHPt, $originX, $originY);
+        $name = $this->writer->tilingPatternResourceName($signature, $ref->objectId, $tileWPt, $tileHPt, $originX, $originY);
+
+        $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+        if ($opacity < 1.0) {
+            $this->ops .= "/" . $this->writer->extGStateResourceName($opacity) . " gs\n";
+        }
+        $this->ops .= "/Pattern cs\n/$name scn\n";
+        $this->ops .= sprintf("%.2F %.2F %.2F %.2F re f\n", $x, $y, $rect->width * self::PX_TO_PT, $rect->height * self::PX_TO_PT);
     }
 
     /**

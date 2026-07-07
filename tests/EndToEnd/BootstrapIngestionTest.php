@@ -61,7 +61,10 @@ function bootstrapIngestionCategorizeWarning(string $warning): string
         (bool) preg_match('/^Unsupported length for/', $warning) => 'unsupported-length',
         (bool) preg_match('/^Unsupported color for/', $warning) => 'unsupported-color',
         (bool) preg_match('/^Invalid calc\(\) expression:/', $warning) => 'invalid-calc',
-        (bool) preg_match('/^Gradient color-stop alpha not supported/', $warning) => 'gradient-alpha-unsupported',
+        // M9-T3: the "Gradient color-stop alpha not supported" warning (M8-T3) is GONE -- rgba()
+        // gradient stops are now supported via /SMask /Luminosity (see Pdf\PdfCanvas::
+        // paintGradient()), so this category no longer exists; removed rather than left as dead
+        // code that would never match again.
         (bool) preg_match('/box-shadow/i', $warning) => 'box-shadow-limitation',
         (bool) preg_match('/^Unsupported background/', $warning) => 'unsupported-background-value',
         (bool) preg_match('/^Unsupported border component/', $warning) => 'unsupported-border-component',

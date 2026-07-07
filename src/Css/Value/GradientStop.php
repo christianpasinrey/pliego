@@ -15,10 +15,12 @@ namespace Pliego\Css\Value;
  * sobre-restringir la interfaz del milestone -- ver el brief de M8, que declara este campo
  * explícitamente nullable.
  *
- * $color llega SIEMPRE opaco (alpha null) -- un stop con alpha declarado (rgba()/hsla() con
- * alpha<1) se avisa y se fuerza a opaco en DeclarationParser (shadings con alpha real requieren
- * soft masks, M9), así que ningún consumidor de Layout/Paint/Pdf necesita volver a chequear
- * $color->alpha para un GradientStop.
+ * $color puede traer alpha (rgba()/hsla() con alpha<1, M9-T3 en adelante) -- DeclarationParser ya
+ * NO lo fuerza a opaco (M8-T3 lo hacía, con un warning; ver su historial). Pdf\PdfCanvas::
+ * paintGradient() es quien inspecciona $color->alpha en cada stop: si alguno es <1.0, pinta un
+ * /SMask /Luminosity (ISO 32000-1 §11.6.5.2) en vez de leer el canal alfa directamente en el
+ * /Function del shading de color (un FunctionType 2/3 de PDF es RGB puro, sin canal alfa -- ver el
+ * docblock de esa clase para el mecanismo completo).
  */
 final readonly class GradientStop
 {
