@@ -60,13 +60,13 @@ it('paints background-color THEN the background-image on top, when both are decl
 });
 
 it('scales a background-image to background-size:cover, end to end', function () {
-    // NOTE: this engine does not honor `height` on a plain block (BlockFlowContext always derives
-    // height from content, a documented pre-existing gap -- see BlockFlowContextTest.php's "este
-    // motor no honra `height` en un <div> normal"), so `display: flex` is used to get the exact
-    // declared 200x200 box needed to hand-verify the cover scale numbers below (FlexFormattingContext
-    // DOES honor a declared height on the flex container itself, see layout()'s "items === []"
-    // branch). No content inside the box: an empty flex container hits that exact branch.
-    $css = '.box { display: flex; width: 200px; height: 200px; background-image: url(tiny.jpg); background-size: cover; }';
+    // M8 final-review Finding A integration audit: `height` on a plain block was a verified no-op
+    // since M2 (BlockFlowContext always derived height from content) -- this test used to need
+    // `display: flex` as a workaround to get the exact declared 200x200 box the cover scale
+    // numbers below depend on. Now that a plain block honors `height` for real (see
+    // BlockFlowContext::layout()'s declared-height override), the workaround is gone: a plain
+    // `<div>` with `height: 200px` and no content grows to exactly 200x200 on its own.
+    $css = '.box { width: 200px; height: 200px; background-image: url(tiny.jpg); background-size: cover; }';
     $html = '<body><div class="box"></div></body>';
     [$pdf, $report] = backgroundImageRenderToPdfString($css, $html);
 
@@ -90,9 +90,10 @@ it('clips a background-image to a rounded border-box when border-radius is decla
 });
 
 it('tiles a background-image with background-repeat:repeat as multiple Do calls sharing ONE XObject, end to end', function () {
-    // Same `display: flex` + empty-content workaround as the cover test above, needed to get the
-    // EXACT 20x15 box the hand-verified n=5/m=5=25 tile count below depends on.
-    $css = '.box { display: flex; width: 20px; height: 15px; background-image: url(tiny.jpg); background-repeat: repeat; }';
+    // M8 final-review Finding A integration audit: same `display: flex` workaround removed as the
+    // cover test above, now that a plain block honors `height` for real -- a plain `<div>` gets
+    // the EXACT 20x15 box the hand-verified n=5/m=5=25 tile count below depends on.
+    $css = '.box { width: 20px; height: 15px; background-image: url(tiny.jpg); background-repeat: repeat; }';
     $html = '<body><div class="box"></div></body>';
     [$pdf, $report] = backgroundImageRenderToPdfString($css, $html);
 

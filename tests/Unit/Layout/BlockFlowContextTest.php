@@ -16,6 +16,7 @@ use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
+use Pliego\Page\Paginator;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\StyleResolver;
 use Pliego\Text\FontCatalog;
@@ -1262,6 +1263,125 @@ it('overflow:hidden sets clipsChildren on the BoxFragment regardless of max-heig
     expect($div->clipsChildren)->toBeTrue();
 });
 
+// --- M8 final-review Finding A (CSS 2.2 §10.5/§10.6.3): a definite declared `height` on a normal
+// block was a verified no-op since M2 -- BlockFlowContext::layout() never read $style->height at
+// all, so a `div { height: 200px }` with short content rendered at its NATURAL content height
+// (e.g. ~19.2px for a single default line), silently ignoring the declaration. Fixed by applying
+// the SAME "floor" mechanism min-height already used (grow past natural content, content stays
+// anchored at the top) -- but height REPLACES the natural content height outright (rather than
+// just flooring it), so content TALLER than the declared height overflows exactly like max-height
+// already did (visible unless overflow:hidden clips it). Interaction order per CSS 2.2 §10.7:
+// height sets the box, THEN max-height clamps down, THEN min-height clamps up (min wins on
+// conflict) -- verified against the pre-existing min/max-height tests just above, unchanged.
+
+it('Finding A: height:200px on a block with SHORT content grows the box to exactly 200 (like min-height, background covers the extra space)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { height: 200px; background-color: #ff0000 }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(200.0);
+    expect($div->background)->not->toBeNull();
+    $line = textFragments($div)[0];
+    expect($line->rect->y)->toBe($div->rect->y);
+});
+
+it('Finding A: height:200px on a block with TALLER content (overflow:visible, the default) clamps the BOX but leaves content fragments overflowing, unclipped', function () {
+    $frag = layoutHtml(
+        '<body><div>uno dos tres cuatro cinco seis siete ocho nueve diez</div></body>',
+        'div { height: 10px; width: 60px }',
+    );
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(10.0);
+    expect($div->clipsChildren)->toBeFalse();
+    $lines = textFragments($div);
+    expect(count($lines))->toBeGreaterThan(1);
+    expect($lines[count($lines) - 1]->rect->bottom())->toBeGreaterThan($div->rect->bottom());
+});
+
+it('Finding A: height:200px + overflow:hidden sets clipsChildren (Painter clips the overflowing content at paint time)', function () {
+    $frag = layoutHtml(
+        '<body><div>uno dos tres cuatro cinco seis siete ocho nueve diez</div></body>',
+        'div { height: 10px; width: 60px; overflow: hidden }',
+    );
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(10.0);
+    expect($div->clipsChildren)->toBeTrue();
+});
+
+it('Finding A: height + max-height + min-height interact per §10.7 (height first, THEN max clamps down, THEN min wins over a conflicting max)', function () {
+    // height:200 -> contentHeight overridden to 200 -- max-height:150 clamps DOWN to 150 -- but
+    // min-height:180 then clamps back UP to 180 (min wins the conflict, per the spec's own text,
+    // same precedence already verified for width in the M7-T5 tests above).
+    $frag = layoutHtml(
+        '<body><div>x</div></body>',
+        'div { height: 200px; max-height: 150px; min-height: 180px }',
+    );
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(180.0);
+});
+
+it('Finding A: height clamped DOWN by max-height alone (no min-height to fight back)', function () {
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { height: 200px; max-height: 150px }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    expect($div->rect->height)->toBe(150.0);
+});
+
+it('Finding A: a percentage height falls back to content-driven auto (rejected at CSS-parse time, see DeclarationParserTest for the warning itself)', function () {
+    // % is rejected at PARSE time (DeclarationParser: height is px-only, LENGTH_PROPERTIES, see
+    // "rejects a percentage height with a warning" in DeclarationParserTest.php) -- the
+    // declaration never reaches ComputedStyle::$height at all, so the box stays content-driven
+    // (auto), exactly as if `height` had never been declared. (layoutHtml()'s StylesheetParser
+    // instance is separate from the WarningCollector this helper wires into Box/Layout -- see
+    // Engine::render() for where the two are actually merged in the real pipeline -- so this test
+    // only asserts the LAYOUT fallback, not the warning text itself.)
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { height: 50% }');
+    $div = $frag->children[0];
+    assert($div instanceof BoxFragment);
+    $line = textFragments($div)[0];
+    expect($div->rect->height)->toBe($line->rect->height);
+});
+
+// M8 final-review Finding A integration audit item (2): pagination. A box with a declared `height`
+// crossing a page boundary is NOT atomic (only display:flex containers and overflow:hidden boxes
+// are, see BoxFragment::$atomic/$clipsChildren and Page\Paginator::flatten()'s own docblock) -- so
+// Paginator's push-down guard (`height <= pageContentHeight`) never fires for a box taller than a
+// page, and it rides along unsplit, visually overflowing into whatever page it starts on, exactly
+// like an over-tall image/text fragment already does (documented limitation). The brief adjudicates
+// min-height as the REFERENCE ORACLE for what a tall box's pagination behavior should look like --
+// height must do THE SAME, because both now share the identical "floor" mechanism inside
+// BlockFlowContext::layout() (see the declared-height override just above $maxHeightPx): once
+// layout() has produced the final BoxFragment, Paginator has no way to tell whether that height
+// came from `height` or `min-height` in the first place. This test proves the two are BYTE-FOR-BYTE
+// identical all the way through Paginator, not just asserted by architectural argument.
+it('Finding A pagination oracle: height:900px crossing an 800px page boundary behaves EXACTLY like min-height:900px (both share the layout-time "floor" mechanism; Paginator cannot tell them apart)', function () {
+    $heightRoot = layoutHtml('<body><div class="box">x</div></body>', '.box { height: 900px; background-color: #ff0000 }');
+    $minHeightRoot = layoutHtml('<body><div class="box">x</div></body>', '.box { min-height: 900px; background-color: #ff0000 }');
+
+    $heightPages = iterator_to_array(new Paginator(800.0)->paginate($heightRoot));
+    $minHeightPages = iterator_to_array(new Paginator(800.0)->paginate($minHeightRoot));
+
+    expect(count($heightPages))->toBe(count($minHeightPages));
+    foreach ($heightPages as $i => $page) {
+        expect(count($page->fragments))->toBe(count($minHeightPages[$i]->fragments));
+        foreach ($page->fragments as $j => $fragment) {
+            $other = $minHeightPages[$i]->fragments[$j];
+            expect($fragment::class)->toBe($other::class);
+            expect($fragment->rect())->toEqual($other->rect());
+        }
+    }
+    // Concretely: the box's own background leaf is neither atomic nor clipsChildren, so it is NOT
+    // split at the page boundary -- it simply overflows visually into page 1, unsplit, same
+    // "documented push-down limitation" min-height already had. `height` now shares that exact
+    // limitation instead of being silently ignored.
+    expect($heightPages)->toHaveCount(1);
+    $box = $heightPages[0]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->rect->height)->toBe(900.0);
+});
+
 // --- M7-T5: min/max-width integrated into inline-block shrink-to-fit --------------------------
 
 it('min-width floors an inline-block\'s shrink-to-fit width (min(max(minW, fit), maxW))', function () {
@@ -1750,12 +1870,13 @@ it('a plain box with no border-radius declared carries a zero BorderRadius (byte
     expect($box->borderRadius->isZero())->toBeTrue();
 });
 
-// NOTA: este motor no honra `height` en un <div> normal (BlockFlowContext deriva SIEMPRE la
-// altura del contenido, hueco preexistente documentado en FlexFormattingContext -- ver
-// hasDefiniteCrossSize()) -- `min-height` SÍ se aplica (ver BlockFlowContext::layout()), así que
-// estos tests lo usan para fijar una altura final conocida sin depender de ese gap.
+// M8 final-review Finding A integration audit: these 3 tests used `min-height` as a workaround to
+// fix a known height BEFORE this fix (declared `height` on a plain block was a verified no-op
+// since M2, see BlockFlowContext::layout()'s own docblock on the declared-height override just
+// above) -- now that `height` is honored for real, they use REAL `height` instead, routing the
+// exact fix this task exists for.
 it('resolves a px border-radius to the SAME px on the BoxFragment (no overlap, nothing to clamp)', function () {
-    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 200px; min-height: 100px; border-radius: 10px }');
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 200px; height: 100px; border-radius: 10px }');
     $box = $frag->children[0];
     assert($box instanceof BoxFragment);
     expect($box->rect->height)->toBe(100.0);
@@ -1768,7 +1889,7 @@ it('resolves a px border-radius to the SAME px on the BoxFragment (no overlap, n
 // M8 adjudication: % SIEMPRE contra el ANCHO del border box, incluso el componente vertical --
 // 200px de ancho x 50% = 100px en las 4 esquinas, sin importar que la caja mida 400px de alto.
 it('resolves a % border-radius against the border box WIDTH (M8 adjudication, documented divergence)', function () {
-    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 200px; min-height: 400px; border-radius: 50% }');
+    $frag = layoutHtml('<body><div>x</div></body>', 'div { width: 200px; height: 400px; border-radius: 50% }');
     $box = $frag->children[0];
     assert($box instanceof BoxFragment);
     expect($box->rect->height)->toBe(400.0);
@@ -1785,7 +1906,7 @@ it('resolves a % border-radius against the border box WIDTH (M8 adjudication, do
 it('clamps overlapping radii proportionally end to end (§5.5, hand-computed)', function () {
     $frag = layoutHtml(
         '<body><div>x</div></body>',
-        'div { width: 40px; min-height: 200px; box-sizing: border-box; border-radius: 60px }',
+        'div { width: 40px; height: 200px; box-sizing: border-box; border-radius: 60px }',
     );
     $box = $frag->children[0];
     assert($box instanceof BoxFragment);

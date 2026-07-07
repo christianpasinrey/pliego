@@ -34,6 +34,9 @@ final readonly class Painter
      *  0.05em thickness. */
     private const float FALLBACK_UNDERLINE_POSITION_EM = -0.1;
     private const float FALLBACK_UNDERLINE_THICKNESS_EM = 0.05;
+    /** M8 final-review Finding F: upper bound on the number of drawImage() calls a single
+     *  background-repeat:repeat tiling grid may emit -- see paintBackgroundImage(). */
+    private const int MAX_BACKGROUND_TILES = 2000;
 
     /**
      * M8-T2: $warnings es opcional (mismo patrón que Layout\*FormattingContext) — sigue siendo
@@ -401,10 +404,28 @@ final readonly class Painter
             }
             $cols = (int) ceil($rect->width / $imgW);
             $rows = (int) ceil($rect->height / $imgH);
-            for ($row = 0; $row < $rows; $row++) {
-                for ($col = 0; $col < $cols; $col++) {
+            // M8 final-review Finding F: a pathologically small tile against a large box (e.g. a
+            // 1x1px image tiled across a full page) can blow up n*m arbitrarily -- one drawImage()
+            // call (one PDF content-stream op) PER TILE, with no upper bound. Capped at a fixed
+            // ceiling, with a ONE-TIME warning (addWarningOnce -- a document with many such
+            // pathological boxes only needs to say this once); tiles are emitted in the same
+            // row-major, top-left-first order as before, simply stopping once the cap is reached
+            // (the missing tail of tiles near the bottom/right edge is the visible cost of the
+            // cap -- documented, not hidden).
+            $totalTiles = $cols * $rows;
+            $maxTiles = self::MAX_BACKGROUND_TILES;
+            if ($totalTiles > $maxTiles) {
+                $this->warnings?->addWarningOnce(
+                    'background-repeat-tile-cap',
+                    "background-repeat tiling capped at $maxTiles tiles",
+                );
+            }
+            $emitted = 0;
+            for ($row = 0; $row < $rows && $emitted < $maxTiles; $row++) {
+                for ($col = 0; $col < $cols && $emitted < $maxTiles; $col++) {
                     $tile = new Rect($rect->x + $col * $imgW, $rect->y + $row * $imgH, $imgW, $imgH);
                     $canvas->drawImage($tile, $resolved, $opacity);
+                    $emitted++;
                 }
             }
             $canvas->restoreClip();

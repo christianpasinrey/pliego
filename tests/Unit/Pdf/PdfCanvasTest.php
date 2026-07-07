@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientCorner;
 use Pliego\Css\Value\GradientKind;
 use Pliego\Css\Value\GradientStop;
 use Pliego\Image\ImageLoader;
@@ -481,6 +482,74 @@ it('hand-computes /Coords for a 45deg linear-gradient on a SQUARE box as the exa
     $y0 = (PaperSize::A4->heightPx() - 100.0) * 0.75;
     $y1 = PaperSize::A4->heightPx() * 0.75;
     expect($pdf)->toContain(sprintf('/Coords [0.00 %.2F 75.00 %.2F]', $y0, $y1));
+});
+
+// --- M8 final-review Finding B (css-images-3 §3.4.2): a `to <corner>` gradient's TRUE angle
+// depends on the box's aspect ratio -- Gradient::$corner (set by DeclarationParser, see its own
+// test file) carries WHICH corner was requested, and PdfCanvas::resolveAngleDeg() (private, exercised
+// here through paintGradient()) computes the real angle from the box's FINAL px dimensions:
+// phi = atan2(height, width) in degrees; "to bottom right" = 90+phi (90-phi for top right,
+// 270-phi for bottom left, 270+phi for top left) -- all 4 degenerate to the OLD fixed 45/135/
+// 225/315 on a square box (phi=45), verified below alongside the non-square 400x100 case.
+
+it('hand-computes /Coords for a "to bottom right" gradient on a NON-square 400x100 box via the real atan2 formula (Finding B)', function () {
+    // phi = atan2(100,400) in degrees = 14.0362... -> angle = 90+phi = 104.0362...deg (NOT the old
+    // fixed 135deg square-box approximation). At exactly this angle, the abstract gradient line
+    // (same half-length formula as the 45deg-on-square test above) lands EXACTLY on the box's own
+    // two opposite corners -- this is what "to bottom right" MEANS: start = top-left px(0,0) (0%),
+    // end = bottom-right px(400,100) (100%) -- verified by direct computation, not asserted blind.
+    $w = 400.0;
+    $h = 100.0;
+    $phiDeg = rad2deg(atan2($h, $w));
+    $angleDeg = 90.0 + $phiDeg;
+    expect(round($angleDeg, 2))->toBe(104.04); // the review's own hand-computed number
+    $rad = deg2rad($angleDeg);
+    $halfLen = ($w * abs(sin($rad)) + $h * abs(cos($rad))) / 2.0;
+    $cx = $w / 2.0;
+    $cy = $h / 2.0;
+    $startX = $cx - $halfLen * sin($rad);
+    $startY = $cy - $halfLen * -cos($rad);
+    $endX = $cx + $halfLen * sin($rad);
+    $endY = $cy + $halfLen * -cos($rad);
+    expect(round($startX, 6))->toBe(0.0);
+    expect(round($startY, 6))->toBe(0.0);
+    expect(round($endX, 6))->toBe(400.0);
+    expect(round($endY, 6))->toBe(100.0);
+
+    $gradient = new Gradient(GradientKind::Linear, 135.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ], GradientCorner::BottomRight);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 400, 100), $gradient);
+    });
+    // start px(0,0) -> pt(0.00, heightPx*0.75); end px(400,100) -> pt(300.00, (heightPx-100)*0.75).
+    $y0 = PaperSize::A4->heightPx() * 0.75;
+    $y1 = (PaperSize::A4->heightPx() - 100.0) * 0.75;
+    expect($pdf)->toContain(sprintf('/Coords [0.00 %.2F 300.00 %.2F]', $y0, $y1));
+});
+
+it('resolves all 4 corners on a SQUARE box to the SAME /Coords as the old fixed 45/135/225/315deg approximation (backward-compat)', function () {
+    $stops = [new GradientStop(new Color(255, 0, 0), 0.0), new GradientStop(new Color(0, 0, 255), 100.0)];
+    $cases = [
+        [GradientCorner::TopRight, 45.0],
+        [GradientCorner::BottomRight, 135.0],
+        [GradientCorner::BottomLeft, 225.0],
+        [GradientCorner::TopLeft, 315.0],
+    ];
+    foreach ($cases as [$corner, $fixedAngleDeg]) {
+        $viaCorner = new Gradient(GradientKind::Linear, $fixedAngleDeg, $stops, $corner);
+        $viaFixedAngle = new Gradient(GradientKind::Linear, $fixedAngleDeg, $stops);
+        $pdfViaCorner = renderOnePage(function (PdfCanvas $canvas) use ($viaCorner): void {
+            $canvas->paintGradient(new Rect(0, 0, 100, 100), $viaCorner);
+        });
+        $pdfViaFixedAngle = renderOnePage(function (PdfCanvas $canvas) use ($viaFixedAngle): void {
+            $canvas->paintGradient(new Rect(0, 0, 100, 100), $viaFixedAngle);
+        });
+        preg_match('#/Coords \[[^\]]+\]#', $pdfViaCorner, $mCorner);
+        preg_match('#/Coords \[[^\]]+\]#', $pdfViaFixedAngle, $mFixed);
+        expect($mCorner[0] ?? null)->toBe($mFixed[0] ?? null);
+    }
 });
 
 it('hand-computes the radial-gradient /Coords as circle-at-center with the farthest-corner radius', function () {

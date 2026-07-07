@@ -141,10 +141,10 @@ gradient-filled, shadowed `.card` still lays out through the exact same
     a soft-edged look at a glance but is not a true blur convolution —
     acceptable only for the small blur radii (≲10px) typical of a card/
     button shadow; a large blur radius will look banded, not smooth.
-  - **Not supported, reported as a warning and the whole declaration
-    dropped**: `inset` shadows, and any declared 4th length (`spread-
-    radius`) — the shadow is still built from the first 3 lengths, spread
-    is simply ignored after the warning.
+  - **Not supported, reported as a warning**: `inset` shadows (the whole
+    declaration is dropped) and a declared 4th length (`spread-radius`,
+    warned about but NOT dropped — the shadow is still built from the
+    first 3 lengths, spread is simply ignored).
   - `box-shadow` on an inline element (`<span>`) is **not supported**: a
     one-time warning fires and the declaration is dropped entirely (M9+
     scope, per the milestone's own restriction list).

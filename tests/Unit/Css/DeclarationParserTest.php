@@ -8,6 +8,7 @@ use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientCorner;
 use Pliego\Css\Value\GradientKind;
 use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\Length;
@@ -28,6 +29,18 @@ it('rejects negative width/height/font-size with a warning', function () {
         expect($parser->drainWarnings())->not->toBeEmpty();
     }
 });
+// M8 final-review Finding A: `height` is px-only (LENGTH_PROPERTIES) -- a percentage is rejected
+// at PARSE time (never reaches ComputedStyle::$height at all), regardless of what element it's
+// declared on. StyleResolverTest.php already covers this for an <img> specifically; this is the
+// generic parser-level check the Finding A integration audit asked for ("% height -> warning
+// convention", now also exercised for a plain block, see BlockFlowContextTest.php).
+it('rejects a percentage height with a warning, regardless of element (px-only, no containing-height tracking)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('height', '50%');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toBe(['Unsupported length for height: 50%']);
+});
+
 it('accepts negative margin (valid per CSS 2.2)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('margin-left', '-5px');
@@ -1173,19 +1186,37 @@ it('defaults a linear-gradient() with no direction to 180deg ("to bottom"), per 
     ]));
 });
 
-it('maps the 4 cardinal "to <side>" keywords to their angle, regardless of side order', function () {
+it('maps the 4 cardinal "to <side>" keywords to their angle, regardless of side order, with NO corner set', function () {
     $parser = new DeclarationParser();
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top, red, blue)'))->angleDeg)->toBe(0.0);
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right, red, blue)'))->angleDeg)->toBe(90.0);
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom, red, blue)'))->angleDeg)->toBe(180.0);
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to left, red, blue)'))->angleDeg)->toBe(270.0);
+    // M8 final-review Finding B: a cardinal side's angle is ALWAYS correct regardless of the box's
+    // aspect ratio (unlike a corner) -- ->corner stays null, so PdfCanvas never re-derives it.
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top, red, blue)'))->corner)->toBeNull();
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('maps the 4 corner "to <corner>" keywords to a fixed 45/135/225/315deg (square-box approximation), order-insensitive', function () {
+// M8 final-review Finding B (css-images-3 §3.4.2): the TRUE angle of a `to <corner>` gradient
+// depends on the box's aspect ratio, which DeclarationParser (Css\ layer) never knows -- fixed
+// 45/135/225/315deg was only ever a square-box approximation. This parser's job is now just to
+// record WHICH corner was requested (Css\Value\GradientCorner) -- Pdf\PdfCanvas::resolveAngleDeg()
+// computes the real angle at paint time, once the box's final px dimensions are known (see
+// PdfCanvasTest for the 400x100 hand-computed 104.04deg case and the 4-corner formulas).
+it('maps the 4 corner "to <corner>" keywords to a GradientCorner (real angle resolved at paint time), order-insensitive', function () {
+    $parser = new DeclarationParser();
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top right, red, blue)'))->corner)->toBe(GradientCorner::TopRight);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right top, red, blue)'))->corner)->toBe(GradientCorner::TopRight);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom right, red, blue)'))->corner)->toBe(GradientCorner::BottomRight);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom left, red, blue)'))->corner)->toBe(GradientCorner::BottomLeft);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top left, red, blue)'))->corner)->toBe(GradientCorner::TopLeft);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still carries the square-box-approximation angleDeg alongside the corner (fallback/dedup-signature value, unchanged square-box numbers)', function () {
     $parser = new DeclarationParser();
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top right, red, blue)'))->angleDeg)->toBe(45.0);
-    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right top, red, blue)'))->angleDeg)->toBe(45.0);
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom right, red, blue)'))->angleDeg)->toBe(135.0);
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom left, red, blue)'))->angleDeg)->toBe(225.0);
     expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top left, red, blue)'))->angleDeg)->toBe(315.0);
@@ -1333,6 +1364,21 @@ it('warns and discards an unbalanced background-image: url(...)', function () {
 it('treats background-image: none as an explicit declaration that wins the cascade (clears gradients AND images)', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('background-image', 'none'))->toBe(['background-gradient' => null, 'background-image' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8 final-review Finding E: `background: none` must reset the trio, mirroring
+// `background-image: none` (mirrored by parseBackgroundImageValue()'s 'none' branch above) --
+// before this fix, `none` inside the `background` SHORTHAND fell through every detection branch
+// (not a gradient function, not url(), and Color::fromCss('none') returns null -- 'none' is not a
+// CSS color keyword) straight to the generic "Unsupported background shorthand" warn+drop, instead
+// of being recognized as the explicit reset it is per the spec (background-color/-image/-gradient
+// all have 'none'/'transparent' as their initial value).
+
+it('treats background: none as the explicit reset trio (color/gradient/image all null), zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'none');
+    expect($result)->toEqual(['background-color' => null, 'background-gradient' => null, 'background-image' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
 

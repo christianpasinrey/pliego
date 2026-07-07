@@ -95,6 +95,23 @@ it('warns and falls back to circle-at-center for an unsupported radial-gradient(
     expect($pdf)->toContain('/ShadingType 3');
 });
 
+// --- M8 final-review Finding C (Box\BoxTreeBuilder::hasVisibleInlineBox()): a gradient-only inline
+// span was missing from the "does this inline element need a real InlineBoxFragment" check --
+// falling through the fast path that flattens a <span> with no visible box CSS to plain text,
+// silently dropping the gradient with zero ink and zero warning (InlineFlowContext::
+// buildInlineBoxFragment() already paints a per-slice gradient once an InlineBoxFragment exists,
+// see its own $backgroundGradient plumbing -- the feature worked, it just never got a chance to run).
+
+it('paints a linear-gradient() declared on a <span> with NO other box CSS, end to end, zero warnings (Finding C)', function () {
+    $css = '.tag { background: linear-gradient(to right, red, blue); }';
+    $html = '<body><p><span class="tag">hi</span></p></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toBe([]);
+    expect($pdf)->toContain('/ShadingType 2');
+    expect($pdf)->toContain('/Sh1 sh');
+});
+
 // --- code review Finding 1 (css-backgrounds-3 §5, shorthand reset semantics): `background` is a
 // SHORTHAND -- a more-specific `background:<color>` (or `background:<gradient>`) declaration must
 // reset the OTHER sub-property, not just add its own on top of whatever a less-specific rule

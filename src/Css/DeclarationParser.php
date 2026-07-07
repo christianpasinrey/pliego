@@ -10,6 +10,7 @@ use Pliego\Css\Value\CalcParser;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
 use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientCorner;
 use Pliego\Css\Value\GradientKind;
 use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\Length;
@@ -778,6 +779,19 @@ final class DeclarationParser
     private function parseBackgroundShorthand(string $value): array
     {
         $trimmed = $this->firstBackgroundLayer($value);
+        // M8 final-review Finding E: 'none' is the SHORTHAND's own explicit reset -- background-
+        // color/-image/-gradient all have 'none'/'transparent' as their initial value (CSS 2.2
+        // §14.2.1 / css-backgrounds-3 §3.1) -- mirroring parseBackgroundImageValue()'s 'none'
+        // branch above (which already resets background-image/-gradient the same way). Before
+        // this fix, 'none' matched none of the 3 detection branches below (not a gradient
+        // function, not url(), and Color::fromCss('none') returns null -- 'none' is not a CSS
+        // color keyword) and fell all the way through to the generic "Unsupported background
+        // shorthand" warn+drop, so a more-specific `background: none` never actually reset a
+        // less-specific cascaded gradient/color/image (see StyleResolverTest.php's cascade-win
+        // repro for the two-rule case this single-declaration check can't exercise on its own).
+        if (strtolower($trimmed) === 'none') {
+            return ['background-color' => null, 'background-gradient' => null, 'background-image' => null];
+        }
         if ($this->isGradientFunction($trimmed)) {
             $gradient = $this->parseGradientFunction($trimmed);
             if ($gradient === null) {
@@ -1103,7 +1117,7 @@ final class DeclarationParser
         }
         $direction = $this->parseGradientDirection($args[0]);
         $stopArgs = $direction !== null ? array_slice($args, 1) : $args;
-        $angleDeg = $direction ?? 180.0;
+        [$angleDeg, $corner] = $direction ?? [180.0, null];
         if (count($stopArgs) < 2) {
             return $this->warnGradientNull("linear-gradient() needs at least 2 color stops: $original");
         }
@@ -1111,7 +1125,7 @@ final class DeclarationParser
         if ($stops === null) {
             return null;
         }
-        return new Gradient(GradientKind::Linear, $angleDeg, $stops);
+        return new Gradient(GradientKind::Linear, $angleDeg, $stops, $corner);
     }
 
     /**
@@ -1198,16 +1212,22 @@ final class DeclarationParser
      * que "no reconocido como dirección" (null) es la señal correcta para que el llamador trate
      * $args[0] como el primer color-stop en su lugar.
      *
-     * Esquinas (`to top right`, etc.): aproximación de CAJA CUADRADA -- 45/135/225/315deg fijos,
-     * en vez del cálculo real dependiente del aspect-ratio de la caja (css-images-3 §3.4.2) -- ver
-     * el docblock de Css\Value\Gradient::$angleDeg para el razonamiento completo. Hand-verificable
-     * contra el ángulo numérico `45deg` en una caja CUADRADA (mismo /Coords, ver PdfCanvasTest).
+     * M8 final-review Finding B: esquinas (`to top right`, etc.) YA NO se resuelven a un ángulo
+     * fijo aquí -- esta capa (Css\) nunca conoce el aspect-ratio de la caja final (deptrac.yaml:
+     * Css no depende de Layout/Pdf), así que el ángulo REAL (que sí depende de ese aspect-ratio,
+     * ver Pdf\PdfCanvas::resolveAngleDeg()) no puede calcularse aquí. En su lugar se devuelve
+     * TANTO el ángulo de caja-cuadrada de siempre (fallback/firma de dedup, ver el docblock de
+     * Css\Value\Gradient::$angleDeg) COMO el Css\Value\GradientCorner correspondiente -- el
+     * llamador (parseLinearGradient()) mete ambos en el Gradient, y PdfCanvas usa $corner (cuando
+     * no es null) para recalcular el ángulo verdadero en tiempo de pintado.
+     *
+     * @return array{0: float, 1: ?GradientCorner}|null
      */
-    private function parseGradientDirection(string $token): ?float
+    private function parseGradientDirection(string $token): ?array
     {
         $t = strtolower(trim($token));
         if (preg_match('/^(-?\d+(?:\.\d+)?)deg$/', $t, $m) === 1) {
-            return (float) $m[1];
+            return [(float) $m[1], null];
         }
         if (!str_starts_with($t, 'to ')) {
             return null;
@@ -1218,14 +1238,14 @@ final class DeclarationParser
         }
         sort($sides);
         return match (implode(' ', $sides)) {
-            'top' => 0.0,
-            'right' => 90.0,
-            'bottom' => 180.0,
-            'left' => 270.0,
-            'right top' => 45.0,
-            'bottom right' => 135.0,
-            'bottom left' => 225.0,
-            'left top' => 315.0,
+            'top' => [0.0, null],
+            'right' => [90.0, null],
+            'bottom' => [180.0, null],
+            'left' => [270.0, null],
+            'right top' => [45.0, GradientCorner::TopRight],
+            'bottom right' => [135.0, GradientCorner::BottomRight],
+            'bottom left' => [225.0, GradientCorner::BottomLeft],
+            'left top' => [315.0, GradientCorner::TopLeft],
             default => null,
         };
     }

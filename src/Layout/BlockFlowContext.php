@@ -558,6 +558,28 @@ final class BlockFlowContext implements FormattingContext
 
         $paddingV = $paddingTop + $paddingBottom;
         $borderV = $borderTop + $borderBottom;
+        // M8 final-review Finding A (CSS 2.2 §10.5/§10.6.3): a DEFINITE declared height (px only --
+        // % is rejected at PARSE time, DeclarationParser::LENGTH_PROPERTIES, same gap documented on
+        // ComputedStyle::$height -- this engine never tracks a containing block's height) REPLACES
+        // the natural content-driven height computed above, exactly like the width algorithm above
+        // replaces $contentWidth when a declared width exists (same toContentSpace() helper, same
+        // box-sizing handling). Verified no-op since M2 until this fix: nothing below this line
+        // ever read $style->height at all. Content SHORTER than the declared height simply grows
+        // the box (content stays anchored at its natural top, background/border cover the extra
+        // space below -- the exact "floor" behavior min-height already had, see the test just
+        // above this one); content TALLER overflows past the box's own bottom edge -- painted
+        // as-is when overflow:visible (the default, already handled by max-height the same way,
+        // see the "max-height with overflow:visible" test above), or clipped by the PRE-EXISTING
+        // overflow:hidden mechanism (Paint\Painter, $clipsChildren below -- completely unchanged by
+        // this fix, it already clipped to whatever $height this method computed).
+        //
+        // Order per CSS 2.2 §10.7 ("used height" algorithm): height (this block) -> max-height
+        // clamps DOWN -> min-height clamps UP, min wins on conflict -- identical order/formula to
+        // the pre-existing max/min-height clamp just below, which is untouched.
+        $declaredHeightPx = $style->height?->px;
+        if ($declaredHeightPx !== null) {
+            $contentHeight = self::toContentSpace($declaredHeightPx, $style->boxSizing, $paddingV, $borderV);
+        }
         $maxHeightPx = $style->maxHeight?->px;
         if ($maxHeightPx !== null) {
             $contentHeight = min($contentHeight, self::toContentSpace($maxHeightPx, $style->boxSizing, $paddingV, $borderV));

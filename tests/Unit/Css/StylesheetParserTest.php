@@ -348,3 +348,55 @@ it('has an empty fontFaceRules list when there is no @font-face block', function
     $result = new StylesheetParser()->parse('p { color: red }');
     expect($result->fontFaceRules)->toBe([]);
 });
+
+// --- M8 final-review Finding D: extractAtRuleBlocks() ran BEFORE comment-stripping -------------
+// The at-rule extraction regex (`/@font-face\b[^{]*\{/i`) scanned the RAW css string, so a comment
+// merely MENTIONING "@font-face" (`/* @font-face */`) matched the literal text inside the comment;
+// `[^{]*` then greedily ate everything up to the NEXT `{` in the document -- which, for
+// `/* @font-face */ p{color:red}`, is `p`'s own opening brace -- so the brace-matcher captured
+// `color:red` as if it were the @font-face BODY, deleted `p`'s entire rule from the css handed to
+// sabberworm, and (since that "body" has no font-family/src) dropped it with bogus descriptor
+// warnings. Same latent bug for @page. Fix: strip /*...*/ comments (quote-aware, so a literal "/*"
+// inside a url()/content string survives) before either at-rule extraction runs.
+
+it('Finding D: a comment merely mentioning "@font-face" does not hijack the following rule\'s body', function () {
+    $result = new StylesheetParser()->parse('/* @font-face */ p { color: red }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->fontFaceRules)->toBe([]);
+    expect($result->warnings)->toBe([]);
+});
+
+it('Finding D: a comment merely mentioning "@page" does not hijack the following rule\'s body', function () {
+    $result = new StylesheetParser()->parse('/* @page */ p { color: red }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->pageRule)->toBeNull();
+    expect($result->warnings)->toBe([]);
+});
+
+it('Finding D (bundled Minor 4): a comment INSIDE a real @font-face body is stripped, no spurious descriptor warnings', function () {
+    $result = new StylesheetParser()->parse(
+        "@font-face { /* a comment */ font-family: 'X'; src: url('a.ttf') /* trailing */ }",
+    );
+    expect($result->fontFaceRules)->toHaveCount(1);
+    expect($result->fontFaceRules[0]->family)->toBe('X');
+    expect($result->warnings)->toBe([]);
+});
+
+it('Finding D: a real @font-face block still extracts correctly when a comment PRECEDES it', function () {
+    $result = new StylesheetParser()->parse(
+        "/* leading comment */ @font-face { font-family: 'X'; src: url('a.ttf') } p { color: red }",
+    );
+    expect($result->fontFaceRules)->toHaveCount(1);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('Finding D: a literal "/*" inside a url() is NOT treated as a comment start', function () {
+    // A pathological but well-formed url() containing a comment-like substring must survive intact
+    // -- the quote-aware stripper must not start "eating" from inside a quoted string.
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a/*b.ttf') }");
+    expect($result->fontFaceRules)->toHaveCount(1);
+    expect($result->fontFaceRules[0]->srcPath)->toBe('a/*b.ttf');
+});

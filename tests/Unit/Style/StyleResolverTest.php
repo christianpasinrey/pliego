@@ -1237,6 +1237,23 @@ it('lets background-image: none reset a less-specific cascaded gradient from bac
     expect($style->backgroundGradient)->toBeNull();
 });
 
+// --- M8 final-review Finding E: `background: none` must ALSO reset a less-specific cascaded
+// gradient (or color) -- same cascade-win shape as the background-image: none tests just above,
+// but through the SHORTHAND's own 'none' value instead of the longhand.
+
+it('lets background: none reset a less-specific cascaded gradient (Finding E, cascade-win test)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+    expect($style->backgroundColor)->toBeNull();
+    expect($style->backgroundImagePath)->toBeNull();
+});
+
 // --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow computed style ---------------------------
 
 it('computes a box-shadow with an explicit color, no inherit from the parent', function () {

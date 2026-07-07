@@ -1326,6 +1326,61 @@ it('tiles a 100x40 image into a 250x100 box as a 3x3=9 drawImage() grid, hand-ve
     }
 })->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
 
+// --- M8 final-review Finding F: tiling cap ------------------------------------------------------
+// A pathologically small tile image against a large box can blow up the tile grid arbitrarily
+// (n*m drawImage() calls, one PDF content-stream op each) -- capped at 2000 tiles with a one-time
+// warning, same addWarningOnce discipline as the rest of this class.
+
+it('caps background-repeat tiling at 2000 tiles and warns once, for a pathologically small tile', function () {
+    $path = painterBgImageFixture(1, 1);
+    try {
+        $canvas = new RecordingCanvas();
+        $warnings = new WarningCollector();
+        $box = new BoxFragment(
+            new Rect(0, 0, 200, 200),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundRepeat: true,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+        // n=ceil(200/1)=200, m=ceil(200/1)=200 -> 40000 tiles uncapped; capped at 2000.
+        expect(substr_count(implode('', $canvas->calls), 'image('))->toBe(2000);
+        expect($canvas->calls)->toHaveCount(2002); // clip + 2000 tiles + restoreClip
+        expect($warnings->drain())->toBe([
+            'background-repeat tiling capped at 2000 tiles',
+        ]);
+    } finally {
+        unlink($path);
+    }
+});
+
+it('does not warn or cap normal tiling well under the 2000-tile limit', function () {
+    $path = painterBgImageFixture(100, 40);
+    try {
+        $canvas = new RecordingCanvas();
+        $warnings = new WarningCollector();
+        $box = new BoxFragment(
+            new Rect(0, 0, 250, 100),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundRepeat: true,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+        expect(substr_count(implode('', $canvas->calls), 'image('))->toBe(9);
+        expect($warnings->drain())->toBe([]);
+    } finally {
+        unlink($path);
+    }
+});
+
 it('warns once and keeps tiling from top-left when background-repeat:repeat is combined with background-position:center', function () {
     $path = painterBgImageFixture(50, 50);
     try {

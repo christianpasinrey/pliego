@@ -206,6 +206,16 @@ final class BoxTreeBuilder
         if ($style->backgroundImagePath !== null) {
             return true;
         }
+        // M8 final-review Finding C: a `background` gradient (linear-gradient()/radial-gradient())
+        // declared on a <span> with NO other box CSS was missing from this list entirely -- it fell
+        // through the fast path exactly like the box-shadow/background-image gaps just above USED
+        // to (both already fixed, see their comments), silently dropping the gradient with NO ink
+        // and NO warning (unlike shadow/background-image, InlineBoxFragment DOES support a
+        // per-slice gradient, see InlineFlowContext::buildInlineBoxFragment() -- so this omission
+        // wasn't just a missing-warning gap, it was disabling a real, working feature).
+        if ($style->backgroundGradient !== null) {
+            return true;
+        }
         $nonZero = static fn(LengthPercentage $lp): bool => $lp->calc !== null || $lp->value !== 0.0;
         return $nonZero($style->paddingLeft) || $nonZero($style->paddingRight)
             || $nonZero($style->paddingTop) || $nonZero($style->paddingBottom);

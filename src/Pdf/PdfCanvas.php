@@ -6,6 +6,7 @@ namespace Pliego\Pdf;
 
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientCorner;
 use Pliego\Css\Value\GradientKind;
 use Pliego\Css\Value\GradientStop;
 use Pliego\Layout\Fragment\BorderRadius;
@@ -157,7 +158,16 @@ final class PdfCanvas implements Canvas
     {
         $parts = [
             $gradient->kind->name,
-            sprintf('%.2F', $gradient->angleDeg),
+            // M8 final-review Finding B: the RESOLVED angle (real, aspect-ratio-aware for a corner
+            // gradient -- see resolveAngleDeg()) is what actually determines /Coords, not the raw
+            // $gradient->angleDeg (square-box approximation, only still meaningful when $corner is
+            // null) -- using it here keeps dedup correct: two elements with the SAME corner
+            // keyword but DIFFERENT box aspect ratios must NOT share a /Shading object (different
+            // real angle => different /Coords), even though $rect is already part of this
+            // signature and already forces that split by itself (kept anyway for clarity/defense
+            // in depth, and so the signature stays meaningful if the rect ever stopped being part
+            // of it).
+            sprintf('%.2F', $this->resolveAngleDeg($gradient, $rect)),
             sprintf('%.2F,%.2F,%.2F,%.2F', $rect->x, $rect->y, $rect->width, $rect->height),
         ];
         foreach ($gradient->stops as $stop) {
@@ -178,13 +188,48 @@ final class PdfCanvas implements Canvas
     {
         $functionId = $this->writeFunctionDict($gradient->stops);
         if ($gradient->kind === GradientKind::Linear) {
-            [[$x0, $y0], [$x1, $y1]] = $this->linearGradientEndpointsPt($rect, $gradient->angleDeg);
+            [[$x0, $y0], [$x1, $y1]] = $this->linearGradientEndpointsPt($rect, $this->resolveAngleDeg($gradient, $rect));
             $coords = sprintf('%.2F %.2F %.2F %.2F', $x0, $y0, $x1, $y1);
             return "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
         }
         [$cx, $cy, $r] = $this->radialGradientGeometryPt($rect);
         $coords = sprintf('%.2F %.2F 0 %.2F %.2F %.2F', $cx, $cy, $cx, $cy, $r);
         return "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
+    }
+
+    /**
+     * M8 final-review Finding B (css-images-3 §3.4.2): resuelve el ángulo REAL de un
+     * linear-gradient() -- para cualquier dirección que NO sea una esquina ($gradient->corner ===
+     * null: ángulo numérico, lado cardinal, o el default 180deg sin dirección declarada) el
+     * ángulo ya es correcto y no depende de nada más, así que $gradient->angleDeg se devuelve tal
+     * cual. Para una esquina, el ángulo verdadero SÍ depende del aspect-ratio de $rect (algo que
+     * Css\ nunca conoce, ver el docblock de Css\Value\Gradient::$corner) -- la fórmula (derivada a
+     * mano, hand-verificada en PdfCanvasTest contra un rect 400×100 y contra los 4 rects cuadrados
+     * que antes usaban la aproximación fija):
+     *
+     *   phi = atan2(rect->height, rect->width) en grados -- en una caja cuadrada, phi = 45deg.
+     *   to top right    = 90deg - phi   (caja cuadrada: 90-45 = 45,  igual que antes)
+     *   to bottom right = 90deg + phi   (caja cuadrada: 90+45 = 135, igual que antes)
+     *   to bottom left  = 270deg - phi  (caja cuadrada: 270-45 = 225, igual que antes)
+     *   to top left     = 270deg + phi  (caja cuadrada: 270+45 = 315, igual que antes)
+     *
+     * (Las 4 fórmulas son consistentes entre sí bajo espejo horizontal/vertical de la caja --
+     * ver el report de esta tarea para la verificación completa -- y degeneran EXACTAMENTE a la
+     * vieja aproximación 45/135/225/315 cuando width===height, así que ningún golden/test de caja
+     * cuadrada cambia de valor.)
+     */
+    private function resolveAngleDeg(Gradient $gradient, Rect $rect): float
+    {
+        if ($gradient->corner === null) {
+            return $gradient->angleDeg;
+        }
+        $phiDeg = rad2deg(atan2($rect->height, $rect->width));
+        return match ($gradient->corner) {
+            GradientCorner::TopRight => 90.0 - $phiDeg,
+            GradientCorner::BottomRight => 90.0 + $phiDeg,
+            GradientCorner::BottomLeft => 270.0 - $phiDeg,
+            GradientCorner::TopLeft => 270.0 + $phiDeg,
+        };
     }
 
     /**

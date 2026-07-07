@@ -32,6 +32,7 @@ final class StylesheetParser
 
     public function parse(string $css): ParseResult
     {
+        $css = $this->stripComments($css);
         [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
         $fontFaceRules = [];
         $fontFaceWarnings = [];
@@ -146,10 +147,74 @@ final class StylesheetParser
     }
 
     /**
+     * M8 final-review Finding D (bundled Minor 4): strips CSS comments from the ENTIRE stylesheet
+     * BEFORE either at-rule extraction (extractAtRuleBlocks(), see its own docblock) runs. Bug
+     * this closes: extractAtRuleBlocks()'s regex used to scan the RAW css, so a comment merely
+     * MENTIONING "@font-face"/"@page" (a comment whose text contains the literal substring
+     * "@font-face", followed by an unrelated rule) matched that literal text inside the comment --
+     * its `[^{]*` then greedily ate everything up to the NEXT real opening brace in the document
+     * (the FOLLOWING rule's own `{`), so the brace-matcher captured that rule's declarations as if
+     * they were the @font-face BODY, deleted the whole rule from the css handed to sabberworm, and
+     * (that "body" having no family/src) dropped it with bogus descriptor warnings. Same latent
+     * hijack existed for @page.
+     *
+     * A plain regex strip is UNSAFE here: a `url()`/quoted string can legitimately contain a
+     * comment-OPEN-like substring with no matching comment-CLOSE nearby (see the "literal
+     * slash-star inside url()" test) -- a naive stripper would treat that as a comment start and
+     * eat everything up to some LATER, unrelated comment-close token elsewhere in the sheet. This
+     * is instead a conservative character-by-character state machine: single/double-quoted
+     * strings are copied VERBATIM (a comment-like substring inside one never triggers comment
+     * mode); outside any string, a comment-open token enters comment mode until the matching
+     * comment-close token (or end of string, if unterminated -- treated as "rest of the sheet is a
+     * comment", same as a real CSS tokenizer). Each stripped comment is replaced by a single space
+     * (never simply deleted), so two tokens that only had a comment between them don't
+     * accidentally fuse into one. No backslash-escape handling inside strings -- out of scope for
+     * this conservative fix, same "reduced" spirit as SelectorParser/DeclarationParser, neither of
+     * which handles CSS escapes either.
+     */
+    private function stripComments(string $css): string
+    {
+        $result = '';
+        $length = strlen($css);
+        $quote = null;
+        $i = 0;
+        while ($i < $length) {
+            $char = $css[$i];
+            if ($quote !== null) {
+                $result .= $char;
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                $i++;
+                continue;
+            }
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                $result .= $char;
+                $i++;
+                continue;
+            }
+            if ($char === '/' && $i + 1 < $length && $css[$i + 1] === '*') {
+                $close = strpos($css, '*/', $i + 2);
+                $i = $close === false ? $length : $close + 2;
+                $result .= ' ';
+                continue;
+            }
+            $result .= $char;
+            $i++;
+        }
+        return $result;
+    }
+
+    /**
      * M8-T7: generalización de la extracción de @page (brace-matching manual, ver docblock de
      * clase) a cualquier at-rule de nivel superior identificado por nombre — @font-face es el
      * segundo consumidor. Sustituye cada bloque encontrado por un espacio en el CSS que se le
      * pasa a sabberworm, exactamente igual que antes de esta tarea para @page.
+     *
+     * M8 final-review Finding D: $css llega aquí YA sin comentarios (stripComments(), llamado al
+     * principio de parse() antes de la primera invocación de este método) -- este método en sí no
+     * necesita saber nada de comentarios, el fix vive enteramente aguas arriba.
      *
      * @return array{0: string, 1: list<string>} [cssSinElAtRule, bodies]
      */
