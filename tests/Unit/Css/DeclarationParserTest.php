@@ -7,6 +7,10 @@ use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientCorner;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\Value\LengthUnit;
@@ -25,6 +29,18 @@ it('rejects negative width/height/font-size with a warning', function () {
         expect($parser->drainWarnings())->not->toBeEmpty();
     }
 });
+// M8 final-review Finding A: `height` is px-only (LENGTH_PROPERTIES) -- a percentage is rejected
+// at PARSE time (never reaches ComputedStyle::$height at all), regardless of what element it's
+// declared on. StyleResolverTest.php already covers this for an <img> specifically; this is the
+// generic parser-level check the Finding A integration audit asked for ("% height -> warning
+// convention", now also exercised for a plain block, see BlockFlowContextTest.php).
+it('rejects a percentage height with a warning, regardless of element (px-only, no containing-height tracking)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('height', '50%');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toBe(['Unsupported length for height: 50%']);
+});
+
 it('accepts negative margin (valid per CSS 2.2)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('margin-left', '-5px');
@@ -249,11 +265,15 @@ it('rejects negative border-{side}-width with a warning', function () {
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
 
-it('parses border-{side}-style solid/none and warns on unsupported styles', function () {
+it('parses border-{side}-style solid/none/dashed/dotted and warns on unsupported styles', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('border-top-style', 'solid'))->toBe(['border-top-style' => BorderStyle::Solid]);
     expect($parser->parse('border-top-style', 'none'))->toBe(['border-top-style' => BorderStyle::None]);
-    $result = $parser->parse('border-top-style', 'dashed');
+    // M8-T4 (css-backgrounds-3 §4.3): dashed/dotted dejan de estar en la lista de "no soportado"
+    // (antes de esta tarea, 'dashed' era justo el ejemplo usado para el caso de warning de abajo).
+    expect($parser->parse('border-top-style', 'dashed'))->toBe(['border-top-style' => BorderStyle::Dashed]);
+    expect($parser->parse('border-top-style', 'dotted'))->toBe(['border-top-style' => BorderStyle::Dotted]);
+    $result = $parser->parse('border-top-style', 'double');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
@@ -306,10 +326,23 @@ it('allows each border shorthand component to be omitted', function () {
 });
 
 it('warns on an unrecognized border shorthand component', function () {
+    // M8-T4: 'dotted' dejó de ser un ejemplo válido de estilo NO reconocido (ahora es un
+    // BorderStyle real) -- 'double' sigue fuera de alcance.
     $parser = new DeclarationParser();
-    $result = $parser->parse('border', '1px dotted #ccc');
+    $result = $parser->parse('border', '1px double #ccc');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('expands the border shorthand with dashed/dotted styles (M8-T4)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border', '2px dashed #ccc'))->toEqual([
+        'border-top-width' => Length::px(2.0), 'border-top-style' => BorderStyle::Dashed, 'border-top-color' => new Color(204, 204, 204),
+        'border-right-width' => Length::px(2.0), 'border-right-style' => BorderStyle::Dashed, 'border-right-color' => new Color(204, 204, 204),
+        'border-bottom-width' => Length::px(2.0), 'border-bottom-style' => BorderStyle::Dashed, 'border-bottom-color' => new Color(204, 204, 204),
+        'border-left-width' => Length::px(2.0), 'border-left-style' => BorderStyle::Dashed, 'border-left-color' => new Color(204, 204, 204),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
 // --- M2-T3: box-sizing -------------------------------------------------------------------
@@ -987,4 +1020,668 @@ it('rejects a percentage top/bottom with a warning (containing height not tracke
     $result = $parser->parse('top', '50%');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->toContain('Unsupported length for top: 50%');
+});
+
+// --- M8-T2 (css-backgrounds-3 §5 reducido): border-radius shorthand + 4 longhands -------------
+
+it('expands a single-value border-radius shorthand to all 4 corners', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(10.0),
+        'border-top-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-left-radius' => LengthPercentage::px(10.0),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('expands a 2-value border-radius shorthand (tl/br pair, tr/bl pair)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px 5%');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(10.0),
+        'border-top-right-radius' => LengthPercentage::percent(5.0),
+        'border-bottom-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-left-radius' => LengthPercentage::percent(5.0),
+    ]);
+});
+
+it('expands a 3-value border-radius shorthand (tl, tr+bl, br)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '1px 2px 3px');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(1.0),
+        'border-top-right-radius' => LengthPercentage::px(2.0),
+        'border-bottom-right-radius' => LengthPercentage::px(3.0),
+        'border-bottom-left-radius' => LengthPercentage::px(2.0),
+    ]);
+});
+
+it('expands a 4-value border-radius shorthand (tl, tr, br, bl clockwise)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '1px 2px 3px 4px');
+    expect($result)->toEqual([
+        'border-top-left-radius' => LengthPercentage::px(1.0),
+        'border-top-right-radius' => LengthPercentage::px(2.0),
+        'border-bottom-right-radius' => LengthPercentage::px(3.0),
+        'border-bottom-left-radius' => LengthPercentage::px(4.0),
+    ]);
+});
+
+it('parses each border-*-radius longhand independently', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border-top-left-radius', '8px'))->toEqual(['border-top-left-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->parse('border-top-right-radius', '8px'))->toEqual(['border-top-right-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->parse('border-bottom-right-radius', '8px'))->toEqual(['border-bottom-right-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->parse('border-bottom-left-radius', '8px'))->toEqual(['border-bottom-left-radius' => LengthPercentage::px(8.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and drops an elliptical border-radius shorthand ("/" horizontal/vertical split, unsupported in M8)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px / 20px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('warns and drops an elliptical border-*-radius longhand (2 space-separated values, unsupported in M8)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-top-left-radius', '10px 20px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('rejects a negative value anywhere in the border-radius shorthand with one warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', '10px -5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('rejects a negative border-*-radius longhand with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-top-left-radius', '-5px');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns on an unparsable border-radius shorthand token', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('border-radius', 'banana');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+// --- M8-T3 (css-images-3 §3.1 reducido): linear-gradient()/radial-gradient() ------------------
+
+/**
+ * Narrows the `array<string, mixed>` returned by DeclarationParser::parse() down to the concrete
+ * Gradient stored under 'background-gradient' — an `instanceof` guard (not assert()/inline @var,
+ * both banned by the gate: this is a REAL runtime check PHPStan already understands as narrowing)
+ * so every gradient test below can read ->angleDeg/->stops with a real type instead of `mixed`.
+ *
+ * @param array<string, mixed> $result
+ */
+function gradientFrom(array $result): Gradient
+{
+    $gradient = $result['background-gradient'] ?? null;
+    if (!$gradient instanceof Gradient) {
+        throw new \RuntimeException('Expected a Gradient under "background-gradient"');
+    }
+    return $gradient;
+}
+
+/**
+ * Same narrowing idiom as gradientFrom() (see its docblock) for the raw ['offsetX'=>..,
+ * 'offsetY'=>.., 'blur'=>.., 'color'=>Color] shape DeclarationParser::parseBoxShadowValue() puts
+ * under 'box-shadow' (see its docblock — NOT yet the final Css\Value\BoxShadow VO, ComputedStyle
+ * resolves that).
+ *
+ * @param array<string, mixed> $result
+ * @return array{offsetX: Length|CssLength|CalcExpr, offsetY: Length|CssLength|CalcExpr, blur: Length|CssLength|CalcExpr, color: Color}
+ */
+function boxShadowRaw(array $result): array
+{
+    $raw = $result['box-shadow'] ?? null;
+    if (!is_array($raw)) {
+        throw new \RuntimeException('Expected a raw box-shadow array under "box-shadow"');
+    }
+    $offsetX = $raw['offsetX'] ?? null;
+    $offsetY = $raw['offsetY'] ?? null;
+    $blur = $raw['blur'] ?? null;
+    $color = $raw['color'] ?? null;
+    if (
+        !($offsetX instanceof Length || $offsetX instanceof CssLength || $offsetX instanceof CalcExpr)
+        || !($offsetY instanceof Length || $offsetY instanceof CssLength || $offsetY instanceof CalcExpr)
+        || !($blur instanceof Length || $blur instanceof CssLength || $blur instanceof CalcExpr)
+        || !$color instanceof Color
+    ) {
+        throw new \RuntimeException('Malformed raw box-shadow array');
+    }
+    return ['offsetX' => $offsetX, 'offsetY' => $offsetY, 'blur' => $blur, 'color' => $color];
+}
+
+it('parses a numeric-angle linear-gradient() with 2 explicit color stops, zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(45deg, red, blue)');
+    expect($result)->toEqual([
+        'background-gradient' => new Gradient(GradientKind::Linear, 45.0, [
+            new GradientStop(new Color(255, 0, 0), 0.0),
+            new GradientStop(new Color(0, 0, 255), 100.0),
+        ]),
+        // M8-T6: the gradient branch of 'background-image' now ALSO resets a previously-cascaded
+        // background-image to null (reset-trio discipline, see the M8-T6 tests below).
+        'background-image' => null,
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('defaults a linear-gradient() with no direction to 180deg ("to bottom"), per spec', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red, blue)');
+    expect($result['background-gradient'])->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+it('maps the 4 cardinal "to <side>" keywords to their angle, regardless of side order, with NO corner set', function () {
+    $parser = new DeclarationParser();
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top, red, blue)'))->angleDeg)->toBe(0.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right, red, blue)'))->angleDeg)->toBe(90.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom, red, blue)'))->angleDeg)->toBe(180.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to left, red, blue)'))->angleDeg)->toBe(270.0);
+    // M8 final-review Finding B: a cardinal side's angle is ALWAYS correct regardless of the box's
+    // aspect ratio (unlike a corner) -- ->corner stays null, so PdfCanvas never re-derives it.
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top, red, blue)'))->corner)->toBeNull();
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// M8 final-review Finding B (css-images-3 §3.4.2): the TRUE angle of a `to <corner>` gradient
+// depends on the box's aspect ratio, which DeclarationParser (Css\ layer) never knows -- fixed
+// 45/135/225/315deg was only ever a square-box approximation. This parser's job is now just to
+// record WHICH corner was requested (Css\Value\GradientCorner) -- Pdf\PdfCanvas::resolveAngleDeg()
+// computes the real angle at paint time, once the box's final px dimensions are known (see
+// PdfCanvasTest for the 400x100 hand-computed 104.04deg case and the 4-corner formulas).
+it('maps the 4 corner "to <corner>" keywords to a GradientCorner (real angle resolved at paint time), order-insensitive', function () {
+    $parser = new DeclarationParser();
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top right, red, blue)'))->corner)->toBe(GradientCorner::TopRight);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right top, red, blue)'))->corner)->toBe(GradientCorner::TopRight);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom right, red, blue)'))->corner)->toBe(GradientCorner::BottomRight);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom left, red, blue)'))->corner)->toBe(GradientCorner::BottomLeft);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top left, red, blue)'))->corner)->toBe(GradientCorner::TopLeft);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('still carries the square-box-approximation angleDeg alongside the corner (fallback/dedup-signature value, unchanged square-box numbers)', function () {
+    $parser = new DeclarationParser();
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top right, red, blue)'))->angleDeg)->toBe(45.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom right, red, blue)'))->angleDeg)->toBe(135.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom left, red, blue)'))->angleDeg)->toBe(225.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top left, red, blue)'))->angleDeg)->toBe(315.0);
+});
+
+it('distributes 3 color stops with no explicit position evenly to 0%/50%/100% (css-images-3 §3.4.1 simple rule)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(to right, red, lime, blue)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops)->toHaveCount(3);
+    expect($stops[0]->positionPct)->toBe(0.0);
+    expect($stops[1]->positionPct)->toBe(50.0);
+    expect($stops[2]->positionPct)->toBe(100.0);
+});
+
+it('keeps an explicit stop position and only distributes the ones left unset around it', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(to right, red, lime 20%, blue, yellow)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops[0]->positionPct)->toBe(0.0);
+    expect($stops[1]->positionPct)->toBe(20.0);
+    // (blue) is the single gap between the explicit 20% and the implicit 100% end -> midpoint 60%.
+    expect($stops[2]->positionPct)->toBe(60.0);
+    expect($stops[3]->positionPct)->toBe(100.0);
+});
+
+it('clamps a decreasing explicit stop position up to the previous one (monotonic positions, css-images-3 §3.4.1)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(to right, red 50%, blue 10%)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops[0]->positionPct)->toBe(50.0);
+    expect($stops[1]->positionPct)->toBe(50.0);
+});
+
+it('parses radial-gradient(circle at center, ...) with zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(circle at center, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses a bare radial-gradient(red, blue) (no shape/position argument at all) with zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('falls back to circle-at-center + a warning for a complex radial-gradient() form (ellipse/explicit position)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(ellipse at top left, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('warns and renders opaque for a gradient color-stop with alpha (soft masks are a later milestone)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(rgba(255, 0, 0, 0.5), blue)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops[0]->color)->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('rejects a gradient with fewer than 2 color stops with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('detects a gradient inside the "background" shorthand', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'linear-gradient(to right, red, blue)');
+    expect($result)->toHaveKey('background-gradient');
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('detects a plain color inside the "background" shorthand (gradient/color/image detection)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', '#ff0000');
+    // Finding 1 fix (css-backgrounds-3 §5, shorthand reset semantics): the color branch of the
+    // `background` shorthand now ALSO emits an explicit 'background-gradient' => null -- a
+    // shorthand resets EVERY sub-property it covers, not just the one it declares a value for.
+    // A null here (vs. simply omitting the key) is what lets a cascaded gradient from a
+    // LESS-specific rule get overridden -- see the dedicated "resets" block below and the
+    // cascade-level repro in StyleResolverTest.php.
+    // M8-T6: the color branch also resets background-image to null (reset-trio discipline).
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null, 'background-image' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-image: url(...) is now implemented for
+// real (the M8-T3 stub used to warn "lands in a later milestone" -- this milestone IS that later
+// milestone). Both quoted forms (single/double) are optional per spec; the raw path (unresolved
+// against any basePath -- that happens at PAINT time, see Paint\Painter) is what ComputedStyle
+// carries under 'background-image'.
+
+it('parses background-image: url(...) with no quotes, storing the raw path', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'url(photo.jpg)');
+    expect($result)->toEqual(['background-image' => 'photo.jpg', 'background-gradient' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses background-image: url(...) with single quotes, stripping them', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', "url('photo.jpg')");
+    expect($result)->toEqual(['background-image' => 'photo.jpg', 'background-gradient' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses background-image: url(...) with double quotes, stripping them', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'url("photo.jpg")');
+    expect($result)->toEqual(['background-image' => 'photo.jpg', 'background-gradient' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses url() inside the "background" shorthand, resetting color AND gradient', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'url(photo.jpg)');
+    expect($result)->toEqual([
+        'background-image' => 'photo.jpg',
+        'background-color' => null,
+        'background-gradient' => null,
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards an unbalanced background-image: url(...)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-image', 'url(photo.jpg'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('treats background-image: none as an explicit declaration that wins the cascade (clears gradients AND images)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-image', 'none'))->toBe(['background-gradient' => null, 'background-image' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8 final-review Finding E: `background: none` must reset the trio, mirroring
+// `background-image: none` (mirrored by parseBackgroundImageValue()'s 'none' branch above) --
+// before this fix, `none` inside the `background` SHORTHAND fell through every detection branch
+// (not a gradient function, not url(), and Color::fromCss('none') returns null -- 'none' is not a
+// CSS color keyword) straight to the generic "Unsupported background shorthand" warn+drop, instead
+// of being recognized as the explicit reset it is per the spec (background-color/-image/-gradient
+// all have 'none'/'transparent' as their initial value).
+
+it('treats background: none as the explicit reset trio (color/gradient/image all null), zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'none');
+    expect($result)->toEqual(['background-color' => null, 'background-gradient' => null, 'background-image' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- RESTRICCIONES GLOBALES M8 ("multiple backgrounds -> primera capa se usa + warning") -------
+
+it('uses only the first layer of a multi-layer background-image, with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red, blue), url(photo.jpg)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('uses only the first layer of a multi-layer "background" shorthand, with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', '#ff0000, linear-gradient(red, blue)');
+    // See the Finding 1 fix note above: the color branch always resets background-gradient (and,
+    // since M8-T6, background-image too).
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null, 'background-image' => null]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('does NOT confuse a single gradient function\'s own internal commas with multiple background layers', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red, lime, blue)');
+    expect(gradientFrom($result)->stops)->toHaveCount(3);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- code review Finding 1 fix (css-backgrounds-3 §5, shorthand reset semantics): `background`
+// is a SHORTHAND -- CSS 2.2 §12.5.3 (and css-backgrounds-3 §5 for the modern grammar): a
+// shorthand sets EVERY sub-property it covers on EVERY use, resetting the ones it doesn't
+// mention to their initial value. Before this fix, the color branch of parseBackgroundShorthand()
+// returned ONLY ['background-color' => ...] (no 'background-gradient' key at all) -- a cascaded
+// gradient from a LESS-specific rule for the same element survived untouched (both painted). The
+// fix: every branch of the shorthand ALSO emits an explicit reset (`null`) for the OTHER
+// sub-property -- see StyleResolverTest.php for the cascade-level (two-rule) repro that this unit
+// test can't exercise on its own (DeclarationParser::parse() never sees more than one
+// declaration at a time; the actual bug lived in how StyleResolver MERGES declarations across
+// rules, not in parse() itself).
+
+it('the "background" shorthand color branch explicitly resets background-gradient to null', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'yellow');
+    expect($result)->toHaveKey('background-gradient');
+    expect($result['background-gradient'])->toBeNull();
+    expect($result['background-color'])->toEqual(new Color(255, 255, 0));
+});
+
+it('the "background" shorthand gradient branch explicitly resets background-color to null (initial/transparent)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'linear-gradient(red, blue)');
+    expect($result)->toHaveKey('background-color');
+    expect($result['background-color'])->toBeNull();
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+// --- code review Finding 2 fix (css-images-3 §3.1): looksLikeRadialPrefix() only recognized
+// 'circle'/'ellipse'/a leading 'at ' as shape/position geometry -- extent keywords
+// (closest-side/closest-corner/farthest-side/farthest-corner), a bare size length
+// (`radial-gradient(50px, ...)`), and an explicit size pair (`radial-gradient(50% 50%, ...)`)
+// were NOT recognized, so the first argument was treated as an (invalid) color-stop instead --
+// Color::fromCss() rejects it, parseGradientStops() returns null, and the WHOLE gradient is
+// dropped with a misleading "unsupported gradient stop color" warning instead of degrading via
+// the existing circle-at-center fallback. None of the 3 new prefixes can ever collide with a
+// real color-stop: no named color contains a hyphen, and no named color parses as a CssLength
+// (which requires a leading digit) -- `radial-gradient(red, blue)` (color-first) keeps producing
+// zero warnings (already covered above, "parses a bare radial-gradient(...)").
+
+it('degrades a radial-gradient() with an extent-keyword prefix (closest-side) to circle-at-center, with ONE warning (not dropped)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(closest-side, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('degrades a radial-gradient() with a bare length size prefix (50px) to circle-at-center, with ONE warning (not dropped)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(50px, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('degrades a radial-gradient() with a percentage-pair size prefix (50% 50%) to circle-at-center, with ONE warning (not dropped)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(50% 50%, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('still parses radial-gradient(red, blue) (color first, no prefix at all) with zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-size/background-repeat/background-position
+
+it('parses background-size: auto|cover|contain', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-size', 'auto'))->toBe(['background-size' => 'auto']);
+    expect($parser->parse('background-size', 'cover'))->toBe(['background-size' => 'cover']);
+    expect($parser->parse('background-size', 'contain'))->toBe(['background-size' => 'contain']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards background-size when given a concrete length/percentage (only keywords supported in M8)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-size', '50%'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($parser->parse('background-size', '100px'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($parser->parse('background-size', '100px 50px'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('parses background-repeat: no-repeat|repeat to bool', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-repeat', 'no-repeat'))->toBe(['background-repeat' => false]);
+    expect($parser->parse('background-repeat', 'repeat'))->toBe(['background-repeat' => true]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards unsupported background-repeat values (repeat-x/repeat-y/space/round), naming the value', function () {
+    $parser = new DeclarationParser();
+    foreach (['repeat-x', 'repeat-y', 'space', 'round'] as $value) {
+        expect($parser->parse('background-repeat', $value))->toBe([]);
+        $warnings = $parser->drainWarnings();
+        expect($warnings)->toHaveCount(1);
+        expect($warnings[0])->toContain($value);
+    }
+});
+
+it('parses background-position: center and both spellings of top-left (top left / left top)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-position', 'center'))->toBe(['background-position' => 'center']);
+    expect($parser->parse('background-position', 'top left'))->toBe(['background-position' => 'top left']);
+    expect($parser->parse('background-position', 'left top'))->toBe(['background-position' => 'top left']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('normalizes whitespace/case in background-position (e.g. "  Top   Left  ")', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-position', '  Top   Left  '))->toBe(['background-position' => 'top left']);
+    expect($parser->parse('background-position', 'CENTER'))->toBe(['background-position' => 'center']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards an unsupported background-position (e.g. bottom right)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-position', 'bottom right'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+// --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow ------------------------------------------
+
+it('parses a 2-length box-shadow (offset-x/offset-y only, blur defaults to 0px) with an explicit color', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '4px 6px red');
+    expect($result)->toHaveKey('box-shadow');
+    $raw = boxShadowRaw($result);
+    expect($raw['offsetX'])->toEqual(Length::px(4.0));
+    expect($raw['offsetY'])->toEqual(Length::px(6.0));
+    expect($raw['blur'])->toEqual(Length::px(0.0));
+    expect($raw['color'])->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses a 3-length box-shadow (offset-x/offset-y/blur-radius)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 4px 8px #000000');
+    $raw = boxShadowRaw($result);
+    expect($raw['offsetX'])->toEqual(Length::px(2.0));
+    expect($raw['offsetY'])->toEqual(Length::px(4.0));
+    expect($raw['blur'])->toEqual(Length::px(8.0));
+    expect($raw['color'])->toEqual(new Color(0, 0, 0));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('defaults box-shadow color to the currentColor sentinel when no color is declared', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '4px 6px');
+    $raw = boxShadowRaw($result);
+    expect($raw['color']->isCurrentColor)->toBeTrue();
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts offset-x/offset-y before OR after the color, in any order', function () {
+    $parser = new DeclarationParser();
+    $a = $parser->parse('box-shadow', 'red 4px 6px');
+    $b = $parser->parse('box-shadow', '4px 6px red');
+    expect($a)->toEqual($b);
+});
+
+it('warns and DROPS the whole box-shadow when a 4th length (spread) is present, but still emits the shadow with the first 3 (M8: spread ignored)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 4px 8px 3px red');
+    $raw = boxShadowRaw($result);
+    expect($raw['offsetX'])->toEqual(Length::px(2.0));
+    expect($raw['offsetY'])->toEqual(Length::px(4.0));
+    expect($raw['blur'])->toEqual(Length::px(8.0));
+    expect($raw['color'])->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toBe(['box-shadow spread not supported (ignored): 2px 4px 8px 3px red']);
+});
+
+it('warns and DROPS the entire box-shadow declaration when inset is present (M8: no inset support)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', 'inset 2px 4px red');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns and drops box-shadow with fewer than 2 lengths', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '4px red');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns and drops box-shadow with a negative blur radius', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 4px -8px red');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('uses only the first shadow of a comma-separated multi-shadow list, with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 2px red, 4px 4px blue');
+    $raw = boxShadowRaw($result);
+    expect($raw['color'])->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toBe(['Multiple box-shadows not supported (using the first only): 2px 2px red, 4px 4px blue']);
+});
+
+it('treats box-shadow: none as an explicit reset (null value, no warning)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', 'none');
+    expect($result)->toBe(['box-shadow' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing/text-transform ---------------
+
+it('parses letter-spacing/word-spacing as normal (explicit null reset) or a px length', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('letter-spacing', 'normal'))->toBe(['letter-spacing' => null]);
+    expect($parser->parse('letter-spacing', '2px'))->toEqual(['letter-spacing' => Length::px(2.0)]);
+    expect($parser->parse('word-spacing', 'normal'))->toBe(['word-spacing' => null]);
+    expect($parser->parse('word-spacing', '4px'))->toEqual(['word-spacing' => Length::px(4.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts em/rem for letter-spacing/word-spacing as symbolic CssLength (resolved in ComputedStyle::compute)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('letter-spacing', '0.1em'))->toEqual(['letter-spacing' => CssLength::of(0.1, LengthUnit::Em)]);
+    expect($parser->parse('word-spacing', '0.5rem'))->toEqual(['word-spacing' => CssLength::of(0.5, LengthUnit::Rem)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts negative letter-spacing/word-spacing (CSS 2.2 §16.3.1/§16.4 allow negative, unlike most lengths)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('letter-spacing', '-1px'))->toEqual(['letter-spacing' => Length::px(-1.0)]);
+    expect($parser->parse('word-spacing', '-2px'))->toEqual(['word-spacing' => Length::px(-2.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported letter-spacing/word-spacing value (e.g. a percentage)', function () {
+    foreach (['letter-spacing', 'word-spacing'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '10%');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('parses text-transform none/uppercase/lowercase/capitalize and warns on an unsupported keyword', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('text-transform', 'none'))->toBe(['text-transform' => 'none']);
+    expect($parser->parse('text-transform', 'uppercase'))->toBe(['text-transform' => 'uppercase']);
+    expect($parser->parse('text-transform', 'lowercase'))->toBe(['text-transform' => 'lowercase']);
+    expect($parser->parse('text-transform', 'capitalize'))->toBe(['text-transform' => 'capitalize']);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    $parser = new DeclarationParser();
+    $result = $parser->parse('text-transform', 'full-width');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
 });

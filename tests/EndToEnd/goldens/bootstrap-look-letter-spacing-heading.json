@@ -1,0 +1,28 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        16.08,
+        400.0,
+        28.8
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "clipsChildren": false,
+    "children": [
+        {
+            "type": "text",
+            "rect": [
+                0.0,
+                16.08,
+                274.82,
+                28.8
+            ],
+            "text": "BOOTSTRAP LOOK",
+            "faceKey": "default:700:normal",
+            "underline": false,
+            "baselineY": 40.76
+        }
+    ]
+}

@@ -97,8 +97,38 @@ final readonly class Paginator
         }
         // T5: una caja sin fondo pero con borde visible también necesita una hoja paintable
         // (antes de T5 solo se emitía por background !== null y el borde se perdía).
-        if ($box->background !== null || $box->borders->isVisible()) {
-            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity);
+        // M8-T2: $borderRadius se preserva (no add nada a la condición de arriba -- un radio sin
+        // background/borde visible no pinta nada por sí solo, exactamente igual que antes de esta
+        // tarea; una caja clipsChildren con radio SIEMPRE sale por la rama de arriba, nunca llega
+        // aquí, ver el docblock de esta clase).
+        // M8-T3: $backgroundGradient se UNE a la condición -- una caja con gradiente pero SIN
+        // background-color ni borde visible (el caso común: `background: linear-gradient(...)`
+        // solo) también necesita una hoja paintable; sin esta rama, esa caja se perdería en
+        // silencio (ni fondo ni gradiente pintados) exactamente como le pasaba a un borde-sin-fondo
+        // antes de T5.
+        // M8-T4: $boxShadow SE UNE a la condición -- una caja con SOLO box-shadow (sin
+        // background/borde/gradiente propios, p.ej. una tarjeta cuyo único CSS de caja es
+        // `box-shadow: ...`) también necesita una hoja paintable, mismo motivo que
+        // $backgroundGradient (M8-T3, ver su docblock) y el borde-sin-fondo de T5.
+        // M8-T6: $backgroundImagePath SE UNE a la condición -- una caja con SOLO background-image
+        // (sin background-color/borde/gradiente/sombra propios, p.ej. `background-image:
+        // url(bg.jpg)` a secas) también necesita una hoja paintable, mismo motivo que
+        // $backgroundGradient (M8-T3) y $boxShadow (M8-T4) más arriba.
+        if ($box->background !== null || $box->borders->isVisible() || $box->backgroundGradient !== null || $box->boxShadow !== null || $box->backgroundImagePath !== null) {
+            yield new BoxFragment(
+                $box->rect,
+                $box->background,
+                [],
+                $box->borders,
+                opacity: $box->opacity,
+                borderRadius: $box->borderRadius,
+                backgroundGradient: $box->backgroundGradient,
+                boxShadow: $box->boxShadow,
+                backgroundImagePath: $box->backgroundImagePath,
+                backgroundSize: $box->backgroundSize,
+                backgroundRepeat: $box->backgroundRepeat,
+                backgroundPosition: $box->backgroundPosition,
+            );
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -122,6 +152,8 @@ final readonly class Paginator
                 $leaf->faceKey,
                 $leaf->underline,
                 $leaf->opacity,
+                $leaf->letterSpacingPx,
+                $leaf->wordSpacingPx,
             ),
             // M4-T5: un BoxFragment con hijos NO vacíos solo puede llegar aquí desde dentro del
             // subárbol de una hoja compuesta atómica (flatten() nunca aplana esos hijos por
@@ -137,6 +169,13 @@ final readonly class Paginator
                 $leaf->atomic,
                 $leaf->opacity,
                 $leaf->clipsChildren,
+                $leaf->borderRadius,
+                $leaf->backgroundGradient,
+                $leaf->boxShadow,
+                $leaf->backgroundImagePath,
+                $leaf->backgroundSize,
+                $leaf->backgroundRepeat,
+                $leaf->backgroundPosition,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se
@@ -153,6 +192,8 @@ final readonly class Paginator
                 $leaf->opacity,
                 $leaf->isFirstSlice,
                 $leaf->isLastSlice,
+                $leaf->borderRadius,
+                $leaf->backgroundGradient,
             ),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };

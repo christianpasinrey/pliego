@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Pliego\Layout\Fragment;
 
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
 use Pliego\Layout\Geometry\Rect;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 
 final readonly class BoxFragment implements Fragment
 {
@@ -38,6 +42,26 @@ final readonly class BoxFragment implements Fragment
      * Ortogonal a $atomic: una caja puede ser clipsChildren sin ser un contenedor flex (el caso
      * normal, un <div> con overflow:hidden), y viceversa.
      */
+    /**
+     * M8-T2 (css-backgrounds-3 §5): $borderRadius llega YA resuelto a px y clampeado (§5.5) --
+     * ver Layout\Fragment\BorderRadius::fromCss(), invocado por cada FormattingContext que
+     * construye un BoxFragment a partir de un ComputedStyle propio (BlockFlowContext/
+     * FlexFormattingContext/TableFormattingContext). Default "new BorderRadius()" (PHP 8.1+ "new
+     * in initializers", sin argumentos -> las 4 esquinas caen a su propio default 0.0) para que
+     * los ~40 construction sites preexistentes (tests + GeometryShift/Paginator, ver grep) seguir
+     * compilando sin tocarlos: sin radio, el comportamiento de pintado es BYTE IDÉNTICO al de
+     * antes de esta tarea (ver Paint\Painter: $radius->isZero() hace caer el pintado por el mismo
+     * camino fillRect/paintBordersFlat pre-M8-T2).
+     */
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido): $backgroundGradient llega como VO CRUDO (sin resolver
+     * contra ningún rect todavía -- Pdf\PdfCanvas::paintGradient() computa las /Coords finales
+     * contra $this->rect en tiempo de pintado, igual división de responsabilidades que
+     * $borderRadius frente a Css\Value\BorderRadius). Default null para que los ~40 construction
+     * sites preexistentes (tests + GeometryShift/Paginator) sigan compilando sin tocarlos: sin
+     * gradiente declarado, comportamiento de pintado byte-idéntico a antes de esta tarea (ver
+     * Paint\Painter::paintBackground(): $gradient === null es un no-op).
+     */
     /** @param list<Fragment> $children */
     public function __construct(
         public Rect $rect,
@@ -47,6 +71,30 @@ final readonly class BoxFragment implements Fragment
         public bool $atomic = false,
         public float $opacity = 1.0,
         public bool $clipsChildren = false,
+        public BorderRadius $borderRadius = new BorderRadius(),
+        public ?Gradient $backgroundGradient = null,
+        // M8-T4 (css-backgrounds-3 §6 reducido): VO YA resuelto a px -- ver el docblock de
+        // Css\Value\BoxShadow para el porqué de que no exista una contraparte "Layout\Fragment\
+        // BoxShadow" aparte (a diferencia de BorderRadius, que SÍ necesita una resolución en dos
+        // fases). Default null para que los ~40 construction sites preexistentes sigan
+        // compilando sin tocarlos: sin sombra declarada, comportamiento de pintado byte-idéntico
+        // a antes de esta tarea. InlineBoxFragment NO tiene este campo (M8: box-shadow declarado
+        // en una caja inline real -> warning, ver InlineFlowContext::buildInlineBoxFragment()).
+        public ?BoxShadow $boxShadow = null,
+        // M8-T6 (css-backgrounds-3 §4 reducido): $backgroundImagePath es el RAW path tal cual lo
+        // dejó ComputedStyle::$backgroundImagePath (sin resolver contra basePath todavía -- eso
+        // ocurre en Paint\Painter::paintBackgroundImage(), igual división de responsabilidades que
+        // $backgroundGradient frente a Pdf\PdfCanvas::paintGradient()). Default null/Auto/false/
+        // TopLeft para que los ~15 construction sites preexistentes (tests + GeometryShift/
+        // Paginator/*FormattingContext, ver grep) sigan compilando sin tocarlos: sin
+        // background-image declarado, comportamiento de pintado byte-idéntico a antes de esta
+        // tarea. InlineBoxFragment NO tiene estos 4 campos (M8: background-image declarado en una
+        // caja inline real -> warning + descartado, ver InlineFlowContext::
+        // buildInlineBoxFragment()), mismo patrón que $boxShadow.
+        public ?string $backgroundImagePath = null,
+        public BackgroundSize $backgroundSize = BackgroundSize::Auto,
+        public bool $backgroundRepeat = false,
+        public BackgroundPosition $backgroundPosition = BackgroundPosition::TopLeft,
     ) {}
 
     public function rect(): Rect

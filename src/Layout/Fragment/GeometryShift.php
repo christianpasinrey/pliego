@@ -46,6 +46,13 @@ final class GeometryShift
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius,
+            $fragment->backgroundGradient,
+            $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 
@@ -68,6 +75,8 @@ final class GeometryShift
                     $child->faceKey,
                     $child->underline,
                     $child->opacity,
+                    $child->letterSpacingPx,
+                    $child->wordSpacingPx,
                 ),
                 $child instanceof ImageFragment => new ImageFragment(
                     new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
@@ -104,6 +113,13 @@ final class GeometryShift
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius,
+            $fragment->backgroundGradient,
+            $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 
@@ -132,6 +148,8 @@ final class GeometryShift
                     $child->faceKey,
                     $child->underline,
                     $child->opacity,
+                    $child->letterSpacingPx,
+                    $child->wordSpacingPx,
                 ),
                 $child instanceof ImageFragment => new ImageFragment(
                     new Rect($child->rect->x + $deltaX, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
@@ -145,6 +163,8 @@ final class GeometryShift
                     $child->opacity,
                     $child->isFirstSlice,
                     $child->isLastSlice,
+                    $child->borderRadius,
+                    $child->backgroundGradient,
                 ),
                 default => throw new \LogicException('Unknown fragment leaf: ' . $child::class),
             };

@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace Pliego\Style;
 
 use Pliego\Css\DeclarationParser;
+use Pliego\Css\Value\BorderRadius;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\CalcValue;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
+use Pliego\Css\Value\Gradient;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\Value\LengthUnit;
@@ -160,6 +163,16 @@ final readonly class ComputedStyle
         public ?LengthPercentage $right,
         public ?LengthPercentage $bottom,
         public ?LengthPercentage $left,
+        // M8-T2 (css-backgrounds-3 §5): NO hereda -- initial value real es 0 en las 4 esquinas
+        // (Css\Value\BorderRadius::zero()) cuando no hay declaración propia, nunca
+        // $parent->borderRadius (mismo patrón que box-sizing/overflow/opacity/top-right-bottom-
+        // left: cada elemento decide su PROPIO radio, un <div> dentro de un padre con
+        // border-radius no hereda nada). % SIGUE SIMBÓLICO aquí (LengthPercentage sin resolver,
+        // igual que width/margin/padding) -- Layout\Fragment\BorderRadius::fromCss() lo resuelve
+        // contra el border-box (adjudicación M8: % siempre contra el ANCHO) y aplica el clamp de
+        // solapes §5.5 una vez conocido el tamaño final de la caja (ver BlockFlowContext/
+        // FlexFormattingContext/TableFormattingContext/InlineFlowContext).
+        public BorderRadius $borderRadius,
         // M6-T5 (css-color-3 opacity / CSS Compositing §5): opacity NO hereda — cada elemento
         // parte SIEMPRE del initial value 1.0 (opaco) cuando no hay declaración propia, nunca de
         // $parent->opacity (a diferencia de $color, que sí hereda). Se aplica multiplicativamente
@@ -180,6 +193,61 @@ final readonly class ComputedStyle
         // en cada uso, ver StyleResolver::resolveDeferred()).
         /** @var array<string, string> */
         public array $customProperties = [],
+        // M8-T3 (css-images-3 §3.1 reducido): NO hereda -- initial value real es "none" (sin
+        // gradiente) siempre que no haya declaración propia, nunca $parent->backgroundGradient
+        // (mismo patrón que $backgroundColor, que tampoco hereda -- un <div> dentro de un padre
+        // con gradiente no "hereda" el fondo del padre, cada caja pinta el SUYO). Raw VO sin
+        // resolver contra ninguna caja (los stops YA traen su posición final 0-100, ver
+        // Css\Value\GradientStop, pero /Coords se calculan en Pdf\PdfCanvas::paintGradient(), en
+        // tiempo de pintado, contra el border-box final del fragmento -- igual división de
+        // responsabilidades Css-vs-Layout/Pdf que BorderRadius). Pinta POR ENCIMA de
+        // $backgroundColor (ambos pueden coexistir: el color sirve de fallback visible en los
+        // huecos de un gradiente con alpha, aunque M8 no soporta alpha en stops todavía -- ver
+        // Paint\Painter::paintBackground()).
+        public ?Gradient $backgroundGradient = null,
+        // M8-T4 (css-backgrounds-3 §6 reducido): NO hereda -- initial value real es "none" (sin
+        // sombra) siempre que no haya declaración propia, nunca $parent->boxShadow (mismo patrón
+        // que $backgroundGradient/$borderRadius justo arriba: cada elemento pinta la SUYA propia).
+        // A diferencia de $borderRadius (que guarda LengthPercentage sin resolver, % diferido a
+        // Layout), este VO YA llega con offsetX/offsetY/blurRadius resueltos a PX -- ver el
+        // docblock de Css\Value\BoxShadow para el porqué (ninguno de los 3 admite % en CSS real).
+        public ?BoxShadow $boxShadow = null,
+        // M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing EN PX -- AMBAS heredan (a
+        // diferencia de $borderRadius/$opacity/$backgroundGradient/$boxShadow justo arriba, que NO
+        // heredan). 0.0 es el initial value real ('normal') Y TAMBIÉN el sentinel "sin efecto" que
+        // Layout\TextMeasurer::widthOf()/Pdf\PdfCanvas::fillText() usan como fast path (ver sus
+        // docblocks): un documento sin NINGUNA declaración de letter-spacing/word-spacing produce
+        // ComputedStyle idénticos a antes de esta tarea salvo por estos 2 campos nuevos, que nunca
+        // se leen fuera de Layout/Pdf.
+        public float $letterSpacingPx = 0.0,
+        public float $wordSpacingPx = 0.0,
+        // M8-T5 (css-text-3 §8 reducido): text-transform -- SÍ hereda (igual criterio que
+        // $textAlign/$whiteSpace/$listStyleType arriba). Aplicado al TEXTO de los runs en
+        // Box\BoxTreeBuilder ANTES de medir (ver textRunTokensFor()) -- ComputedStyle solo
+        // transporta el valor computado, nunca transforma nada por sí mismo.
+        public TextTransform $textTransform = TextTransform::None,
+        // M8-T6 (css-backgrounds-3 §4 reducido): NO hereda -- initial value real es "none" (sin
+        // imagen) siempre que no haya declaración propia, nunca $parent->backgroundImagePath
+        // (mismo patrón que $backgroundGradient/$borderRadius: cada caja pinta la SUYA propia).
+        // RAW string sin resolver contra ningún basePath -- Style no tiene basePath y no debería
+        // necesitarlo (arquitectura M8-T6: la resolución de ruta + la carga del fichero ocurren
+        // en tiempo de PINTADO, ver Paint\Painter::paintBackgroundImage()/Image\ImagePathResolver,
+        // el MISMO momento/mecanismo que <img> usa en Box\BoxTreeBuilder — así ambos caminos
+        // producen el mismo string de ruta resuelta para el mismo fichero, condición necesaria
+        // para el dedup de Pdf\ImageRegistry entre un <img> y un background-image que compartan
+        // src). DeclarationParser::parseBackgroundImageValue()/parseBackgroundShorthand() ya
+        // producen este valor listo para usar (string|null, nunca otro tipo).
+        public ?string $backgroundImagePath = null,
+        // M8-T6: NO hereda -- initial value real 'auto' (sin escalado, tamaño intrínseco) siempre
+        // que no haya declaración propia, nunca $parent->backgroundSize (mismo patrón que
+        // $backgroundImagePath justo arriba).
+        public BackgroundSize $backgroundSize = BackgroundSize::Auto,
+        // M8-T6: NO hereda -- initial value real 'no-repeat' (false) siempre que no haya
+        // declaración propia, nunca $parent->backgroundRepeat.
+        public bool $backgroundRepeat = false,
+        // M8-T6: NO hereda -- initial value real 'top left' (equivalente a '0% 0%') siempre que no
+        // haya declaración propia, nunca $parent->backgroundPosition.
+        public BackgroundPosition $backgroundPosition = BackgroundPosition::TopLeft,
     ) {}
 
     /**
@@ -292,6 +360,7 @@ final readonly class ComputedStyle
             null,
             null,
             null,
+            BorderRadius::zero(),
         );
     }
 
@@ -499,6 +568,49 @@ final readonly class ComputedStyle
             default => $parent->whiteSpace,
         };
 
+        // M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing -- ambas heredan (mismo
+        // patrón "array_key_exists + null explícito = reset" que $lineHeightPx justo abajo):
+        // 'normal' declarado explícitamente (DeclarationParser::parseSpacing() -> null) SIEMPRE
+        // resetea a 0.0, cortando cualquier herencia de un ancestro; ausencia total de declaración
+        // hereda $parent->letterSpacingPx/$parent->wordSpacingPx tal cual; un <length>
+        // (Length/CssLength/CalcExpr) resuelve exactamente igual que cualquier otra longitud pura
+        // de este método (mismos closures $resolveCssLength/$resolveCalcPure) -- SIN el chequeo de
+        // NON_NEGATIVE_PROPERTIES (ninguna de las 2 propiedades figura en esa lista: CSS 2.2
+        // §16.3.1/§16.4 admiten valores negativos).
+        $letterSpacingPx = $parent->letterSpacingPx;
+        if (array_key_exists('letter-spacing', $declarations)) {
+            $letterSpacingValue = $declarations['letter-spacing'];
+            $letterSpacingPx = match (true) {
+                $letterSpacingValue === null => 0.0,
+                $letterSpacingValue instanceof Length => $letterSpacingValue->px,
+                $letterSpacingValue instanceof CssLength => $resolveCssLength($letterSpacingValue),
+                $letterSpacingValue instanceof CalcExpr => $resolveCalcPure($letterSpacingValue, 'letter-spacing', 0.0),
+                default => 0.0,
+            };
+        }
+        $wordSpacingPx = $parent->wordSpacingPx;
+        if (array_key_exists('word-spacing', $declarations)) {
+            $wordSpacingValue = $declarations['word-spacing'];
+            $wordSpacingPx = match (true) {
+                $wordSpacingValue === null => 0.0,
+                $wordSpacingValue instanceof Length => $wordSpacingValue->px,
+                $wordSpacingValue instanceof CssLength => $resolveCssLength($wordSpacingValue),
+                $wordSpacingValue instanceof CalcExpr => $resolveCalcPure($wordSpacingValue, 'word-spacing', 0.0),
+                default => 0.0,
+            };
+        }
+
+        // M8-T5: text-transform -- hereda (mismo patrón match-con-default-al-padre que $textAlign/
+        // $whiteSpace arriba).
+        $textTransformValue = $declarations['text-transform'] ?? null;
+        $textTransform = match ($textTransformValue) {
+            'none' => TextTransform::None,
+            'uppercase' => TextTransform::Uppercase,
+            'lowercase' => TextTransform::Lowercase,
+            'capitalize' => TextTransform::Capitalize,
+            default => $parent->textTransform,
+        };
+
         $lineHeightPx = $parent->lineHeightPx;
         if (array_key_exists('line-height', $declarations)) {
             $lineHeightValue = $declarations['line-height'];
@@ -555,8 +667,16 @@ final readonly class ComputedStyle
             // computed value of the border width is 0" — el ancho USADO se calcula aquí, en
             // origen, para que ningún consumidor (BlockFlowContext, Painter) pueda leer
             // ->widthPx sin pasar por esta regla.
+            // M8-T4 (css-backgrounds-3 §4.3): Dashed/Dotted RESERVAN el mismo ancho que Solid --
+            // solo BorderStyle::None colapsa el ancho USADO a 0 (CSS 2.2 §8.5.3: "if the value of
+            // border-style is none... the computed value of the border width is 0"; ese texto
+            // nunca mencionó "solid", así que dashed/dotted (M8) también aplican la fórmula
+            // normal de abajo, igual que Solid ya hacía). Antes de esta tarea, dashed/dotted
+            // jamás llegaban aquí (DeclarationParser los rechazaba con warning), así que este
+            // cambio de `!== Solid` a `=== None` es observacionalmente un no-op para todo el
+            // comportamiento M2-M7 (Solid/None eran los únicos dos valores posibles).
             $widthPx = match (true) {
-                $resolvedStyle !== BorderStyle::Solid => 0.0,
+                $resolvedStyle === BorderStyle::None => 0.0,
                 $width instanceof Length => $width->px,
                 $width instanceof CssLength => $resolveCssLength($width),
                 $width instanceof CalcExpr => $resolveCalcPure($width, "border-$side-width", 0.0),
@@ -715,6 +835,18 @@ final readonly class ComputedStyle
         $right = $hasLengthPercentage('right') ? $lengthPercentage('right') : null;
         $left = $hasLengthPercentage('left') ? $lengthPercentage('left') : null;
 
+        // M8-T2 (css-backgrounds-3 §5): NO hereda -- $lengthPercentage() ya cae a $zero cuando la
+        // longhand no está en $declarations (mismo mecanismo que padding/margin, nunca
+        // $parent->borderRadius), así que "sin border-radius declarado" produce exactamente
+        // BorderRadius::zero() por construcción, sin rama especial. % sigue simbólico (resuelto
+        // en Layout, ver el docblock del constructor).
+        $borderRadius = new BorderRadius(
+            $lengthPercentage('border-top-left-radius'),
+            $lengthPercentage('border-top-right-radius'),
+            $lengthPercentage('border-bottom-right-radius'),
+            $lengthPercentage('border-bottom-left-radius'),
+        );
+
         // M6-T5: opacity NO hereda (ver docblock del constructor) — initial value 1.0 siempre que
         // no haya declaración propia, nunca $parent->opacity. DeclarationParser ya clampa a
         // [0,1] en tiempo de parseo; el clamp de aquí es puramente defensivo (por si algún día
@@ -733,6 +865,75 @@ final readonly class ComputedStyle
         $fontFamily = is_array($fontFamilyValue) ? array_values(array_filter($fontFamilyValue, 'is_string')) : [];
         if ($fontFamily === []) {
             $fontFamily = $parent->fontFamily;
+        }
+
+        // M8-T3 (css-images-3 §3.1 reducido): NO hereda (ver docblock del constructor) -- initial
+        // "none" (null) siempre que no haya declaración propia, nunca $parent->backgroundGradient.
+        // DeclarationParser::parseBackgroundShorthand()/parseBackgroundImageValue() ya producen
+        // este valor listo para usar (Gradient|nada, nunca otro tipo).
+        $backgroundGradientValue = $declarations['background-gradient'] ?? null;
+        $backgroundGradient = $backgroundGradientValue instanceof Gradient ? $backgroundGradientValue : null;
+
+        // M8-T4 (css-backgrounds-3 §6 reducido): NO hereda (ver docblock del constructor) --
+        // initial "none" (null) siempre que no haya declaración propia, nunca $parent->boxShadow.
+        // DeclarationParser::parseBoxShadowValue() deja el raw en $declarations['box-shadow'] como
+        // un array ['offsetX'=>.., 'offsetY'=>.., 'blur'=>.., 'color'=>Color] (Length|CssLength|
+        // CalcExpr para las 3 longitudes, igual tipo que cualquier otra longitud de este método) --
+        // se resuelve aquí con LOS MISMOS closures $resolveCssLength/$resolveCalcPure que border-*-
+        // width, offsetX/offsetY con signo (box-shadow admite desplazamientos negativos, a
+        // diferencia de border-width) y blur re-clampado a >=0 defensivamente (ya validado no-
+        // negativo en el parser para el caso literal; un calc(1em) que resolviera negativo aquí es
+        // el mismo gap documentado que el resto del motor tiene para calc()+unidad simbólica, ver
+        // NON_NEGATIVE_PROPERTIES). El color, si no se declaró, llega como el sentinel
+        // Color::currentColor() (ver parseBoxShadowValue()) -- se resuelve exactamente igual que
+        // border-*-color/background-color, contra el $color YA computado de ESTE elemento.
+        // M8-T6 (css-backgrounds-3 §4 reducido): NO hereda (ver docblock del constructor) --
+        // initial "none" (null) siempre que no haya declaración propia, nunca
+        // $parent->backgroundImagePath. DeclarationParser::parseBackgroundImageValue()/
+        // parseBackgroundShorthand() ya producen este valor listo para usar (string, sin resolver
+        // contra basePath -- eso ocurre en tiempo de pintado, ver el docblock del campo).
+        $backgroundImagePathValue = $declarations['background-image'] ?? null;
+        $backgroundImagePath = is_string($backgroundImagePathValue) ? $backgroundImagePathValue : null;
+
+        // M8-T6: NO hereda -- initial 'auto' siempre que no haya declaración propia.
+        // DeclarationParser::parseBackgroundSize() ya solo produce 'auto'|'cover'|'contain' aquí.
+        $backgroundSize = match ($declarations['background-size'] ?? null) {
+            'cover' => BackgroundSize::Cover,
+            'contain' => BackgroundSize::Contain,
+            default => BackgroundSize::Auto,
+        };
+
+        // M8-T6: NO hereda -- initial 'no-repeat' (false) siempre que no haya declaración propia.
+        // DeclarationParser::parseBackgroundRepeat() ya solo produce bool aquí.
+        $backgroundRepeatValue = $declarations['background-repeat'] ?? null;
+        $backgroundRepeat = is_bool($backgroundRepeatValue) && $backgroundRepeatValue;
+
+        // M8-T6: NO hereda -- initial 'top left' siempre que no haya declaración propia.
+        // DeclarationParser::parseBackgroundPositionValue() ya solo produce 'center'|'top left'
+        // aquí (ambas grafías 'top left'/'left top' ya colapsadas a 'top left' en el parser).
+        $backgroundPosition = ($declarations['background-position'] ?? null) === 'center'
+            ? BackgroundPosition::Center
+            : BackgroundPosition::TopLeft;
+
+        $boxShadowValue = $declarations['box-shadow'] ?? null;
+        $boxShadow = null;
+        if (is_array($boxShadowValue)) {
+            $resolveShadowLength = static function (mixed $v) use ($resolveCssLength, $resolveCalcPure): float {
+                return match (true) {
+                    $v instanceof Length => $v->px,
+                    $v instanceof CssLength => $resolveCssLength($v),
+                    $v instanceof CalcExpr => $resolveCalcPure($v, 'box-shadow', 0.0),
+                    default => 0.0,
+                };
+            };
+            $shadowColorRaw = $boxShadowValue['color'] ?? null;
+            $shadowColor = $resolveCurrentColor($shadowColorRaw instanceof Color ? $shadowColorRaw : null) ?? $color;
+            $boxShadow = new BoxShadow(
+                $resolveShadowLength($boxShadowValue['offsetX']),
+                $resolveShadowLength($boxShadowValue['offsetY']),
+                max(0.0, $resolveShadowLength($boxShadowValue['blur'])),
+                $shadowColor,
+            );
         }
 
         return new self(
@@ -789,8 +990,18 @@ final readonly class ComputedStyle
             $right,
             $bottom,
             $left,
+            $borderRadius,
             $opacity,
             $customProperties,
+            $backgroundGradient,
+            $boxShadow,
+            $letterSpacingPx,
+            $wordSpacingPx,
+            $textTransform,
+            $backgroundImagePath,
+            $backgroundSize,
+            $backgroundRepeat,
+            $backgroundPosition,
         );
     }
 }

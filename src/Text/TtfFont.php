@@ -58,6 +58,14 @@ final class TtfFont
 
     public static function fromFile(string $path): self
     {
+        // M8-T7 (@font-face): guarded with is_readable() BEFORE file_get_contents() -- same
+        // precaution Image\ImageLoader::load() already takes for the identical "author-supplied
+        // path that may not exist" case -- so a missing file raises the FontException below
+        // cleanly, without a native PHP E_WARNING escaping first (Engine catches FontException
+        // to turn a missing/unparseable @font-face src into a warning, never a fatal error).
+        if (!is_readable($path)) {
+            throw new FontException("Cannot read font file: $path");
+        }
         $data = file_get_contents($path);
         if ($data === false) {
             throw new FontException("Cannot read font file: $path");
@@ -290,6 +298,18 @@ final class TtfFont
 
     private function uint16(int $offset): int
     {
+        // M8-T7 (@font-face): a garbage/truncated file handed via @font-face src (not one of
+        // this engine's own bundled fonts) can drive $offset past the end of $this->data --
+        // unpack() then either returns false (and `false[1]` is null, which used to blow up as
+        // an uncaught TypeError, "Return value must be of type int, null returned", deep inside
+        // the constructor instead of the FontException callers already catch) or, depending on
+        // the PHP version, emits a native E_WARNING first that PHPUnit's error handler upgrades
+        // to a test warning REGARDLESS of an `@` prefix (it deliberately ignores the
+        // error-suppression operator for this). The length check below avoids calling unpack()
+        // at all when there isn't enough data, sidestepping both problems at the source.
+        if ($offset < 0 || $offset + 2 > strlen($this->data)) {
+            throw new FontException('Truncated or corrupt font data');
+        }
         /** @var array{1: int} $v */
         $v = unpack('n', substr($this->data, $offset, 2));
         return $v[1];
@@ -303,6 +323,10 @@ final class TtfFont
 
     private function uint32(int $offset): int
     {
+        // See uint16()'s docblock -- same reasoning, same handled condition.
+        if ($offset < 0 || $offset + 4 > strlen($this->data)) {
+            throw new FontException('Truncated or corrupt font data');
+        }
         /** @var array{1: int} $v */
         $v = unpack('N', substr($this->data, $offset, 4));
         return $v[1];

@@ -12,6 +12,7 @@ use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -175,7 +176,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         if ($items === []) {
             $lineCross = $declaredContentHeight ?? 0.0;
             $height = $lineCross + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
-            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity);
+            $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
+            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow, backgroundImagePath: $style->backgroundImagePath, backgroundSize: $style->backgroundSize, backgroundRepeat: $style->backgroundRepeat, backgroundPosition: $style->backgroundPosition);
         }
 
         if ($style->flexDirection === FlexDirection::Column) {
@@ -237,7 +239,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         $contentBottom = $contentTop + $totalCross;
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity);
+        $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow, backgroundImagePath: $style->backgroundImagePath, backgroundSize: $style->backgroundSize, backgroundRepeat: $style->backgroundRepeat, backgroundPosition: $style->backgroundPosition);
     }
 
     /**
@@ -456,6 +459,14 @@ final readonly class FlexFormattingContext implements FormattingContext
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
+        // M8-T2 review Finding 2 (css-backgrounds-3 §5.5): $borderRadius se RE-CLAMPA contra la
+        // altura FINAL, no se preserva tal cual -- ya venía resuelto/clampeado contra la altura
+        // NATURAL del fragmento original, pero un radio que cabía a ESA altura puede dejar de
+        // caber tras este ajuste geometry-only (p.ej. flex-shrink en column: tl+bl > la nueva
+        // altura), produciendo un path Bézier auto-intersecante (bowtie) en vez de una esquina
+        // real. BorderRadius::reclampFor() reaplica el MISMO algoritmo proporcional que el clamp
+        // inicial (fromCss()) -- nunca agranda (ver su docblock), así que el caso de CRECER
+        // (align-items:stretch normal) deja los radios intactos, byte a byte.
         return new BoxFragment(
             new Rect($fragment->rect->x, $fragment->rect->y, $fragment->rect->width, $height),
             $fragment->background,
@@ -464,6 +475,13 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
+            $fragment->backgroundGradient,
+            $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 
@@ -992,7 +1010,8 @@ final readonly class FlexFormattingContext implements FormattingContext
         $contentBottom = $contentTop + $lineCross;
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity);
+        $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow, backgroundImagePath: $style->backgroundImagePath, backgroundSize: $style->backgroundSize, backgroundRepeat: $style->backgroundRepeat, backgroundPosition: $style->backgroundPosition);
     }
 
     /**

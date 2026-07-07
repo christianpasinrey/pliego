@@ -64,6 +64,21 @@ final class PdfWriter
     /** @var array<int, string> misma clave "milli-alpha" => nombre de recurso ("GS1", "GS2", ...), en orden de creación */
     private array $extGStateNames = [];
     private int $nextExtGStateIndex = 1;
+    /**
+     * M8-T3 (ISO 32000-1 §8.7.4.5, shadings): dedup POR CONTENIDO -- a diferencia de ExtGState
+     * (clave = "milli-alpha" entero), la firma de dedup aquí es la cadena EXACTA que Pdf\PdfCanvas
+     * calcula a partir del rect+Gradient (kind, /Coords ya redondeados a 2 decimales, y cada stop),
+     * pasada por el llamador -- ver registerShading(). Dos elementos con el mismo rect Y el mismo
+     * Gradient CSS producen la MISMA firma (mismo texto), así que comparten un único objeto
+     * /Shading (y sus /Function subyacentes, nunca escritos dos veces -- ver el docblock de
+     * registerShading()).
+     *
+     * @var array<string, int> firma => object id
+     */
+    private array $shadingIds = [];
+    /** @var array<string, string> misma firma => nombre de recurso ("Sh1", "Sh2", ...), en orden de creación */
+    private array $shadingNames = [];
+    private int $nextShadingIndex = 1;
 
     /** @param resource $stream */
     public function __construct(private readonly mixed $stream) {}
@@ -91,8 +106,10 @@ final class PdfWriter
      *        (M2-T7 margin-box labels — see DeferredXObject/defer())
      * @param array<string, int> $extGStateRefs resource name (e.g. "GS1") => ExtGState object id
      *        (M6-T5 alpha — see registerExtGState()/extGStatePageResources())
+     * @param array<string, int> $shadingRefs resource name (e.g. "Sh1") => Shading object id
+     *        (M8-T3 gradients — see registerShading()/shadingPageResources())
      */
-    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs, array $xobjectRefs = [], array $extGStateRefs = []): void
+    public function addPage(float $widthPt, float $heightPt, string $contentStream, array $fontRefs, array $xobjectRefs = [], array $extGStateRefs = [], array $shadingRefs = []): void
     {
         $contentId = $this->allocateObjectId();
         $length = strlen($contentStream);
@@ -110,6 +127,10 @@ final class PdfWriter
         $extGStates = $this->refDict($extGStateRefs);
         if ($extGStates !== null) {
             $resourceParts[] = "/ExtGState << $extGStates>>";
+        }
+        $shadings = $this->refDict($shadingRefs);
+        if ($shadings !== null) {
+            $resourceParts[] = "/Shading << $shadings>>";
         }
         $resources = $resourceParts === [] ? '<< >>' : '<< ' . implode(' ', $resourceParts) . ' >>';
 
@@ -236,6 +257,61 @@ final class PdfWriter
     private static function milliAlpha(float $ca): int
     {
         return (int) round(max(0.0, min(1.0, $ca)) * 1000.0);
+    }
+
+    /**
+     * M8-T3: registra (dedup por VALOR de $signature, no por identidad de llamada -- mismo
+     * criterio que registerExtGState()) el/los objeto(s) PDF que representan un shading
+     * (ISO 32000-1 §8.7.4.5) -- típicamente el propio /Shading dict MÁS su(s) /Function
+     * subyacente(s) (FunctionType 2/3, ISO 32000-1 §7.10.2/§7.10.3), todos escritos dentro de
+     * $bodyBuilder. A diferencia de registerExtGState() (el body es una fórmula trivial de $ca),
+     * un shading necesita objetos AUXILIARES (las funciones) que solo tiene sentido escribir la
+     * PRIMERA vez que se ve esta firma -- por eso $bodyBuilder es un callable (invocado SOLO en
+     * caché-miss, nunca en caché-hit): puede allocar+escribir esos objetos auxiliares (con
+     * allocateObjectId()/writeObject() de ESTE MISMO writer, vía closure) antes de devolver el
+     * cuerpo del propio /Shading dict, que los referencia por su object id.
+     *
+     * Devuelve el object id (ya escrito, o el de una llamada anterior con la misma firma).
+     *
+     * @param callable(): string $bodyBuilder
+     */
+    public function registerShading(string $signature, callable $bodyBuilder): int
+    {
+        if (isset($this->shadingIds[$signature])) {
+            return $this->shadingIds[$signature];
+        }
+        $objectId = $this->allocateObjectId();
+        $name = 'Sh' . $this->nextShadingIndex++;
+        $this->shadingIds[$signature] = $objectId;
+        $this->shadingNames[$signature] = $name;
+        $this->writeObject($objectId, $bodyBuilder());
+        return $objectId;
+    }
+
+    /**
+     * Nombre de recurso ("Sh1", "Sh2", ...) del shading para $signature, registrándolo (dedup) si
+     * hace falta -- mismo patrón que extGStateResourceName().
+     *
+     * @param callable(): string $bodyBuilder
+     */
+    public function shadingResourceName(string $signature, callable $bodyBuilder): string
+    {
+        $this->registerShading($signature, $bodyBuilder);
+        return $this->shadingNames[$signature];
+    }
+
+    /**
+     * @return array<string, int> resourceName ("Sh1", ...) => objectId de TODOS los shadings
+     *         registrados hasta el momento -- mismo patrón "acumula globalmente, sobre-incluye en
+     *         cada página" que FontRegistry/ImageRegistry/extGStatePageResources().
+     */
+    public function shadingPageResources(): array
+    {
+        $resources = [];
+        foreach ($this->shadingNames as $signature => $name) {
+            $resources[$name] = $this->shadingIds[$signature];
+        }
+        return $resources;
     }
 
     public function finish(): void

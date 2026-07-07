@@ -4,9 +4,15 @@ declare(strict_types=1);
 
 use Pliego\Css\StylesheetParser;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Style\AlignItems;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\Display;
 use Pliego\Style\FlexDirection;
@@ -16,6 +22,7 @@ use Pliego\Style\JustifyContent;
 use Pliego\Style\ListStyleType;
 use Pliego\Style\StyleResolver;
 use Pliego\Style\TextAlign;
+use Pliego\Style\TextTransform;
 use Pliego\Style\VerticalAlign;
 
 function resolveDoc(string $css, string $html): array
@@ -1153,4 +1160,287 @@ it('coerces overflow: scroll/auto to hidden end to end, with a warning surfaced 
     assert($div !== null);
     expect($map->get($div)->overflow)->toBe('hidden');
     expect($warnings)->not->toBeEmpty();
+});
+
+// --- code review Finding 1 (css-backgrounds-3 §5): the `background` SHORTHAND must reset every
+// sub-property it covers, not just the one it declares a value for -- a cascaded gradient (or
+// color) from a LESS-specific rule must NOT survive a more-specific `background: <color>` (or
+// `background: <gradient>`) declaration on the same element. This is a cascade-MERGE bug, not a
+// single-declaration parsing bug: DeclarationParser::parse() only ever sees ONE declaration at a
+// time, so the repro needs two real cascading rules resolved through StyleResolver, exactly like
+// the brief's exact repro (`.box{background:linear-gradient(red,blue)} .box.override{background:
+// yellow}`).
+
+it('lets a more-specific "background:<color>" reset a less-specific cascaded gradient (Finding 1 exact repro)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background: yellow; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+    expect($style->backgroundColor)->toEqual(new Color(255, 255, 0));
+});
+
+it('lets a more-specific "background:<gradient>" reset a less-specific cascaded color (Finding 1, reverse order)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: yellow; } .box.override { background: linear-gradient(red, blue); }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundColor)->toBeNull();
+    expect($style->backgroundGradient)->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+it('does NOT let the background-color LONGHAND reset a cascaded gradient (only the shorthand resets)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background-color: yellow; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundColor)->toEqual(new Color(255, 255, 0));
+    expect($style->backgroundGradient)->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+// M8-T3 fix: background-image: none is an explicit declaration of the initial value
+// and must win the cascade over a less-specific gradient
+it('lets background-image: none reset a less-specific cascaded gradient (cascade-win test)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background-image: linear-gradient(red, blue); } .box.override { background-image: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+});
+
+it('lets background-image: none reset a less-specific cascaded gradient from background shorthand', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background-image: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+});
+
+// --- M8 final-review Finding E: `background: none` must ALSO reset a less-specific cascaded
+// gradient (or color) -- same cascade-win shape as the background-image: none tests just above,
+// but through the SHORTHAND's own 'none' value instead of the longhand.
+
+it('lets background: none reset a less-specific cascaded gradient (Finding E, cascade-win test)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+    expect($style->backgroundColor)->toBeNull();
+    expect($style->backgroundImagePath)->toBeNull();
+});
+
+// --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow computed style ---------------------------
+
+it('computes a box-shadow with an explicit color, no inherit from the parent', function () {
+    [$doc, $map] = resolveDoc(
+        'div { box-shadow: 4px 6px 8px rgba(0,0,0,0.5) }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->boxShadow)->toEqual(new BoxShadow(4.0, 6.0, 8.0, new Color(0, 0, 0, 0.5)));
+});
+
+it('resolves box-shadow without a declared color to currentColor (the element\'s own computed color)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { color: #123456; box-shadow: 2px 2px }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->boxShadow)->toEqual(new BoxShadow(2.0, 2.0, 0.0, new Color(0x12, 0x34, 0x56)));
+});
+
+it('does not inherit box-shadow down the tree (initial value: none)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { box-shadow: 2px 2px red }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->boxShadow)->toBeNull();
+});
+
+it('lets a more-specific rule reset a less-specific cascaded box-shadow (box-shadow: none)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { box-shadow: 2px 2px red; } .box.override { box-shadow: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->boxShadow)->toBeNull();
+});
+
+it('resolves em-based box-shadow offsets against the element\'s own font-size', function () {
+    [$doc, $map] = resolveDoc(
+        'div { font-size: 20px; box-shadow: 0.5em 1em red }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->boxShadow)->toEqual(new BoxShadow(10.0, 20.0, 0.0, new Color(255, 0, 0)));
+});
+
+it('surfaces a warning and drops the whole box-shadow when inset is declared, end to end', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('div { box-shadow: inset 2px 2px red }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->boxShadow)->toBeNull();
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('resolves border-{side}-style: dashed/dotted through the real cascade, and keeps the declared width (not zeroed like None)', function () {
+    [$doc, $map] = resolveDoc('div { border: 3px dashed #ff0000 }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->borderTop->style)->toBe(BorderStyle::Dashed);
+    expect($style->borderTop->widthPx)->toBe(3.0);
+});
+
+// --- M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing/text-transform ---------------
+
+it('defaults letter-spacing/word-spacing to 0.0 and text-transform to None at the root', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(0.0);
+    expect($style->wordSpacingPx)->toBe(0.0);
+    expect($style->textTransform)->toBe(TextTransform::None);
+});
+
+it('inherits letter-spacing/word-spacing/text-transform from an ancestor down onto its descendants', function () {
+    [$doc, $map] = resolveDoc(
+        'div { letter-spacing: 2px; word-spacing: 4px; text-transform: uppercase }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(2.0);
+    expect($style->wordSpacingPx)->toBe(4.0);
+    expect($style->textTransform)->toBe(TextTransform::Uppercase);
+});
+
+it('lets a descendant declaring letter-spacing/word-spacing: normal explicitly reset to 0.0, cutting inheritance', function () {
+    [$doc, $map] = resolveDoc(
+        'div { letter-spacing: 2px; word-spacing: 4px } p { letter-spacing: normal; word-spacing: normal }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(0.0);
+    expect($style->wordSpacingPx)->toBe(0.0);
+});
+
+it('resolves em letter-spacing/word-spacing against the element\'s OWN font-size, not the parent\'s', function () {
+    [$doc, $map] = resolveDoc(
+        'p { font-size: 20px; letter-spacing: 0.5em; word-spacing: 1em }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(10.0);
+    expect($style->wordSpacingPx)->toBe(20.0);
+});
+
+it('lets an author rule override an inherited text-transform (cascade)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { text-transform: uppercase } p { text-transform: lowercase }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->textTransform)->toBe(TextTransform::Lowercase);
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-image/size/repeat/position -------------
+
+it('defaults background-image/size/repeat/position at the root (none/Auto/false/TopLeft)', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->backgroundImagePath)->toBeNull();
+    expect($style->backgroundSize)->toBe(BackgroundSize::Auto);
+    expect($style->backgroundRepeat)->toBeFalse();
+    expect($style->backgroundPosition)->toBe(BackgroundPosition::TopLeft);
+});
+
+it('resolves background-image: url(...) to the RAW path, unresolved against any basePath', function () {
+    [$doc, $map] = resolveDoc('div { background-image: url(photo.jpg) }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->backgroundImagePath)->toBe('photo.jpg');
+});
+
+it('does NOT inherit background-image/size/repeat/position down the tree (initial values, not $parent->X)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { background-image: url(photo.jpg); background-size: cover; background-repeat: repeat; background-position: center }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->backgroundImagePath)->toBeNull();
+    expect($style->backgroundSize)->toBe(BackgroundSize::Auto);
+    expect($style->backgroundRepeat)->toBeFalse();
+    expect($style->backgroundPosition)->toBe(BackgroundPosition::TopLeft);
+});
+
+it('resolves background-size: cover|contain and background-repeat: repeat and background-position: center through the real cascade', function () {
+    [$doc, $map] = resolveDoc(
+        'div { background-image: url(photo.jpg); background-size: cover; background-repeat: repeat; background-position: center }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundImagePath)->toBe('photo.jpg');
+    expect($style->backgroundSize)->toBe(BackgroundSize::Cover);
+    expect($style->backgroundRepeat)->toBeTrue();
+    expect($style->backgroundPosition)->toBe(BackgroundPosition::Center);
+});
+
+it('lets a more-specific rule override a cascaded background-image with the "background" shorthand (reset trio)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background-image: url(photo.jpg); } .box.override { background: yellow; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundImagePath)->toBeNull();
+    expect($style->backgroundColor)->toEqual(new Color(255, 255, 0));
 });

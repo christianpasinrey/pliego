@@ -8,6 +8,7 @@ use Pliego\Box\BlockBox;
 use Pliego\Box\TableBox;
 use Pliego\Box\TableRowBox;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\GeometryShift;
@@ -234,6 +235,13 @@ final readonly class TableFormattingContext
             $rowFragments,
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
+            borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
+            backgroundGradient: $style->backgroundGradient,
+            boxShadow: $style->boxShadow,
+            backgroundImagePath: $style->backgroundImagePath,
+            backgroundSize: $style->backgroundSize,
+            backgroundRepeat: $style->backgroundRepeat,
+            backgroundPosition: $style->backgroundPosition,
         );
     }
 
@@ -444,6 +452,12 @@ final readonly class TableFormattingContext
             BorderSet::none(),
             atomic: true,
             opacity: $row->style->opacity,
+            backgroundGradient: $row->style->backgroundGradient,
+            boxShadow: $row->style->boxShadow,
+            backgroundImagePath: $row->style->backgroundImagePath,
+            backgroundSize: $row->style->backgroundSize,
+            backgroundRepeat: $row->style->backgroundRepeat,
+            backgroundPosition: $row->style->backgroundPosition,
         );
 
         return [$rowFragment, $rowTop + $rowHeight];
@@ -481,6 +495,13 @@ final readonly class TableFormattingContext
             $stretched->atomic,
             $stretched->opacity,
             $stretched->clipsChildren,
+            $stretched->borderRadius,
+            $stretched->backgroundGradient,
+            $stretched->boxShadow,
+            $stretched->backgroundImagePath,
+            $stretched->backgroundSize,
+            $stretched->backgroundRepeat,
+            $stretched->backgroundPosition,
         );
     }
 
@@ -489,6 +510,13 @@ final readonly class TableFormattingContext
      * entre ambas clases porque no comparten ninguna otra cosa que justifique un trait): agranda
      * el rect de un fragmento de celda ya calculado sin re-layoutear su contenido (que queda
      * anclado arriba — alignCell() se encarga después de desplazarlo si vertical-align no es top).
+     * M8-T2 review Finding 2: $borderRadius se RE-CLAMPA (BorderRadius::reclampFor(), §5.5) contra
+     * la altura de fila FINAL en vez de preservarse tal cual -- mismo criterio corregido en el
+     * gemelo de FlexFormattingContext (ver su docblock). Esta clase solo ESTIRA celdas (nunca las
+     * encoge -- alignCell() solo llama aquí cuando $contentHeight < $rowHeight, ver su docblock),
+     * así que reclampFor() es normalmente un no-op aquí (nunca agranda, ver su propio docblock);
+     * se añade de todos modos por coherencia con el gemelo y para no dejar una asimetría
+     * silenciosa si esa invariante de "solo estira" cambiara en el futuro.
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
@@ -500,6 +528,13 @@ final readonly class TableFormattingContext
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
+            $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
+            $fragment->backgroundGradient,
+            $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 

@@ -7,6 +7,7 @@ namespace Pliego\Layout;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -49,7 +50,7 @@ final class FragmentDumper
      */
     private function dumpInlineBox(InlineBoxFragment $fragment): array
     {
-        return [
+        $dump = [
             'type' => 'inline-box',
             'rect' => $this->rect($fragment->rect),
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
@@ -57,6 +58,10 @@ final class FragmentDumper
             'isFirstSlice' => $fragment->isFirstSlice,
             'isLastSlice' => $fragment->isLastSlice,
         ];
+        if (!$fragment->borderRadius->isZero()) {
+            $dump['borderRadius'] = $this->borderRadius($fragment->borderRadius);
+        }
+        return $dump;
     }
 
     /**
@@ -66,17 +71,47 @@ final class FragmentDumper
      * distinguir "este BoxFragment es la unidad de paginación indivisible que Paginator trata en
      * bloque" de un box normal aplanado hijo a hijo — información de layout real, no solo de
      * pintado, que pertenece al dump igual que rect/background/borders.
+     *
+     * M8-T1 housekeeping (M7 final-review finding): 'clipsChildren' se añade con el MISMO criterio
+     * aditivo que 'atomic' arriba — refleja BoxFragment::$clipsChildren (M7-T5, overflow:hidden),
+     * hasta ahora presente en el fragment tree real pero invisible en cualquier golden dump (ningún
+     * golden existente podía distinguir "esta caja recorta a sus descendientes en pintado" de una
+     * caja normal). Puramente aditivo: ninguna clave existente cambia de posición ni de valor, así
+     * que TODOS los goldens preexistentes solo ganan esta clave (con valor `false` en cada uno,
+     * ninguno de sus fixtures usa overflow:hidden) al regenerarlos — ver el report de esta tarea
+     * para la lista exacta de goldens regenerados.
      * @return array<string, mixed>
      */
     private function dumpBox(BoxFragment $fragment): array
     {
-        return [
+        $dump = [
             'type' => 'box',
             'rect' => $this->rect($fragment->rect),
             'background' => $fragment->background === null ? null : $this->hex($fragment->background),
             'borders' => $fragment->borders->isVisible() ? $this->borders($fragment->borders) : null,
             'atomic' => $fragment->atomic,
-            'children' => array_map($this->dump(...), $fragment->children),
+            'clipsChildren' => $fragment->clipsChildren,
+        ];
+        // M8-T2: 'borderRadius' es ADITIVA solo cuando no es cero (a diferencia de 'atomic'/
+        // 'clipsChildren', que SIEMPRE aparecen con su valor real, incl. false) -- omitirla del
+        // todo en el caso común (radio cero, la inmensa mayoría de las cajas) mantiene los 14
+        // goldens M1-M7 preexistentes byte-idénticos SIN regenerarlos (ninguno usa border-radius
+        // todavía, ver el brief de esta tarea).
+        if (!$fragment->borderRadius->isZero()) {
+            $dump['borderRadius'] = $this->borderRadius($fragment->borderRadius);
+        }
+        $dump['children'] = array_map($this->dump(...), $fragment->children);
+        return $dump;
+    }
+
+    /** @return array{tl: float, tr: float, br: float, bl: float} */
+    private function borderRadius(BorderRadius $radius): array
+    {
+        return [
+            'tl' => round($radius->tl, 2),
+            'tr' => round($radius->tr, 2),
+            'br' => round($radius->br, 2),
+            'bl' => round($radius->bl, 2),
         ];
     }
 

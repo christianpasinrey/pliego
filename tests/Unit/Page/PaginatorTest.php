@@ -13,6 +13,8 @@ use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Paginator;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 
 function inlineBoxAt(float $y, float $height = 20.0): InlineBoxFragment
 {
@@ -91,6 +93,53 @@ it('does not emit a leaf for a box with neither background nor visible border', 
     $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
     expect($pages[0]->fragments)->toHaveCount(1);
     expect($pages[0]->fragments[0])->toBeInstanceOf(TextFragment::class);
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-image survives flatten()/relocate() -----
+
+it('emits a leaf for a box with ONLY a background-image (no background-color/border), T5-style widened gating', function () {
+    $root = new BoxFragment(
+        new Rect(0, 0, 100, 50),
+        null,
+        [textAt(10.0)],
+        BorderSet::none(),
+        backgroundImagePath: '/tmp/bg.jpg',
+    );
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages[0]->fragments)->toHaveCount(2);
+    $box = $pages[0]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->background)->toBeNull();
+    expect($box->backgroundImagePath)->toBe('/tmp/bg.jpg');
+});
+
+it('relocates a box carrying background-image/size/repeat/position unchanged across a page push-down', function () {
+    $root = new BoxFragment(
+        new Rect(0, 0, 100, 1100),
+        null,
+        [
+            new BoxFragment(
+                new Rect(0, 990, 100, 20),
+                new Color(255, 0, 0),
+                [],
+                BorderSet::none(),
+                backgroundImagePath: '/tmp/bg.jpg',
+                backgroundSize: BackgroundSize::Cover,
+                backgroundRepeat: true,
+                backgroundPosition: BackgroundPosition::Center,
+            ),
+        ],
+        BorderSet::none(),
+    );
+    $pages = iterator_to_array(new Paginator(1000.0)->paginate($root));
+    expect($pages)->toHaveCount(2);
+    $box = $pages[1]->fragments[0];
+    assert($box instanceof BoxFragment);
+    expect($box->rect->y)->toBe(0.0); // pushed to the top of page 2
+    expect($box->backgroundImagePath)->toBe('/tmp/bg.jpg');
+    expect($box->backgroundSize)->toBe(BackgroundSize::Cover);
+    expect($box->backgroundRepeat)->toBeTrue();
+    expect($box->backgroundPosition)->toBe(BackgroundPosition::Center);
 });
 
 // --- M3-T3: ImageFragment is a leaf, just like TextFragment ------------------------------------

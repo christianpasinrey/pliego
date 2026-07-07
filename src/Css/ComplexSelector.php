@@ -139,4 +139,27 @@ final readonly class ComplexSelector
         }
         return $specificity;
     }
+
+    /**
+     * M8-T1 (perf, ver Style\StyleResolver::bucketedRules()): el `type` (siempre en minúsculas,
+     * ver SelectorParser::parseCompound()) del compuesto MÁS A LA DERECHA -- el MISMO compuesto que
+     * matches() prueba PRIMERO, directamente contra el elemento, antes de recorrer nada a su
+     * izquierda (ver stepsRightToLeft()) -- o null cuando ese compuesto no tiene un type concreto
+     * (selector universal `*`, o un compuesto que arranca por clase/id/atributo/pseudo-clase sin
+     * type en absoluto, p.ej. `.btn`, `#nav`, `[data-x]`, `:not(...)` solo). Es una condición
+     * NECESARIA de matches(), nunca suficiente: un elemento de OTRO tag no puede matchear esta
+     * cadena bajo ningún combinador/backtracking posible (el compuesto derecho SIEMPRE se compara
+     * contra el elemento mismo), así que StyleResolver puede usar este valor para descartar reglas
+     * SIN invocar matches() en absoluto, sin cambiar el resultado para ninguna que sí lo invoque.
+     * `$compounds` nunca está vacío en la práctica (SelectorParser::parseCompound() jamás produce
+     * un ComplexSelector sin al menos un compuesto) pero se cubre con null por robustez, sin lanzar.
+     */
+    public function rightmostType(): ?string
+    {
+        if ($this->compounds === []) {
+            return null;
+        }
+        [, $rightmost] = $this->compounds[array_key_last($this->compounds)];
+        return $rightmost->type;
+    }
 }

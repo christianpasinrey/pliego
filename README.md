@@ -4,10 +4,10 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** This is an early milestone (M7); the
+> **Not published to Packagist yet.** This is an early milestone (M8); the
 > package is not installable via Composer from a registry at this point.
 
-## Status: M7 — Layout (inline boxes, lists, floats, position)
+## Status: M8 — Visual polish (border-radius, gradients, shadows, spacing, background-image, @font-face)
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -50,12 +50,163 @@ slice`), the exact limitation that kept M6's `.btn`/`.badge` flat — plus
 `display: inline-block`, `min-width`/`max-width`/`min-height`/`max-height`,
 `overflow: hidden` clipping, and a **reduced CSS 2.2 §9.5/§9.4.3 floats +
 position** subset (`float: left/right`, `clear`, line shortening around a
-float band, `position: relative/absolute`). It is still not a
-general-purpose renderer — `:hover`-style dynamic pseudo-classes
-(meaningless in paged media), `@media`, pseudo-elements
-(`::before`/`::after`), `position: sticky`, CSS columns, writing modes, and
-the rest of tables/flex-to-spec are the milestones ahead (see
-[Roadmap](#roadmap)).
+float band, `position: relative/absolute`). M8 stops widening the box
+model and instead polishes its **look**: rounded corners (`border-radius`,
+Bézier paths + an annular border ring), **native PDF gradients**
+(`linear-gradient()`/`radial-gradient()` as real `/Shading` objects, not a
+bitmap), an approximated `box-shadow` (4 concentric layers — explicitly
+**not** a real Gaussian blur) plus `dashed`/`dotted` borders,
+`letter-spacing`/`word-spacing`/`text-transform` (the `TJ` per-glyph PDF
+operator), `background-image` (`cover`/`contain`/tiling, sharing the
+`<img>` decode/dedup pipeline), and `@font-face` (local TrueType, case-
+insensitive family lookup) — everything a Bootstrap-derived `.card`/`.btn`/
+`.badge`/`.display-*` document needs to look, not just lay out, like the
+real thing. It is still not a general-purpose renderer — `:hover`-style
+dynamic pseudo-classes (meaningless in paged media), `@media`,
+pseudo-elements (`::before`/`::after`), `position: sticky`, CSS columns,
+writing modes, `text-shadow`, `border-image`, and the rest of
+tables/flex-to-spec are the milestones ahead (see [Roadmap](#roadmap)).
+
+### Supported as of M8
+
+M8 rounds out the box model's **look** rather than widening it further —
+every feature below composes with everything from M1-M7 (a rounded,
+gradient-filled, shadowed `.card` still lays out through the exact same
+`BlockFlowContext` as a plain `<div>`).
+
+- **`border-radius`** (css-backgrounds-3 §5 subset): one circular radius per
+  corner (`border-radius` shorthand, 1-4 values, **clockwise** tl/tr/br/bl
+  order — different from the TRBL margin/padding shorthand, per spec — plus
+  the 4 longhands); elliptical radii (`/` syntax) are rejected with a
+  warning, negative values are rejected. Percentages resolve **against the
+  box's own width** for all 4 corners (an M8 adjudication, not the spec's
+  per-axis rule), then the whole set is proportionally clamped so no two
+  adjacent corners can overlap (css-backgrounds-3 §5.5) — a `border-radius:
+  999px` badge with a small height is auto-clamped down to exactly half
+  that height, the real "pill" look, with zero special-case code.
+  - Painted as real cubic Bézier paths (`PdfCanvas`'s `k=0.5522847498`
+    circle-approximation constant), not a polygon approximation. A
+    **uniform** border (all 4 sides equal width/style/color, and no side
+    left unstyled adjacent to a rounded corner) paints as a single annular
+    fill (`f*`, even-odd rule: one outer path, one inner path, no geometric
+    subtraction) instead of 4 separate rects. **Mixed** border widths/
+    styles/colors fall back to the flat 4-rect approximation **with a
+    warning** ("mixed border widths with border-radius approximated") —
+    the radius is silently dropped from the border itself (the background
+    still rounds correctly).
+  - `overflow: hidden` on a box with a non-zero radius clips through the
+    same rounded Bézier path (`clipRoundedRect`), not a bounding rect.
+  - A multi-slice inline box (a wrapped `<span>` with `border-radius`,
+    box-decoration-break: slice) rounds correctly on **both** its first and
+    last visual slice — the lateral side an inner slice suppresses to
+    `None` is recognized as slicing bookkeeping, not real border
+    heterogeneity, so it never trips the "mixed" fallback/warning.
+- **Native PDF gradients** (css-images-3 §3.1 subset): `linear-gradient()`
+  and `radial-gradient()` as a `background`/`background-image` value,
+  painted as a real PDF `/Shading` object (`/ShadingType 2` axial /
+  `/ShadingType 3` radial) rather than a rasterized bitmap — resolution-
+  independent, tiny file cost regardless of the element's size.
+  - **Linear**: full direction grammar (`<angle>`, `to <side>`, `to
+    <corner>`), css-images-3 §3.4.1 stop-position distribution (implicit
+    0%/100% endpoints, monotonic clamp, even split of unpositioned runs),
+    2 stops → `/FunctionType 2`, N>2 stops → `/FunctionType 3` (exact
+    `/Bounds`/`/Encode` stitching).
+  - **Radial reduced to `circle at center`**: any other shape/position/
+    extent (`ellipse`, an explicit `at <position>`, `closest-side`/
+    `farthest-corner`/a bare length/a percentage-pair size, etc.) degrades
+    to circle-at-center **with a warning** rather than being dropped —
+    radius = farthest-corner distance.
+  - **Noisy approximation**: a `to <corner>` direction (`to top right`,
+    etc.) always uses a **fixed 45°/135°/225°/315°** angle — real CSS
+    computes the angle from the box's own aspect ratio, so a non-square box
+    diverges from a real browser here.
+  - Alpha color stops are rejected (warning, forced fully opaque) and only
+    the first declared `background`/`background-image` layer is used
+    (multiple comma-separated backgrounds warn and drop everything past the
+    first) — both are milestone-wide M8 restrictions, not gradient-specific.
+  - An inline element's gradient is painted **per visual slice** (each
+    wrapped line gets its own independent gradient rect) rather than one
+    continuous gradient spanning every line — a documented divergence from
+    a real browser's single continuous paint.
+- **`box-shadow`** (css-backgrounds-3 §6 subset): one shadow (`offsetX
+  offsetY [blurRadius] color`; a comma-separated list uses only the first,
+  with a warning) painted **before** the background, following the same
+  `border-radius` as the element.
+  - **`blur-radius: 0`**: exactly one extra filled rect/rounded-rect,
+    offset by `(offsetX, offsetY)` — free.
+  - **Noisy approximation — blur is NOT a real Gaussian/box blur**:
+    `blur-radius > 0` is approximated as **4 concentric layers**, each at
+    1/4 the shadow color's alpha (sharing one PDF `ExtGState`), expanded by
+    `-blur/2, -blur/6, +blur/6, +blur/2` from the base rect. This produces
+    a soft-edged look at a glance but is not a true blur convolution —
+    acceptable only for the small blur radii (≲10px) typical of a card/
+    button shadow; a large blur radius will look banded, not smooth.
+  - **Not supported, reported as a warning**: `inset` shadows (the whole
+    declaration is dropped) and a declared 4th length (`spread-radius`,
+    warned about but NOT dropped — the shadow is still built from the
+    first 3 lengths, spread is simply ignored).
+  - `box-shadow` on an inline element (`<span>`) is **not supported**: a
+    one-time warning fires and the declaration is dropped entirely (M9+
+    scope, per the milestone's own restriction list).
+- **`border-style: dashed` / `dotted`** (CSS 2.2 §8.5.3 subset, ISO
+  32000-1 §8.4.3.6 PDF dash arrays): a **uniform** dashed/dotted border (all
+  4 sides equal) strokes a single continuous centerline path (rect or,
+  with a radius, the same Bézier path border-radius already uses) with a
+  real PDF dash array — dashed: `[3w w] 0 d` (w = the border's own half-pt
+  width); dotted: `[0 2w] 0 d 1 J` (a zero-length dash + a round line cap
+  draws actual round dots, not square ticks). **Heterogeneous** sides (any
+  mix of style/width/color) fall back to 4 independently-stroked/filled
+  segments — straight, unmitred joins at the corners (no diagonal miter
+  negotiation between differently-styled adjacent sides, a **noisy,
+  documented approximation** of real corner joins).
+- **`letter-spacing` / `word-spacing` / `text-transform`** (css-text-3 §8
+  subset, both spacing properties **inherit**): a run with non-zero
+  spacing switches its PDF text-showing operator from a plain `<hex> Tj`
+  to a per-glyph adjusted `[<g1> adj1 <g2> adj2 ...] TJ` (ISO 32000-1
+  §9.4.3) — a run with **zero** spacing (the overwhelming majority of
+  existing documents) stays byte-identical to the pre-M8 plain `Tj`, a
+  verified regression guard. `word-spacing` only adjusts the space glyph;
+  `letter-spacing` adjusts after every glyph, including the last.
+  `text-transform: none|uppercase|lowercase|capitalize` rewrites the text
+  run **before** measuring/painting (UTF-8/accent-safe); `capitalize`'s
+  word boundary is "start of string or a run of space/tab" — a hyphen is
+  **never** a boundary, a documented, deliberate divergence from some (not
+  all) real browsers.
+- **`background-image`** (css-backgrounds-3 §4/css-images-3 subset):
+  `url(...)` (quoted or bare), decoded/loaded at **paint** time through the
+  same `ImageLoader`/dedup pipeline `<img>` already uses (a background-
+  image and an `<img>` sharing the same file produce exactly one XObject).
+  `background-size: auto|cover|contain` (no lengths/percentages/2-value
+  forms yet), `background-repeat: no-repeat|repeat` (repeat tiles at the
+  image's own intrinsic size, ignoring `background-size` when both are
+  declared together — repeat wins, a documented adjudication),
+  `background-position: center|top left` (2 canonical keyword forms only).
+  `cover` always centers (ignores `background-position`); `contain`
+  honors it. Clipped to the element's own (rounded, if applicable)
+  border-box. `repeat` + `center` together is an unsupported combination —
+  warns once and tiles from top-left anyway.
+- **`@font-face`** (css-fonts-4 §4 subset): `font-family` + a `src` fallback
+  list — the first **local** `.ttf`/`.otf` in the list wins; `woff`/
+  `woff2`/a remote (`http(s)://`) URL/`local()` are skipped with a warning
+  in favor of the next candidate, not silently ignored. `font-weight`
+  (`400`/`700`/`normal`/`bold`/any other number, mapped to the nearest of
+  400/700 with a warning; a `"100 900"` range collapses to its first value)
+  and `font-style` (`normal`/`italic`) route the parsed face into the exact
+  same `FontCatalog` slots a built-in family uses. `unicode-range` is
+  recognized but ignored (warning; the whole font file loads regardless — a
+  documented, deliberate simplification, not real subrange loading).
+  Family lookup is **case-insensitive end to end** (`@font-face
+  { font-family: 'MiSerif' }` matches `font-family: miserif` and vice
+  versa, including inside a fallback list) — the whole family/weight/style
+  key space is normalized to lowercase at the single point it enters
+  `FontCatalog`.
+- **Excluded this milestone, reported as a warning rather than silently
+  ignored or approximated** (per the M8 brief's own restriction list):
+  `border-image`, inset `box-shadow`, `conic-gradient()`, multiple
+  comma-separated backgrounds (only the first layer paints),
+  `background-attachment`, `text-shadow` (a strong M9+ candidate, shares
+  most of `box-shadow`'s machinery), `font-variant`, and `unicode-range`
+  (the font still loads in full, see above).
 
 ### Supported as of M7
 
@@ -512,13 +663,16 @@ the rest of tables/flex-to-spec are the milestones ahead (see
 - A background (or a visible border) that would visually cross a page
   boundary is pushed whole to the next page rather than split — it never
   paints twice or gets cut mid-box.
-- **Borders**: `solid`/`none` only — `dashed`/`dotted`/`double`/`groove`/
-  etc. (CSS 2.2 §8.5.3) are reported as warnings, not approximated. Corners
-  are simple butt joints (each side is one filled rect, sized so the two
-  horizontal sides span the full box width and the two vertical sides fit
-  between them) — there is no real miter/45°-mitered corner. Different
-  widths per side are supported, but two *thick*, *differently colored*
-  adjacent sides will show that seam rather than a mitered diagonal.
+- **Borders**: `solid`/`none`/`dashed`/`dotted` (M8) — `double`/`groove`/
+  `ridge`/`inset`/`outset` (CSS 2.2 §8.5.3) are still reported as warnings,
+  not approximated. Corners are simple butt joints (each side is one filled
+  rect, sized so the two horizontal sides span the full box width and the
+  two vertical sides fit between them) — there is no real miter/45°-mitered
+  corner; a dashed/dotted corner between two differently-styled sides is
+  likewise an unmitred straight join (see "Supported as of M8" above).
+  Different widths per side are supported, but two *thick*, *differently
+  colored* adjacent sides will show that seam rather than a mitered
+  diagonal.
 - **Margin boxes**: no shrink-to-fit, and clipping depends on which path
   painted the box. css-page-3's own 3-box-per-row division is honored (each
   of `@*-left`/`@*-center`/`@*-right` gets a fixed, equal third of the
@@ -538,8 +692,16 @@ the rest of tables/flex-to-spec are the milestones ahead (see
   silently ignored or approximated: `position: sticky`, a float's
   `shape-outside`, CSS columns (`column-*`), writing modes
   (`writing-mode`/`direction` beyond LTR/TTB), `::first-line`/
-  `::first-letter`, and `list-style-image` — all M8+, alongside `@media`
-  and the rest of `::before`/`::after`-style generated content. Tables are
+  `::first-letter`, and `list-style-image` — all M9+, alongside `@media`
+  and the rest of `::before`/`::after`-style generated content. A `<table>`
+  next to a float is a **further, honest instance** of the block-sibling
+  gap already documented above: CSS 2.2 §9.5 forbids a table's border box
+  from overlapping a float, but this engine's `TableFormattingContext`
+  never consults the float bands (only `InlineFlowContext` does) — a
+  table is laid out at its parent's full content width exactly like any
+  other block-level box, so it can visually overlap an adjacent float
+  instead of being narrowed around it, same gap and same fix scope (M9+)
+  as the generic case. Tables are
   implemented as of M5 but only the subset above — see "Supported as of
   M5" for what's excluded (`border-collapse`, `rowspan`, a repeating
   `<thead>` per page, `<caption>`/`<col>`/`<colgroup>`/`<tfoot>`,
@@ -574,6 +736,23 @@ the rest of tables/flex-to-spec are the milestones ahead (see
 - A declared `line-height` below `1.2 × font-size` is floored to
   `1.2 × font-size` in M1 (the same value used for `normal`), rather than
   allowing tighter line boxes than the font's normal metric.
+- **M8's noisy approximations, gathered in one place** (each is documented
+  in full detail, with its reasoning, in "Supported as of M8" above — this
+  is just the honest one-line summary of every place M8 diverges from a
+  real browser rather than merely omitting a feature):
+  - `box-shadow`'s `blur-radius > 0` is **4 flat concentric layers, not a
+    real Gaussian/box blur** — looks soft at a glance, bands at a large
+    blur radius.
+  - `radial-gradient()` is **always reduced to `circle at center`** — every
+    other shape/position/extent keyword degrades to that, with a warning.
+  - A `linear-gradient(to <corner>, ...)` uses a **fixed 45°/135°/225°/
+    315°** angle, never the box's own aspect-ratio-dependent angle real CSS
+    computes.
+  - A dashed/dotted corner between two differently-styled sides is a
+    **straight, unmitred join** — no diagonal miter negotiation.
+  - `box-shadow` and `background-image` are **not supported on inline
+    elements** (a `<span>`) — both warn once and drop the declaration
+    entirely; only block-level/inline-block boxes paint them.
 
 ## API example
 
@@ -622,8 +801,14 @@ dropping it. The pre-loaded sample leads with a `:root { --brand: ...;
 as of M7, a real Bootstrap-style `<a class="btn">Prenota ora</a>`
 (`display: inline-block`, its background/border/padding finally painting
 in-line instead of flattening to plain text) and a small `<ul
-class="packing-list">` rendered with real disc markers — modern CSS
-rendering correctly on the very first click, no editing required.
+class="packing-list">` rendered with real disc markers. As of M8, the
+header banner paints a native `linear-gradient()` (a real PDF `/Shading`,
+still built from the same `:root` vars), the price line carries a
+`-10%` pill badge (`border-radius: 999px`, auto-clamped to a true pill by
+the corner-overlap clamp — no special-casing), and both `.btn` and every
+`.card` gained `border-radius` + a soft `box-shadow` — the full Bootstrap
+look (rounded, shadowed, gradient-lit) renders correctly on the very first
+click, no editing required.
 
 To run it locally:
 
@@ -655,8 +840,9 @@ of flexbox/grid:
 | **M4** | **Flexbox subset**: `display:flex`, `flex-direction` (row/column), `flex-wrap`, `gap`, `justify-content`, `align-items`, basic `flex-grow`/`flex-shrink`, `flex-basis`/`width`, atomic pagination | Authors write cards (photo + flexible text) assuming flex; M1–M4 together render the target document in full |
 | **M5** | **Tables subset**: `table`/`thead`/`tbody`/`tr`/`td`/`th`, auto + fixed column-width algorithms, `colspan`, separated borders (`border-spacing`), cell `vertical-align`, nested tables, row-atomic pagination | Third-party/email-style HTML is built from `<table>`s, not flexbox — a classic email layout (photo cell + text cell, bordered data table inside) renders without rewriting it first |
 | **M6** | **CSS core**: selector combinators + `:nth-child`/`:not` + specificity, `em`/`rem`/physical units, `:root` custom properties + `calc()`, full color syntax (`rgb()`/`hsl()`/148 named colors) + alpha via `ExtGState` | Real-world stylesheets (Bootstrap-flavored CSS especially) lean on `var()`/`calc()`, `rem`, and combinators/`:nth-child` for the exact "striped table" pattern used everywhere — none of that worked before M6 |
-| **M7** (this release) | **Layout**: real user-agent stylesheet (`h1`-`h6`, list/blockquote/`pre` margins, monospace), list markers (`disc`/`circle`/`square`/`decimal`), real inline boxes + `display: inline-block` (THE `.btn`/`.badge` fix), `min`/`max-width`/`height` + `overflow: hidden` clipping, floats with line shortening, `position: relative`/`absolute` | A Bootstrap-derived `.btn`/`.badge`/`.card` finally paints in-line instead of flattening to plain text — the last big gap between this engine's box model and a real browser's |
-| **M8+** | Pseudo-elements (`::before`/`::after`) → `@media` → `position: sticky` → CSS columns → flex to spec (`order`, `align-self`, `stretch`) → grid | Generated content and responsive/print media queries round out the CSS core; flex/grid get completed to spec in their own milestones |
+| **M7** | **Layout**: real user-agent stylesheet (`h1`-`h6`, list/blockquote/`pre` margins, monospace), list markers (`disc`/`circle`/`square`/`decimal`), real inline boxes + `display: inline-block` (THE `.btn`/`.badge` fix), `min`/`max-width`/`height` + `overflow: hidden` clipping, floats with line shortening, `position: relative`/`absolute` | A Bootstrap-derived `.btn`/`.badge`/`.card` finally paints in-line instead of flattening to plain text — the last big gap between this engine's box model and a real browser's |
+| **M8** (this release) | **Visual polish**: `border-radius` (Bézier + annular ring + rounded clipping), native PDF gradients (`linear-gradient()`/`radial-gradient()` as real `/Shading` objects), approximated `box-shadow` (4-layer, non-Gaussian) + `dashed`/`dotted` borders, `letter-spacing`/`word-spacing`/`text-transform`, `background-image` (`cover`/`contain`/tiling), `@font-face` (local TTF, case-insensitive) | The last mile between "the boxes are in the right place" (M1-M7) and "it actually looks like a real Bootstrap-derived document" — a rounded, shadowed, gradient-filled `.card`/`.btn`/pill `.badge` is the exact look the target document's author would reach for |
+| **M9+** | Pseudo-elements (`::before`/`::after`) → `@media` → `position: sticky` → CSS columns → flex to spec (`order`, `align-self`, `stretch`) → grid → `text-shadow`/`border-image` | Generated content and responsive/print media queries round out the CSS core; flex/grid get completed to spec in their own milestones; the remaining visual properties M8 explicitly excluded |
 
 ## License
 

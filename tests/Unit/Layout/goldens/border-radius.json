@@ -1,0 +1,100 @@
+{
+    "type": "box",
+    "rect": [
+        0.0,
+        0.0,
+        300.0,
+        46.4
+    ],
+    "background": null,
+    "borders": null,
+    "atomic": false,
+    "clipsChildren": false,
+    "children": [
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                0.0,
+                100.0,
+                27.2
+            ],
+            "background": null,
+            "borders": {
+                "top": {
+                    "widthPx": 4.0,
+                    "color": "#000000"
+                },
+                "right": {
+                    "widthPx": 4.0,
+                    "color": "#000000"
+                },
+                "bottom": {
+                    "widthPx": 4.0,
+                    "color": "#000000"
+                },
+                "left": {
+                    "widthPx": 4.0,
+                    "color": "#000000"
+                }
+            },
+            "atomic": false,
+            "clipsChildren": false,
+            "borderRadius": {
+                "tl": 10.0,
+                "tr": 10.0,
+                "br": 10.0,
+                "bl": 10.0
+            },
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        4.0,
+                        4.0,
+                        9.8,
+                        19.2
+                    ],
+                    "text": "a",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 20.45
+                }
+            ]
+        },
+        {
+            "type": "box",
+            "rect": [
+                0.0,
+                27.2,
+                100.0,
+                19.2
+            ],
+            "background": null,
+            "borders": null,
+            "atomic": false,
+            "clipsChildren": false,
+            "borderRadius": {
+                "tl": 1.0,
+                "tr": 2.0,
+                "br": 3.0,
+                "bl": 4.0
+            },
+            "children": [
+                {
+                    "type": "text",
+                    "rect": [
+                        0.0,
+                        27.2,
+                        10.16,
+                        19.2
+                    ],
+                    "text": "b",
+                    "faceKey": "default:400:normal",
+                    "underline": false,
+                    "baselineY": 43.65
+                }
+            ]
+        }
+    ]
+}

@@ -12,6 +12,7 @@ use Pliego\Box\TextRun;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -242,8 +243,16 @@ final class InlineFlowContext
             // que el salto de línea "duro" entre tramos preformateados sigue funcionando exactamente
             // igual que el resto de este bucle (rama LineBreakRun de arriba) -- lo único que se
             // desactiva aquí es el WRAP dentro de un mismo tramo.
+            // M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing del ESTILO DE ESTE RUN
+            // entran en CADA llamada a widthOf() de este método -- 0.0/0.0 (el default, sin
+            // declaración) hace que widthOf() tome su fast path interno (ver su docblock), así que
+            // esta línea es un no-op observacional para cualquier documento sin spacing declarado
+            // (byte-stable, M1-M8-T4).
+            $letterSpacingPx = $run->style->letterSpacingPx;
+            $wordSpacingPx = $run->style->wordSpacingPx;
+
             if ($run->style->whiteSpace === 'pre') {
-                $sliceWidth = $this->measurer->widthOf($text, $face, $fontSize);
+                $sliceWidth = $this->measurer->widthOf($text, $face, $fontSize, $letterSpacingPx, $wordSpacingPx);
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $text, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
                 continue;
@@ -254,7 +263,7 @@ final class InlineFlowContext
             foreach ($finder->find($text) as $opportunity) {
                 $end = $opportunity->byteOffset;
                 $sliceText = substr($text, $segStart, $end - $segStart);
-                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize);
+                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize, $letterSpacingPx, $wordSpacingPx);
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $sliceText, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
 
@@ -271,7 +280,7 @@ final class InlineFlowContext
 
             if ($segStart < strlen($text)) {
                 $sliceText = substr($text, $segStart);
-                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize);
+                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize, $letterSpacingPx, $wordSpacingPx);
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $sliceText, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
             }
@@ -408,8 +417,12 @@ final class InlineFlowContext
         }
 
         $last = $word[count($word) - 1];
+        // M8-T5: la medición original de este tramo (más arriba, en layout()) ya incluyó letter-
+        // spacing/word-spacing del estilo del run -- restar el ancho de UN espacio DEBE incluir
+        // esa MISMA spacing para que la resta cancele exactamente lo que la suma añadió (de lo
+        // contrario, un espacio final "colgante" con spacing declarado dejaría un residuo).
         $core = ($last['kind'] === 'text' && str_ends_with($last['text'], ' '))
-            ? $wordWidth - $this->measurer->widthOf(' ', $last['face'], $last['run']->style->fontSizePx)
+            ? $wordWidth - $this->measurer->widthOf(' ', $last['face'], $last['run']->style->fontSizePx, $last['run']->style->letterSpacingPx, $last['run']->style->wordSpacingPx)
             : $wordWidth;
 
         if ($lineEntries !== [] && $lineWidth + $core > $lineAvailWidth) {
@@ -541,7 +554,10 @@ final class InlineFlowContext
         $reportedWidth = $lineWidth;
         $lastEntry = $lineEntries[$lastIndex];
         if ($lastEntry['kind'] === 'text' && str_ends_with($lastEntry['text'], ' ')) {
-            $spaceWidth = $this->measurer->widthOf(' ', $lastEntry['face'], $lastEntry['run']->style->fontSizePx);
+            // M8-T5: misma razón que el análogo de commitWord() -- la resta debe incluir la MISMA
+            // letter/word-spacing que la medición original del tramo ya sumó para ese carácter de
+            // espacio final.
+            $spaceWidth = $this->measurer->widthOf(' ', $lastEntry['face'], $lastEntry['run']->style->fontSizePx, $lastEntry['run']->style->letterSpacingPx, $lastEntry['run']->style->wordSpacingPx);
             $lineEntries[$lastIndex]['width'] -= $spaceWidth;
             $reportedWidth -= $spaceWidth;
         }
@@ -690,6 +706,8 @@ final class InlineFlowContext
                 $entry['face']->key,
                 $style->underline,
                 $style->opacity,
+                $style->letterSpacingPx,
+                $style->wordSpacingPx,
             );
             $lineBoxState = $this->markBoxesTouched($lineBoxState, $openBoxStack, $cursorX, $width);
             $cursorX += $width;
@@ -783,6 +801,45 @@ final class InlineFlowContext
             $style->borderBottom,
             $isFirstSlice ? $style->borderLeft : $noSide,
         );
+        // M8-T2: mismo criterio de slice que $borders arriba -- las esquinas IZQUIERDAS (tl/bl)
+        // solo sobreviven en la PRIMERA slice, las DERECHAS (tr/br) solo en la ÚLTIMA; una slice
+        // intermedia (ni primera ni última) queda con las 4 a cero, comportándose como un
+        // rectángulo recto (mismo "noSide" spirit que los bordes laterales suprimidos). % resuelto
+        // contra el ancho de ESTA slice (border-box propio del fragmento que se está pintando, ver
+        // el docblock de BorderRadius::fromCss()).
+        $rawRadius = BorderRadius::fromCss($style->borderRadius, $maxX - $minX, $rectHeight);
+        $radius = new BorderRadius(
+            $isFirstSlice ? $rawRadius->tl : 0.0,
+            $isLastSlice ? $rawRadius->tr : 0.0,
+            $isLastSlice ? $rawRadius->br : 0.0,
+            $isFirstSlice ? $rawRadius->bl : 0.0,
+        );
+        // M8-T4 (brief: "InlineBoxFragment: NO shadow M8 (declarado en inline -> warning,
+        // documentado)") -- InlineBoxFragment no tiene un campo $boxShadow (a diferencia de
+        // BoxFragment, ver su docblock): un box-shadow declarado en un elemento inline real
+        // (p.ej. un <span>) simplemente se descarta, con un aviso UNA sola vez por render
+        // (addWarningOnce -- una caja inline partida en N slices por box-decoration-break:slice
+        // reconstruye el MISMO $style, y por tanto dispararía este chequeo N veces sin la
+        // deduplicación).
+        if ($style->boxShadow !== null) {
+            $this->warnings?->addWarningOnce(
+                'box-shadow-on-inline',
+                'box-shadow not supported on inline elements (M8): declaration ignored',
+            );
+        }
+        // M8-T6 (brief: background-image on inline is unsupported, same treatment as box-shadow
+        // just above) -- InlineBoxFragment has no $backgroundImagePath/$backgroundSize/
+        // $backgroundRepeat/$backgroundPosition fields at all (only $backgroundGradient survives
+        // per-slice, see its docblock), so a background-image declared on a real inline element
+        // (e.g. a <span>) is simply dropped, with a one-time warning (addWarningOnce -- an inline
+        // box split into N slices by box-decoration-break:slice reconstructs the SAME $style, and
+        // would otherwise fire this check N times).
+        if ($style->backgroundImagePath !== null) {
+            $this->warnings?->addWarningOnce(
+                'background-image-on-inline',
+                'background-image not supported on inline elements (M8): declaration ignored',
+            );
+        }
         return new InlineBoxFragment(
             new Rect($minX, $rectY, $maxX - $minX, $rectHeight),
             $style->backgroundColor,
@@ -790,6 +847,11 @@ final class InlineFlowContext
             $style->opacity,
             $isFirstSlice,
             $isLastSlice,
+            $radius,
+            // M8-T3: gradiente PER-SLICE, el rect de ESTA línea como caja de gradiente -- ver el
+            // docblock de InlineBoxFragment::$backgroundGradient (divergencia documentada frente a
+            // un gradiente único continuo cruzando líneas).
+            $style->backgroundGradient,
         );
     }
 
@@ -808,6 +870,13 @@ final class InlineFlowContext
                 $fragment->atomic,
                 $fragment->opacity,
                 $fragment->clipsChildren,
+                $fragment->borderRadius,
+                $fragment->backgroundGradient,
+                $fragment->boxShadow,
+                $fragment->backgroundImagePath,
+                $fragment->backgroundSize,
+                $fragment->backgroundRepeat,
+                $fragment->backgroundPosition,
             );
         }
         if ($fragment instanceof TextFragment) {
@@ -820,6 +889,8 @@ final class InlineFlowContext
                 $fragment->faceKey,
                 $fragment->underline,
                 $fragment->opacity,
+                $fragment->letterSpacingPx,
+                $fragment->wordSpacingPx,
             );
         }
         if ($fragment instanceof ImageFragment) {
@@ -837,6 +908,8 @@ final class InlineFlowContext
                 $fragment->opacity,
                 $fragment->isFirstSlice,
                 $fragment->isLastSlice,
+                $fragment->borderRadius,
+                $fragment->backgroundGradient,
             );
         }
         throw new \LogicException('Unknown fragment kind: ' . $fragment::class);

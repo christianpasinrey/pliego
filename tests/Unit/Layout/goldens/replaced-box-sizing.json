@@ -9,6 +9,7 @@
     "background": null,
     "borders": null,
     "atomic": false,
+    "clipsChildren": false,
     "children": [
         {
             "type": "box",
@@ -38,6 +39,7 @@
                 }
             },
             "atomic": false,
+            "clipsChildren": false,
             "children": [
                 {
                     "type": "image",
@@ -62,6 +64,7 @@
             "background": null,
             "borders": null,
             "atomic": false,
+            "clipsChildren": false,
             "children": [
                 {
                     "type": "image",
@@ -86,6 +89,7 @@
             "background": null,
             "borders": null,
             "atomic": false,
+            "clipsChildren": false,
             "children": [
                 {
                     "type": "text",

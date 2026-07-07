@@ -12,6 +12,7 @@ use Pliego\Box\LineBreakRun;
 use Pliego\Box\TableBox;
 use Pliego\Box\TextRun;
 use Pliego\Css\WarningCollector;
+use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
 use Pliego\Layout\Fragment\Fragment;
@@ -430,6 +431,23 @@ final class BlockFlowContext implements FormattingContext
                         'float on a <table> has no effect (not supported yet): the table stays in normal flow',
                     );
                 }
+                // M8-T1 housekeeping (M7 final-review Finding D, remaining gap): `position:
+                // relative|absolute` on a <table> is ALSO a silent no-op today, same root cause as
+                // float just above -- TableFormattingContext::layout() (called right below,
+                // unconditionally) never reads $style->position at all (grep-verified: zero
+                // matches), so neither the position:relative self-shift that BlockFlowContext::
+                // layout() applies to a BlockBox (see resolveRelativeOffset()) nor the
+                // position:absolute out-of-flow branch just above (restricted to BlockBox|ImageBox,
+                // same restriction as the float branch) ever reaches a TableBox. One warning covers
+                // BOTH values (mirrors warnIfFloatOrPositionOnInline()'s single "!== Static" check),
+                // once per cause via addWarningOnce(), no behavioral change (the table stays in
+                // normal flow either way).
+                if ($child->style->position !== Position::Static) {
+                    $this->warnings?->addWarningOnce(
+                        'position-on-table',
+                        'position:relative/absolute on a <table> has no effect (not supported yet): the table stays in normal flow',
+                    );
+                }
                 $childFragment = $this->tableContext()->layout($child, new Rect($contentX, $cursorY, $contentWidth, INF));
                 $children[] = $childFragment;
                 $contentBottom = self::flowBottom($childFragment, $cursorY, $child->style, $contentWidth);
@@ -540,6 +558,28 @@ final class BlockFlowContext implements FormattingContext
 
         $paddingV = $paddingTop + $paddingBottom;
         $borderV = $borderTop + $borderBottom;
+        // M8 final-review Finding A (CSS 2.2 §10.5/§10.6.3): a DEFINITE declared height (px only --
+        // % is rejected at PARSE time, DeclarationParser::LENGTH_PROPERTIES, same gap documented on
+        // ComputedStyle::$height -- this engine never tracks a containing block's height) REPLACES
+        // the natural content-driven height computed above, exactly like the width algorithm above
+        // replaces $contentWidth when a declared width exists (same toContentSpace() helper, same
+        // box-sizing handling). Verified no-op since M2 until this fix: nothing below this line
+        // ever read $style->height at all. Content SHORTER than the declared height simply grows
+        // the box (content stays anchored at its natural top, background/border cover the extra
+        // space below -- the exact "floor" behavior min-height already had, see the test just
+        // above this one); content TALLER overflows past the box's own bottom edge -- painted
+        // as-is when overflow:visible (the default, already handled by max-height the same way,
+        // see the "max-height with overflow:visible" test above), or clipped by the PRE-EXISTING
+        // overflow:hidden mechanism (Paint\Painter, $clipsChildren below -- completely unchanged by
+        // this fix, it already clipped to whatever $height this method computed).
+        //
+        // Order per CSS 2.2 §10.7 ("used height" algorithm): height (this block) -> max-height
+        // clamps DOWN -> min-height clamps UP, min wins on conflict -- identical order/formula to
+        // the pre-existing max/min-height clamp just below, which is untouched.
+        $declaredHeightPx = $style->height?->px;
+        if ($declaredHeightPx !== null) {
+            $contentHeight = self::toContentSpace($declaredHeightPx, $style->boxSizing, $paddingV, $borderV);
+        }
         $maxHeightPx = $style->maxHeight?->px;
         if ($maxHeightPx !== null) {
             $contentHeight = min($contentHeight, self::toContentSpace($maxHeightPx, $style->boxSizing, $paddingV, $borderV));
@@ -561,6 +601,18 @@ final class BlockFlowContext implements FormattingContext
             // TODOS sus descendientes al rect border-box final (YA clampeado arriba) -- ver
             // BoxFragment::$clipsChildren.
             clipsChildren: $style->overflow === 'hidden',
+            // M8-T2: % resuelto contra $borderBoxWidth (adjudicación M8, ver BorderRadius::
+            // fromCss()), clamp de solapes §5.5 contra el $height final YA calculado arriba.
+            borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
+            // M8-T3: VO crudo, sin resolver -- ver el docblock de BoxFragment::$backgroundGradient.
+            backgroundGradient: $style->backgroundGradient,
+            // M8-T4: VO YA resuelto a px -- ver el docblock de BoxFragment::$boxShadow.
+            boxShadow: $style->boxShadow,
+            // M8-T6: raw path sin resolver -- ver el docblock de BoxFragment::$backgroundImagePath.
+            backgroundImagePath: $style->backgroundImagePath,
+            backgroundSize: $style->backgroundSize,
+            backgroundRepeat: $style->backgroundRepeat,
+            backgroundPosition: $style->backgroundPosition,
         );
 
         // M7-T6 (CSS 2.2 §9.4.3): position:relative -- shift visual PURO, aplicado DESPUÉS de que
@@ -1062,6 +1114,13 @@ final class BlockFlowContext implements FormattingContext
             [$imageFragment],
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
+            borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $borderBoxHeight),
+            backgroundGradient: $style->backgroundGradient,
+            boxShadow: $style->boxShadow,
+            backgroundImagePath: $style->backgroundImagePath,
+            backgroundSize: $style->backgroundSize,
+            backgroundRepeat: $style->backgroundRepeat,
+            backgroundPosition: $style->backgroundPosition,
         );
 
         // M7-T6: un <img> también puede ser position:relative -- mismo shift visual puro que un

@@ -748,3 +748,46 @@ it('a table nested inside an atomic flex card is never split at the row level: t
         expect($rowFrag->atomic)->toBeTrue();
     }
 });
+
+// --- M8-T2 review Finding 2 (Important), TableFormattingContext twin: withHeight() (used by
+// alignCell() to stretch a shorter cell up to the row height, ver su docblock) must re-clamp
+// border-radius the same way FlexFormattingContext::withHeight() now does, instead of preserving
+// it unchanged. This class only ever STRETCHES a cell (rowHeight = the MAX of the row's cells,
+// alignCell() only calls withHeight() when $contentHeight < $rowHeight -- never a shrink), so
+// there is no "bowtie" repro to reproduce here the way there is for flex-column shrink; this test
+// instead guards that the shared reclampFor() wiring does not regress the ordinary (fits both
+// before and after) case, byte for byte.
+
+it('Finding 2 twin: a shorter cell stretched up to a taller row height keeps its (already-fitting) border-radius unchanged', function () {
+    $radiusLength = LengthPercentage::px(5.0);
+    $shortStyle = tableStyle([
+        'border-top-left-radius' => $radiusLength,
+        'border-top-right-radius' => $radiusLength,
+        'border-bottom-right-radius' => $radiusLength,
+        'border-bottom-left-radius' => $radiusLength,
+    ]);
+    $short = new TextRun('one line', $shortStyle);
+    $tall = [new TextRun('line one', tableStyle()), new LineBreakRun(), new TextRun('line two', tableStyle()), new LineBreakRun(), new TextRun('line three', tableStyle())];
+    $cellShort = new TableCellBox($shortStyle, [$short], 1, 'td');
+    $cellTall = new TableCellBox(tableStyle(), $tall, 1, 'td');
+    $row = new TableRowBox(tableStyle(), [$cellShort, $cellTall], false);
+    $table = new TableBox(tableStyle(), [$row], 'table');
+
+    // Independent oracle, same pattern as the vertical-align tests above: the short cell's
+    // natural (un-stretched) height is one line (~19.2px, 16px default font-size), well over the
+    // 5px radius's own 10px (tl+bl) demand -- no clamp at construction. The row's actual height
+    // (driven by the 3-line cell) is taller still, so the reclamp at the STRETCHED height must
+    // remain a no-op too.
+    $frag = $this->ctx->layout($table, new Rect(0.0, 0.0, 1000.0, INF));
+    [$rowFrag] = $frag->children;
+    assert($rowFrag instanceof BoxFragment);
+    [$shortFrag, $tallFrag] = $rowFrag->children;
+    assert($shortFrag instanceof BoxFragment && $tallFrag instanceof BoxFragment);
+
+    expect($shortFrag->rect->height)->toBe($rowFrag->rect->height); // stretched to the full row
+    expect($shortFrag->rect->height)->toBeGreaterThan(19.2); // genuinely taller than its own content -- withHeight() DID run
+    expect($shortFrag->borderRadius->tl)->toBe(5.0);
+    expect($shortFrag->borderRadius->tr)->toBe(5.0);
+    expect($shortFrag->borderRadius->br)->toBe(5.0);
+    expect($shortFrag->borderRadius->bl)->toBe(5.0);
+});

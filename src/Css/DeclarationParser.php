@@ -9,6 +9,10 @@ use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\CalcParser;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientCorner;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\Value\LengthUnit;
@@ -50,20 +54,33 @@ final class DeclarationParser
     ];
     /**
      * CSS 2.2 §8.4/§10.2/§10.5/§15.7: negativos inválidos en LENGTH_PERCENTAGE_PROPERTIES;
-     * margin-* es la única excepción ahí. font-size/height (LENGTH_PROPERTIES) se rechazan
-     * incondicionalmente más abajo — ambas son siempre no-negativas, así que no necesitan
-     * figurar aquí (evita el "always true" que detecta PHPStan al estrechar el tipo).
+     * margin-* es la única excepción ahí. font-size (parseFontSize(), aparte -- ver su propio
+     * docblock arriba, "font-size vive aparte") tiene su PROPIO chequeo incondicional, ajeno a esta
+     * constante, así que no necesita figurar aquí (evita el "always true" que detecta PHPStan al
+     * estrechar el tipo) -- height, en cambio, SÍ figura (ver más abajo, M8-T1 housekeeping).
      *
      * M6-T4 fix (Finding 2): visibilidad `public` y lista AMPLIADA a la lista COMPLETA de
      * propiedades no-negativas del motor — antes solo cubría las 5 gateadas explícitamente aquí
-     * mismo (líneas más abajo, chequeo de literales en LENGTH_PERCENTAGE_PROPERTIES); height/
-     * row-gap/column-gap/border-*-width/border-spacing/flex-basis YA eran no-negativas siempre en
-     * sus propios sitios de parseo (chequeo incondicional, sin consultar esta constante) — añadirlas
-     * aquí no cambia ESE comportamiento (siguen rechazándose igual), solo hace la lista consultable
-     * desde `ComputedStyle::compute()`, que necesita el mismo criterio para re-chequear el signo de
-     * un CalcExpr con em/rem UNA VEZ conocido el font-size propio (ver rawValueOf() más abajo y
-     * ComputedStyle::compute() — el signo de un calc() con % sigue sin poder conocerse hasta
-     * Layout, gap documentado, ver el reporte de M6-T4 §4).
+     * mismo (líneas más abajo, chequeo de literales en LENGTH_PERCENTAGE_PROPERTIES); en aquel
+     * momento height/row-gap/column-gap/border-*-width/border-spacing/flex-basis YA eran
+     * no-negativas siempre en sus propios sitios de parseo (chequeo incondicional, sin consultar
+     * esta constante) — añadirlas aquí no cambiaba ESE comportamiento (seguían rechazándose igual),
+     * solo hacía la lista consultable desde `ComputedStyle::compute()`, que necesita el mismo
+     * criterio para re-chequear el signo de un CalcExpr con em/rem UNA VEZ conocido el font-size
+     * propio (ver rawValueOf() más abajo y ComputedStyle::compute() — el signo de un calc() con %
+     * sigue sin poder conocerse hasta Layout, gap documentado, ver el reporte de M6-T4 §4).
+     *
+     * M8-T1 housekeeping (stale comment fix): la frase de arriba -- "chequeo incondicional, sin
+     * consultar esta constante" -- describía la rama LENGTH_PROPERTIES tal como era ANTES de
+     * M7-T6, pero dejó de ser cierta para sus 5 miembros preexistentes (height/row-gap/column-gap/
+     * min-height/max-height) en cuanto top/bottom se UNIERON a esa misma lista: el chequeo de signo
+     * de esa rama (más abajo, en parse()) pasó de incondicional a `in_array(...,
+     * NON_NEGATIVE_PROPERTIES, true)` PARA TODOS sus miembros, no solo top/bottom -- necesario para
+     * que top/bottom (que SÍ admiten negativo) queden excluidos sin duplicar la rama. height SÍ
+     * consulta esta constante hoy (por eso figura en la lista de abajo, línea "'height', 'row-gap',
+     * ..."), simplemente su membresía ahí siempre evalúa a "no-negativo" -- ningún comportamiento
+     * observable cambió, solo el mecanismo por el que se llega a él (ver el docblock de la rama
+     * LENGTH_PROPERTIES en parse() para el detalle completo).
      */
     public const array NON_NEGATIVE_PROPERTIES = [
         'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'width',
@@ -73,6 +90,13 @@ final class DeclarationParser
         // M7-T5 (CSS 2.2 §10.4/§10.7): negativo no tiene interpretación válida para ninguna de las
         // 4 -- mismo criterio de signo que width/height, reutilizando la guarda existente.
         'min-width', 'max-width', 'min-height', 'max-height',
+        // M8-T2 (css-backgrounds-3 §5): un radio negativo no tiene interpretación válida -- mismo
+        // criterio que border-*-width. Necesario aquí (y no solo en el chequeo literal ad-hoc de
+        // parseBorderRadiusLonghand()/expandBorderRadiusShorthand()) para que ComputedStyle::
+        // compute() re-chequee el signo de un calc(em/rem) una vez conocido el font-size propio,
+        // igual que el resto de propiedades de esta lista (ver $resolveCalcLengthPercentage).
+        'border-top-left-radius', 'border-top-right-radius',
+        'border-bottom-right-radius', 'border-bottom-left-radius',
     ];
     private const array COLOR_PROPERTIES = ['color', 'background-color'];
     private const array KEYWORD_PROPERTIES = [
@@ -112,6 +136,12 @@ final class DeclarationParser
         // (mismos 5 literales) en parseListStyleShorthand() más abajo; no se referencia esta
         // constante desde ahí para no acoplar el shorthand a la forma exacta de este mapa.
         'list-style-type' => ['disc', 'circle', 'square', 'decimal', 'none'],
+        // M8-T5 (css-text-3 §8 reducido): text-transform -- los 4 valores del subset reducido de
+        // este milestone (font-variant/full-width/full-size-kana quedan fuera de alcance,
+        // RESTRICCIONES GLOBALES) -- SÍ hereda (ver Style\TextTransform/ComputedStyle::compute()),
+        // aplicado al TEXTO de los runs en Box\BoxTreeBuilder ANTES de medir, nunca aquí (este
+        // parser nunca toca el texto en sí, solo produce el keyword computado).
+        'text-transform' => ['none', 'uppercase', 'lowercase', 'capitalize'],
         // M7-T3 (css-lists-3 §3, reducido): 'outside' es el ÚNICO valor soportado -- y, a
         // diferencia de cualquier otro miembro de este mapa, NO produce ninguna propiedad
         // consumible en ComputedStyle (no existe un campo $listStylePosition: M7 solo implementa
@@ -145,6 +175,14 @@ final class DeclarationParser
 
     private const array BORDER_SIDES = ['top', 'right', 'bottom', 'left'];
     private const array BORDER_WIDTH_KEYWORDS = ['thin' => 1.0, 'medium' => 3.0, 'thick' => 5.0];
+    /** M8-T2 (css-backgrounds-3 §5, reducido): orden CLOCKWISE del shorthand -- tl, tr, br, bl --
+     * a diferencia de margin/padding (TRBL, ver expandBoxShorthand()), border-radius empieza en la
+     * esquina superior-izquierda y va en sentido horario (spec real, no una elección de este
+     * motor). */
+    private const array BORDER_RADIUS_LONGHANDS = [
+        'border-top-left-radius', 'border-top-right-radius',
+        'border-bottom-right-radius', 'border-bottom-left-radius',
+    ];
 
     /** @var list<string> */
     private array $warnings = [];
@@ -179,8 +217,44 @@ final class DeclarationParser
         if ($property === 'border' || in_array($property, ['border-top', 'border-right', 'border-bottom', 'border-left'], true)) {
             return $this->expandBorderShorthand($property, $value);
         }
+        if ($property === 'border-radius') {
+            return $this->expandBorderRadiusShorthand($value);
+        }
+        if (in_array($property, self::BORDER_RADIUS_LONGHANDS, true)) {
+            return $this->parseBorderRadiusLonghand($property, $value);
+        }
         if ($property === 'list-style') {
             return $this->parseListStyleShorthand($value);
+        }
+        // M8-T3 (css-images-3 §3.1 reducido): 'background' (shorthand) y 'background-image'
+        // (longhand) -- ambos detectan linear-gradient()/radial-gradient() (color O gradiente O
+        // imagen url(), "detectar" per el brief); url() todavía no está soportado (background-image
+        // real de M8-T6, un milestone posterior) así que cae a warning + valor descartado, igual
+        // disciplina "todo lo excluido avisa" que el resto de este parser.
+        if ($property === 'background') {
+            return $this->parseBackgroundShorthand($value);
+        }
+        if ($property === 'background-image') {
+            return $this->parseBackgroundImageValue($value);
+        }
+        // M8-T6 (css-backgrounds-3 §4 reducido): las 3 longhands independientes que gobiernan
+        // CÓMO se pinta un background-image (escalado/tiling/origen) -- ninguna hereda (ver
+        // ComputedStyle::compute(), mismo patrón "initial value siempre, nunca $parent->X" que
+        // overflow/box-sizing), así que cada una se resuelve fresca aquí, sin relación con el
+        // cascade de $declarations más allá del merge normal por clave.
+        if ($property === 'background-size') {
+            return $this->parseBackgroundSize($value);
+        }
+        if ($property === 'background-repeat') {
+            return $this->parseBackgroundRepeat($value);
+        }
+        if ($property === 'background-position') {
+            return $this->parseBackgroundPositionValue($value);
+        }
+        // M8-T4 (css-backgrounds-3 §6 reducido): box-shadow -- ver parseBoxShadowValue() para la
+        // gramática soportada (sin inset/spread/multi-shadow reales, ver su docblock).
+        if ($property === 'box-shadow') {
+            return $this->parseBoxShadowValue($value);
         }
         if ($this->isBorderLonghand($property, 'width')) {
             return $this->parseBorderWidth($property, $value);
@@ -261,6 +335,9 @@ final class DeclarationParser
         }
         if ($property === 'text-decoration') {
             return $this->parseTextDecoration($value);
+        }
+        if ($property === 'letter-spacing' || $property === 'word-spacing') {
+            return $this->parseSpacing($property, $value);
         }
         if ($property === 'flex-grow' || $property === 'flex-shrink') {
             return $this->parseFlexNumber($property, $value);
@@ -510,7 +587,7 @@ final class DeclarationParser
     {
         $style = $this->borderStyleFromToken($value);
         if ($style === null) {
-            return $this->warn("Unsupported border style for $property: $value (only solid|none supported in M2)");
+            return $this->warn("Unsupported border style for $property: $value (only solid|none|dashed|dotted supported)");
         }
         return [$property => $style];
     }
@@ -529,6 +606,11 @@ final class DeclarationParser
         return match (strtolower($token)) {
             'solid' => BorderStyle::Solid,
             'none' => BorderStyle::None,
+            // M8-T4 (css-backgrounds-3 §4.3): double/groove/ridge/inset/outset siguen fuera de
+            // alcance -- caen al `null` genérico (warning "only solid|none|dashed|dotted
+            // supported"), igual que antes de esta tarea.
+            'dashed' => BorderStyle::Dashed,
+            'dotted' => BorderStyle::Dotted,
             default => null,
         };
     }
@@ -592,6 +674,723 @@ final class DeclarationParser
             }
         }
         return $result;
+    }
+
+    /**
+     * M8-T2 (css-backgrounds-3 §5, reducido): `border-radius: <length-percentage>{1,4}` -- 1-4
+     * valores, orden CLOCKWISE tl/tr/br/bl (ver BORDER_RADIUS_LONGHANDS), mismo patrón de
+     * expansión 1/2/3/4 que expandBoxShorthand() salvo por el orden (TRBL ahí, TL-TR-BR-BL aquí --
+     * spec real, no elección de este motor). Un '/' en cualquier parte del valor es la sintaxis
+     * elíptica completa (`border-radius: <h>{1,4} / <v>{1,4}`, radios horizontal/vertical
+     * distintos por esquina) -- fuera de alcance M8 (solo se soporta el radio circular, ver
+     * Css\Value\BorderRadius), así que se rechaza ENTERO con un único warning antes de tokenizar
+     * nada más (splitTopLevel() no sabe de '/', trataría "/ 20px" como tokens propios y produciría
+     * un error de shorthand confuso en vez de este mensaje específico).
+     *
+     * @return array<string, mixed>
+     */
+    private function expandBorderRadiusShorthand(string $value): array
+    {
+        if (str_contains($value, '/')) {
+            return $this->warn("Elliptical border-radius not supported: $value");
+        }
+        $parts = self::splitTopLevel(trim($value));
+        $lengths = array_map($this->parseLengthPercentage(...), $parts);
+        if ($parts === [] || in_array(null, $lengths, true) || count($lengths) > 4) {
+            return $this->warn("Unsupported shorthand for border-radius: $value");
+        }
+        /** @var list<LengthPercentage|CssLength|CalcExpr> $lengths */
+        foreach ($lengths as $length) {
+            if (self::rawValueOf($length) < 0.0) {
+                return $this->warn("Negative value not allowed for border-radius: $value");
+            }
+        }
+        [$tl, $tr, $br, $bl] = match (count($lengths)) {
+            1 => [$lengths[0], $lengths[0], $lengths[0], $lengths[0]],
+            2 => [$lengths[0], $lengths[1], $lengths[0], $lengths[1]],
+            3 => [$lengths[0], $lengths[1], $lengths[2], $lengths[1]],
+            default => [$lengths[0], $lengths[1], $lengths[2], $lengths[3]],
+        };
+        return [
+            'border-top-left-radius' => $tl, 'border-top-right-radius' => $tr,
+            'border-bottom-right-radius' => $br, 'border-bottom-left-radius' => $bl,
+        ];
+    }
+
+    /**
+     * M8-T2: longhand individual -- UN solo valor (radio circular). Dos valores separados por
+     * espacio (`border-top-left-radius: 10px 20px`, la forma elíptica del longhand, css-
+     * backgrounds-3 §5) caen al mismo warning "elliptical... not supported" que el '/' del
+     * shorthand, en vez del warning genérico de shorthand -- mensaje distinto a propósito (no hay
+     * ningún shorthand aquí, un autor viendo "Unsupported shorthand" en un longhand sería confuso).
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBorderRadiusLonghand(string $property, string $value): array
+    {
+        $parts = self::splitTopLevel(trim($value));
+        if (count($parts) === 2) {
+            return $this->warn("Elliptical border-radius not supported for $property: $value");
+        }
+        if (count($parts) !== 1) {
+            return $this->warn("Unsupported $property: $value");
+        }
+        $length = $this->parseLengthPercentage($parts[0]);
+        if ($length === null) {
+            return $this->warn("Unsupported length for $property: $value");
+        }
+        if (self::rawValueOf($length) < 0.0) {
+            return $this->warn("Negative value not allowed for $property: $value");
+        }
+        return [$property => $length];
+    }
+
+    /**
+     * RESTRICCIONES GLOBALES M8 ("multiple backgrounds (primera capa se usa + warning)"): tanto
+     * 'background' como 'background-image' admiten una LISTA de capas separadas por comas de
+     * NIVEL SUPERIOR (css-backgrounds-3 §3.4 -- `background-image: linear-gradient(...), url(...)`
+     * apila varias imágenes) -- fuera de alcance M8 entero, no solo de esta tarea. splitTopLevelCommas()
+     * (reutilizado de la gramática de linear-gradient()/radial-gradient()) distingue correctamente
+     * un ÚNICO linear-gradient(a, b) -- cuyas comas internas viven DENTRO de un paréntesis, así que
+     * el split de nivel superior devuelve un solo segmento -- de una lista real de 2+ capas (comas
+     * FUERA de cualquier paréntesis). Con 2+ segmentos, se avisa UNA vez y se seccion solo la
+     * PRIMERA capa (recortada) para el resto del método -- exactamente "primera capa se usa +
+     * warning" del brief.
+     */
+    private function firstBackgroundLayer(string $value): string
+    {
+        $layers = self::splitTopLevelCommas(trim($value));
+        if (count($layers) > 1) {
+            $this->warnings[] = "Multiple backgrounds not supported (using the first layer only): $value";
+        }
+        return $layers[0] ?? '';
+    }
+
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido): `background: <color> | <gradient-function> | url(...)`
+     * -- forma MUY reducida del shorthand real (ningún position/size/repeat/attachment: quedan
+     * fuera de alcance M8, ver RESTRICCIONES GLOBALES "multiple backgrounds"/"background-
+     * attachment"). "Detectar" (per el brief): un valor que empieza por linear-gradient(/
+     * radial-gradient( se parsea como gradiente; si no, un color válido gana; si no, url(...) cae
+     * al warning de "no soportado todavía" (M8-T6); cualquier otra cosa, warning genérico.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundShorthand(string $value): array
+    {
+        $trimmed = $this->firstBackgroundLayer($value);
+        // M8 final-review Finding E: 'none' is the SHORTHAND's own explicit reset -- background-
+        // color/-image/-gradient all have 'none'/'transparent' as their initial value (CSS 2.2
+        // §14.2.1 / css-backgrounds-3 §3.1) -- mirroring parseBackgroundImageValue()'s 'none'
+        // branch above (which already resets background-image/-gradient the same way). Before
+        // this fix, 'none' matched none of the 3 detection branches below (not a gradient
+        // function, not url(), and Color::fromCss('none') returns null -- 'none' is not a CSS
+        // color keyword) and fell all the way through to the generic "Unsupported background
+        // shorthand" warn+drop, so a more-specific `background: none` never actually reset a
+        // less-specific cascaded gradient/color/image (see StyleResolverTest.php's cascade-win
+        // repro for the two-rule case this single-declaration check can't exercise on its own).
+        if (strtolower($trimmed) === 'none') {
+            return ['background-color' => null, 'background-gradient' => null, 'background-image' => null];
+        }
+        if ($this->isGradientFunction($trimmed)) {
+            $gradient = $this->parseGradientFunction($trimmed);
+            if ($gradient === null) {
+                return [];
+            }
+            // code review Finding 1 (css-backgrounds-3 §5): `background` is a SHORTHAND -- every
+            // use of it resets ALL the sub-properties it covers, not just the one it declares a
+            // value for (CSS 2.2 §12.5.3). This reduced grammar never carries a color AND a
+            // gradient in the SAME shorthand value (see this method's docblock above), so a
+            // gradient value always resets background-color to its initial 'transparent' --
+            // represented here as an explicit `null` (not simply omitting the key), which is what
+            // lets it win over a background-color a LESS-specific cascaded rule already set for
+            // the same element (StyleResolver::matchedDeclarationsAndCustomProperties() merges
+            // rule declarations key-by-key, in cascade order -- omitting the key here would let
+            // that earlier value silently survive; `$declarations[$k] ?? null` in
+            // ComputedStyle::compute() treats an explicit null exactly like "never declared").
+            // M8-T6: += 'background-image' => null -- the reset TRIO now covers all 3 sub-values
+            // this reduced shorthand can carry (color XOR gradient XOR image, see this method's
+            // url() branch below), so a gradient value must ALSO clear a previously-cascaded
+            // background-image, same reasoning as the color reset just below.
+            return ['background-gradient' => $gradient, 'background-color' => null, 'background-image' => null];
+        }
+        if (stripos($trimmed, 'url(') === 0) {
+            $rawPath = $this->extractUrlBody($trimmed);
+            if ($rawPath === null) {
+                return $this->warn("Unsupported background url(): $value");
+            }
+            // M8-T6: full reset trio (per the brief: "background shorthand resets siblings"
+            // extended to all 3 sub-properties) -- a url() value resets BOTH background-color and
+            // background-gradient, mirroring the gradient/color branches above/below.
+            return ['background-image' => $rawPath, 'background-color' => null, 'background-gradient' => null];
+        }
+        $color = Color::fromCss($trimmed);
+        if ($color !== null) {
+            // code review Finding 1 (symmetric case): a color value resets background-gradient to
+            // its initial 'none' the same way -- see the docblock above for why an explicit null
+            // (not an omitted key) is required for the reset to actually win the cascade merge.
+            // M8-T6: += 'background-image' => null, same reset-trio discipline as the other 2
+            // branches.
+            return ['background-color' => $color, 'background-gradient' => null, 'background-image' => null];
+        }
+        return $this->warn("Unsupported background shorthand: $value");
+    }
+
+    /**
+     * M8-T3/M8-T6: `background-image: <gradient-function> | url(...) | none` -- misma detección
+     * que el shorthand de arriba (ver su docblock), sin la rama de color (background-image nunca
+     * acepta un color liso). M8-T6: url(...) implementado de verdad (antes caía a un warning de
+     * "milestone posterior") -- extractUrlBody() ya validó el paréntesis balanceado y despojó las
+     * comillas opcionales, así que el raw path que llega a ComputedStyle es SIEMPRE la ruta cruda
+     * tal cual la escribió el autor (sin basePath resuelto -- eso ocurre en tiempo de PINTADO, ver
+     * Paint\Painter::paintBackgroundImage(), arquitectura M8-T6).
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundImageValue(string $value): array
+    {
+        if (strtolower(trim($value)) === 'none') {
+            // M8-T6: 'none' resetea AMBOS -- gradient (ya desde T3) Y image (extensión de esta
+            // tarea) -- un autor puede sobreescribir cualquiera de los dos con 'none' y el otro
+            // debe desaparecer igual (mismo argumento de reset explícito que el resto de este
+            // método: null, no ausencia de clave, para ganar el merge del cascade).
+            return ['background-gradient' => null, 'background-image' => null];
+        }
+        $trimmed = $this->firstBackgroundLayer($value);
+        if ($this->isGradientFunction($trimmed)) {
+            $gradient = $this->parseGradientFunction($trimmed);
+            // M8-T6: un gradiente declarado en 'background-image' TAMBIÉN resetea 'background-image'
+            // a null -- mismo argumento de reset-trio que el shorthand (arriba): esta longhand
+            // puede llevar gradient XOR image, así que una cascada `background-image: url(a.jpg)`
+            // seguida de `background-image: linear-gradient(...)` en una regla más específica debe
+            // dejar SOLO el gradiente vivo, nunca ambos.
+            return $gradient === null ? [] : ['background-gradient' => $gradient, 'background-image' => null];
+        }
+        if (stripos($trimmed, 'url(') === 0) {
+            $rawPath = $this->extractUrlBody($trimmed);
+            if ($rawPath === null) {
+                return $this->warn("Unsupported background-image url(): $value");
+            }
+            // M8-T6: setting an image resets a previously-cascaded gradient, mirroring the
+            // gradient branch above (both directions of the XOR now reset the other).
+            return ['background-image' => $rawPath, 'background-gradient' => null];
+        }
+        return $this->warn("Unsupported background-image: $value");
+    }
+
+    /**
+     * M8-T6 (css-images-3 §3.1 reducido): extrae el cuerpo de `url(...)` -- reutiliza
+     * functionArgs() (ya usado por parseGradientFunction(), garantiza paréntesis balanceados que
+     * coinciden EXACTAMENTE con el final de la cadena) y despoja UNA capa opcional de comillas
+     * simples O dobles que coincidan (comillas son opcionales en la gramática real de url(),
+     * css-values-4 §4.5). `null` si los paréntesis no están balanceados, o si las comillas no
+     * coinciden en ambos lados (p.ej. `url('a.jpg")`, un error de autor) -- el llamador convierte
+     * eso en el warning genérico correspondiente.
+     */
+    private function extractUrlBody(string $trimmed): ?string
+    {
+        $inner = $this->functionArgs($trimmed);
+        if ($inner === null) {
+            return null;
+        }
+        $inner = trim($inner);
+        if ($inner === '') {
+            return null;
+        }
+        $first = $inner[0];
+        $last = $inner[strlen($inner) - 1];
+        $isQuoted = ($first === '"' || $first === '\'') && strlen($inner) >= 2;
+        if ($isQuoted) {
+            if ($last !== $first) {
+                return null;
+            }
+            return substr($inner, 1, -1);
+        }
+        return $inner;
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): `background-size: auto | cover | contain` -- ÚNICOS 3
+     * keywords soportados en este subset de milestone; cualquier otra cosa (una longitud, un
+     * porcentaje, o la forma de dos valores `<size> <size>`) cae al warning genérico y la
+     * declaración se descarta ENTERA (sin clave 'background-size'), resolviendo al default Auto de
+     * ComputedStyle::compute() -- mismo patrón "warning + sin declaración = fallback al initial
+     * value" que el resto de KEYWORD_PROPERTIES de este parser.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundSize(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        return match ($keyword) {
+            'auto' => ['background-size' => 'auto'],
+            'cover' => ['background-size' => 'cover'],
+            'contain' => ['background-size' => 'contain'],
+            default => $this->warn("Unsupported background-size (only auto|cover|contain supported in M8): $value"),
+        };
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): `background-repeat: no-repeat | repeat` -- se
+     * resuelve directamente a bool (true = tiling, false = una sola instancia) porque
+     * ComputedStyle::$backgroundRepeat/BoxFragment::$backgroundRepeat son bool, sin un enum
+     * intermedio (a diferencia de background-size/background-position, que sí necesitan un enum
+     * porque tienen 3+/2+ estados). repeat-x/repeat-y/space/round (y cualquier otro valor) caen al
+     * warning genérico + sin declaración, resolviendo al default false (no-repeat) de
+     * ComputedStyle::compute().
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundRepeat(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        return match ($keyword) {
+            'no-repeat' => ['background-repeat' => false],
+            'repeat' => ['background-repeat' => true],
+            default => $this->warn("Unsupported background-repeat (only no-repeat|repeat supported in M8): $value"),
+        };
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): `background-position: center | top left | left top`
+     * -- 'top left'/'left top' son el MISMO punto (esquina superior-izquierda, el default real del
+     * spec) así que ambas grafías colapsan al mismo raw value canónico ('top left') antes de
+     * llegar a ComputedStyle::compute(), que solo necesita distinguir dos casos (ver
+     * Style\BackgroundPosition). Espacios repetidos se normalizan (`preg_replace('/\s+/', ' ', ...)`)
+     * para que "top   left" o un solo espacio final también matcheen. Cualquier otro valor
+     * (porcentajes, longitudes, un solo keyword lateral como "right", "bottom right", etc.) cae al
+     * warning genérico + sin declaración, resolviendo al default TopLeft de ComputedStyle::compute().
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundPositionValue(string $value): array
+    {
+        $normalized = strtolower(trim((string) preg_replace('/\s+/', ' ', trim($value))));
+        return match ($normalized) {
+            'center' => ['background-position' => 'center'],
+            'top left', 'left top' => ['background-position' => 'top left'],
+            default => $this->warn("Unsupported background-position (only center|top left supported in M8): $value"),
+        };
+    }
+
+    /**
+     * M8-T4 (css-backgrounds-3 §6 reducido): `box-shadow: none | <shadow>#` -- SOLO UNA sombra
+     * (comma-multiple -> primera capa + warning, mismo criterio "primera capa + warning" que
+     * firstBackgroundLayer(); no se reutiliza ese método porque su mensaje/vocabulario es de
+     * "background", no de "box-shadow"). Dentro de esa primera sombra:
+     *   - `inset` -> warning + declaración ENTERA descartada (sin sombra M8, ver RESTRICCIONES
+     *     GLOBALES/brief de esta tarea: "sin inset M8 -> warning").
+     *   - 2 longitudes -> offset-x/offset-y (blur=0 implícito).
+     *   - 3 longitudes -> + blur-radius (debe ser >= 0, igual criterio de signo que border-width).
+     *   - 4 longitudes -> + spread -- warning ("no soportado, ignorado") pero la sombra SÍ se
+     *     construye con las 3 primeras (adjudicación del brief: "spread -> warning + ignorada",
+     *     a diferencia de inset que tira la declaración entera).
+     *   - <1 o >4 longitudes -> warning + declaración descartada.
+     *   - color OPCIONAL, en cualquier posición entre las longitudes (igual que
+     *     expandBorderShorthand()) -- ausente, el raw value lleva el sentinel
+     *     Color::currentColor() (resuelto contra el color computado propio en
+     *     ComputedStyle::compute(), igual patrón que border-*-color/background-color).
+     *
+     * El raw value bajo la clave 'box-shadow' NO es todavía el VO final Css\Value\BoxShadow (ese
+     * exige floats YA resueltos em/rem/calc()-aware, solo posible una vez conocido el font-size
+     * propio del elemento) -- es un array asociativo con las 3 longitudes SIN resolver
+     * (Length|CssLength|CalcExpr, igual tipo que cualquier otra longitud de este parser) + el
+     * Color (concreto o el sentinel currentColor), que ComputedStyle::compute() ensambla en el VO
+     * final exactamente como ya hace con border-*-width/color.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBoxShadowValue(string $value): array
+    {
+        $layers = self::splitTopLevelCommas(trim($value));
+        if (count($layers) > 1) {
+            $this->warnings[] = "Multiple box-shadows not supported (using the first only): $value";
+        }
+        $first = trim($layers[0] ?? '');
+        if ($first === '' || strtolower($first) === 'none') {
+            // 'none' es un reset EXPLÍCITO (igual criterio que background-image: none) -- se
+            // devuelve la clave con valor `null`, no un array vacío, para que SÍ gane el cascade
+            // sobre un box-shadow menos específico ya puesto por una regla anterior.
+            return ['box-shadow' => null];
+        }
+        $tokens = self::splitTopLevel($first);
+        if ($tokens === []) {
+            return $this->warn("Unsupported box-shadow: $value");
+        }
+        $inset = false;
+        $color = null;
+        /** @var list<Length|CssLength|CalcExpr> $lengths */
+        $lengths = [];
+        foreach ($tokens as $token) {
+            if (strtolower($token) === 'inset') {
+                $inset = true;
+                continue;
+            }
+            $tokenColor = Color::fromCss($token);
+            if ($tokenColor !== null) {
+                if ($color !== null) {
+                    return $this->warn("Duplicate box-shadow color component: $value");
+                }
+                $color = $tokenColor;
+                continue;
+            }
+            $tokenLength = $this->parseLength($token);
+            if ($tokenLength === null) {
+                return $this->warn("Unsupported box-shadow component \"$token\": $value");
+            }
+            $lengths[] = $tokenLength;
+        }
+        if ($inset) {
+            return $this->warn("Unsupported box-shadow (inset not supported in M8): $value");
+        }
+        if (count($lengths) < 2 || count($lengths) > 4) {
+            return $this->warn("Unsupported box-shadow (needs offset-x/offset-y, optionally blur-radius/spread): $value");
+        }
+        if (isset($lengths[2]) && self::rawValueOf($lengths[2]) < 0.0) {
+            return $this->warn("Negative blur radius not allowed for box-shadow: $value");
+        }
+        if (isset($lengths[3])) {
+            $this->warnings[] = "box-shadow spread not supported (ignored): $value";
+        }
+        return ['box-shadow' => [
+            'offsetX' => $lengths[0],
+            'offsetY' => $lengths[1],
+            'blur' => $lengths[2] ?? Length::px(0.0),
+            'color' => $color ?? Color::currentColor(),
+        ]];
+    }
+
+    /**
+     * M8-T3: true cuando $trimmed empieza literalmente por "linear-gradient(" o "radial-gradient("
+     * -- a partir de ahí el llamador se COMPROMETE con parseGradientFunction() (éxito -> Gradient,
+     * fallo -> null con el warning específico ya emitido dentro), sin intentar la rama de color/
+     * url() como fallback (evitaría un segundo warning confuso sobre el mismo valor) — mismo
+     * patrón que looksLikeCalc()/tryParseCalc() para calc().
+     */
+    private function isGradientFunction(string $trimmed): bool
+    {
+        $lower = strtolower($trimmed);
+        return str_starts_with($lower, 'linear-gradient(') || str_starts_with($lower, 'radial-gradient(');
+    }
+
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido): dispatcher linear-gradient()/radial-gradient() --
+     * conic-gradient() y cualquier otra función no reconocida caen al `null` genérico del llamador
+     * (tryParseGradientPrefix() ya garantizó el prefijo correcto antes de llegar aquí, así que este
+     * método SIEMPRE reconoce cuál de los dos es).
+     */
+    private function parseGradientFunction(string $value): ?Gradient
+    {
+        $inner = $this->functionArgs($value);
+        if ($inner === null) {
+            return $this->warnGradientNull("Invalid gradient syntax (unbalanced parentheses): $value");
+        }
+        return str_starts_with(strtolower($value), 'linear-gradient(')
+            ? $this->parseLinearGradient($inner, $value)
+            : $this->parseRadialGradient($inner, $value);
+    }
+
+    /** Extrae el contenido entre el primer '(' y su paréntesis de cierre (que debe coincidir
+     *  exactamente con el final de la cadena) -- mismo criterio que tryParseCalc(). */
+    private function functionArgs(string $value): ?string
+    {
+        $open = strpos($value, '(');
+        if ($open === false) {
+            return null;
+        }
+        $close = $this->matchingParen($value, $open);
+        if ($close === null || $close !== strlen($value) - 1) {
+            return null;
+        }
+        return substr($value, $open + 1, $close - $open - 1);
+    }
+
+    /**
+     * css-images-3 §3.4.1: `linear-gradient([<angle> | to <side-or-corner>]? , <color-stop-list>)`.
+     * Sin dirección declarada, el default real del spec es 180deg ("to bottom").
+     */
+    private function parseLinearGradient(string $inner, string $original): ?Gradient
+    {
+        $args = self::splitTopLevelCommas($inner);
+        if (count($args) < 2) {
+            return $this->warnGradientNull("linear-gradient() needs a direction and/or at least 2 color stops: $original");
+        }
+        $direction = $this->parseGradientDirection($args[0]);
+        $stopArgs = $direction !== null ? array_slice($args, 1) : $args;
+        [$angleDeg, $corner] = $direction ?? [180.0, null];
+        if (count($stopArgs) < 2) {
+            return $this->warnGradientNull("linear-gradient() needs at least 2 color stops: $original");
+        }
+        $stops = $this->parseGradientStops($stopArgs, $original);
+        if ($stops === null) {
+            return null;
+        }
+        return new Gradient(GradientKind::Linear, $angleDeg, $stops, $corner);
+    }
+
+    /**
+     * css-images-3 §3.1 reducido: SOLO `radial-gradient([circle at center]?, <color-stop-list>)`
+     * -- cualquier forma más rica (ellipse, tamaños con keyword/longitud, `at <posición>` distinta
+     * de center) cae a un warning + aproximación "circle at center" (primera capa del brief),
+     * nunca rechaza el gradiente entero.
+     */
+    private function parseRadialGradient(string $inner, string $original): ?Gradient
+    {
+        $args = self::splitTopLevelCommas($inner);
+        if ($args === []) {
+            return $this->warnGradientNull("radial-gradient() needs at least 2 color stops: $original");
+        }
+        $first = strtolower(trim($args[0]));
+        $stopArgs = $args;
+        if ($this->looksLikeRadialPrefix($first)) {
+            $stopArgs = array_slice($args, 1);
+            if ($first !== 'circle' && $first !== 'circle at center' && $first !== 'at center') {
+                $this->warnings[] = "Unsupported radial-gradient() shape/position (approximated as circle at center): $original";
+            }
+        }
+        if (count($stopArgs) < 2) {
+            return $this->warnGradientNull("radial-gradient() needs at least 2 color stops: $original");
+        }
+        $stops = $this->parseGradientStops($stopArgs, $original);
+        if ($stops === null) {
+            return null;
+        }
+        return new Gradient(GradientKind::Radial, 0.0, $stops);
+    }
+
+    /**
+     * True cuando el primer argumento de radial-gradient() es una descripción de forma/posición
+     * (en vez de ya ser el primer color-stop) -- cualquier token que no sea un color válido y no
+     * empiece por un color-function reconocible se asume que pertenece a esta categoría (shape/
+     * size/position), consistente con "todo lo que no es un stop es geometría" del spec real.
+     */
+    private function looksLikeRadialPrefix(string $token): bool
+    {
+        if ($token === '') {
+            return false;
+        }
+        // Un primer argumento que YA parsea como color (con o sin posición -- pero un color-stop
+        // NUNCA empieza por 'circle'/'ellipse'/'at', que son las únicas palabras clave de forma/
+        // posición reducidas de este milestone) es casi siempre un stop -- pero un token compuesto
+        // como "red 10%" tampoco es una forma; basta comprobar si CONTIENE alguna de las 3 keywords
+        // reservadas (nunca aparecen en un nombre de color ni en una función rgb()/hsl()).
+        if (str_contains($token, 'circle') || str_contains($token, 'ellipse') || str_starts_with($token, 'at ')) {
+            return true;
+        }
+        // code review Finding 2 (css-images-3 §3.1): las 3 formas anteriores no cubrían el resto
+        // de la gramática real de tamaño/extensión de radial-gradient() -- las 4 extent keywords
+        // (closest-side/closest-corner/farthest-side/farthest-corner), un tamaño explícito de UNA
+        // longitud (`radial-gradient(50px, ...)`, radio circular) o de DOS longitudes/porcentajes
+        // (`radial-gradient(50% 50%, ...)`, ejes de una elipse) -- ninguna de las 3 formas es un
+        // color-stop válido, pero antes de este fix se colaban como el primer argumento de
+        // parseGradientStops(), que Color::fromCss() rechazaba, tirando el gradiente ENTERO con un
+        // warning de "stop color" engañoso en vez de degradar por el fallback circle-at-center de
+        // más abajo (mismo mecanismo que 'ellipse'/'at'). Sin colisión posible con los 148 nombres
+        // de color (Color::KEYWORDS): ninguno contiene un guion, y ninguno parsea como CssLength
+        // (exige un dígito inicial) -- un stop real como "red"/"red 10%" falla el chequeo de
+        // CssLength::fromCss() en su primer token y esta función sigue devolviendo `false` para él,
+        // exactamente como antes (ver "parses a bare radial-gradient(red, blue)... zero warnings").
+        $lower = strtolower(trim($token));
+        if (in_array($lower, ['closest-side', 'closest-corner', 'farthest-side', 'farthest-corner'], true)) {
+            return true;
+        }
+        $sizeParts = self::splitTopLevel($lower);
+        if ($sizeParts === [] || count($sizeParts) > 2) {
+            return false;
+        }
+        foreach ($sizeParts as $sizePart) {
+            if (CssLength::fromCss($sizePart) === null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * css-images-3 §3.4.2: `<angle>` o `to <side-or-corner>` -- ninguno de los dos aparece nunca
+     * como color-stop válido (un color no empieza por un número seguido de "deg" ni por "to "), así
+     * que "no reconocido como dirección" (null) es la señal correcta para que el llamador trate
+     * $args[0] como el primer color-stop en su lugar.
+     *
+     * M8 final-review Finding B: esquinas (`to top right`, etc.) YA NO se resuelven a un ángulo
+     * fijo aquí -- esta capa (Css\) nunca conoce el aspect-ratio de la caja final (deptrac.yaml:
+     * Css no depende de Layout/Pdf), así que el ángulo REAL (que sí depende de ese aspect-ratio,
+     * ver Pdf\PdfCanvas::resolveAngleDeg()) no puede calcularse aquí. En su lugar se devuelve
+     * TANTO el ángulo de caja-cuadrada de siempre (fallback/firma de dedup, ver el docblock de
+     * Css\Value\Gradient::$angleDeg) COMO el Css\Value\GradientCorner correspondiente -- el
+     * llamador (parseLinearGradient()) mete ambos en el Gradient, y PdfCanvas usa $corner (cuando
+     * no es null) para recalcular el ángulo verdadero en tiempo de pintado.
+     *
+     * @return array{0: float, 1: ?GradientCorner}|null
+     */
+    private function parseGradientDirection(string $token): ?array
+    {
+        $t = strtolower(trim($token));
+        if (preg_match('/^(-?\d+(?:\.\d+)?)deg$/', $t, $m) === 1) {
+            return [(float) $m[1], null];
+        }
+        if (!str_starts_with($t, 'to ')) {
+            return null;
+        }
+        $sides = preg_split('/\s+/', trim(substr($t, 3)));
+        if ($sides === false || $sides === [] || count($sides) > 2) {
+            return null;
+        }
+        sort($sides);
+        return match (implode(' ', $sides)) {
+            'top' => [0.0, null],
+            'right' => [90.0, null],
+            'bottom' => [180.0, null],
+            'left' => [270.0, null],
+            'right top' => [45.0, GradientCorner::TopRight],
+            'bottom right' => [135.0, GradientCorner::BottomRight],
+            'bottom left' => [225.0, GradientCorner::BottomLeft],
+            'left top' => [315.0, GradientCorner::TopLeft],
+            default => null,
+        };
+    }
+
+    /**
+     * css-images-3 §3.4.1: cada elemento de $stopArgs es "<color> <percentage>?" (posición
+     * OPCIONAL) -- separados por espacio de nivel superior (splitTopLevel(), reutilizado de los
+     * shorthands existentes: respeta paréntesis, así que "rgba(0,0,0,.5) 50%" trocea en
+     * ["rgba(0,0,0,.5)", "50%"] y no se rompe por las comas internas de rgba()).
+     *
+     * @param list<string> $stopArgs
+     * @return list<GradientStop>|null
+     */
+    private function parseGradientStops(array $stopArgs, string $original): ?array
+    {
+        /** @var list<array{0: Color, 1: ?float}> $rawStops */
+        $rawStops = [];
+        foreach ($stopArgs as $stopArg) {
+            $parts = self::splitTopLevel(trim($stopArg));
+            if (count($parts) !== 1 && count($parts) !== 2) {
+                $this->warnings[] = "Unsupported gradient color-stop \"$stopArg\": $original";
+                return null;
+            }
+            $color = Color::fromCss($parts[0]);
+            if ($color === null) {
+                $this->warnings[] = "Unsupported gradient stop color \"{$parts[0]}\": $original";
+                return null;
+            }
+            $position = null;
+            if (count($parts) === 2) {
+                if (preg_match('/^(-?\d+(?:\.\d+)?)%$/', $parts[1], $m) !== 1) {
+                    $this->warnings[] = "Unsupported gradient stop position \"{$parts[1]}\": $original";
+                    return null;
+                }
+                $position = max(0.0, min(100.0, (float) $m[1]));
+            }
+            // M8-T3 (RESTRICCIONES GLOBALES M8, shadings con alpha -> M9): un stop con alpha
+            // declarado (rgba()/hsla() con canal alpha<1) no puede representarse en un
+            // /FunctionType 2/3 de PDF (RGB puro, sin canal alfa) sin un soft mask -- se avisa y
+            // se pinta OPACO (mismo color RGB, alpha descartado) en vez de fallar el gradiente
+            // entero.
+            if ($color->alpha !== null && $color->alpha < 1.0) {
+                $this->warnings[] = "Gradient color-stop alpha not supported (rendered opaque; soft masks are a later milestone): $stopArg";
+                $color = new Color($color->r, $color->g, $color->b);
+            }
+            $rawStops[] = [$color, $position];
+        }
+        return self::distributeStopPositions($rawStops);
+    }
+
+    /**
+     * css-images-3 §3.4.1 ("Determining the actual position of a color stop"), reducido: rellena
+     * las posiciones ausentes --
+     *   1. el PRIMER stop sin posición colapsa a 0%, el ÚLTIMO sin posición a 100% (endpoints
+     *      implícitos del brief).
+     *   2. cualquier posición EXPLÍCITA menor que la máxima ya vista se sube hasta esa máxima
+     *      (monotonía del spec: una lista de posiciones nunca puede "retroceder").
+     *   3. cada tramo de stops SIN posición entre dos stops YA resueltos se reparte uniformemente
+     *      entre ambos (regla "simple" del brief -- 3 stops sin posición → 0/50/100).
+     *
+     * @param list<array{0: Color, 1: ?float}> $rawStops
+     * @return list<GradientStop>
+     */
+    private static function distributeStopPositions(array $rawStops): array
+    {
+        $n = count($rawStops);
+        $positions = array_map(static fn(array $s): ?float => $s[1], $rawStops);
+        if ($positions[0] === null) {
+            $positions[0] = 0.0;
+        }
+        if ($positions[$n - 1] === null) {
+            $positions[$n - 1] = 100.0;
+        }
+        $runningMax = $positions[0];
+        for ($i = 1; $i < $n; $i++) {
+            if ($positions[$i] !== null) {
+                if ($positions[$i] < $runningMax) {
+                    $positions[$i] = $runningMax;
+                }
+                $runningMax = $positions[$i];
+            }
+        }
+        $i = 0;
+        while ($i < $n) {
+            if ($positions[$i] !== null) {
+                $i++;
+                continue;
+            }
+            $runStart = $i - 1;
+            $j = $i;
+            while ($positions[$j] === null) {
+                $j++;
+            }
+            $startPos = $positions[$runStart];
+            $endPos = $positions[$j];
+            $steps = $j - $runStart;
+            for ($k = $runStart + 1; $k < $j; $k++) {
+                $positions[$k] = $startPos + ($endPos - $startPos) * ($k - $runStart) / $steps;
+            }
+            $i = $j;
+        }
+        $stops = [];
+        foreach ($rawStops as $index => $rawStop) {
+            $stops[] = new GradientStop($rawStop[0], $positions[$index]);
+        }
+        return $stops;
+    }
+
+    /** @return list<string> */
+    private static function splitTopLevelCommas(string $value): array
+    {
+        $tokens = [];
+        $current = '';
+        $depth = 0;
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $value[$i];
+            if ($char === '(') {
+                $depth++;
+                $current .= $char;
+                continue;
+            }
+            if ($char === ')') {
+                $depth--;
+                $current .= $char;
+                continue;
+            }
+            if ($depth === 0 && $char === ',') {
+                $tokens[] = trim($current);
+                $current = '';
+                continue;
+            }
+            $current .= $char;
+        }
+        $tokens[] = trim($current);
+        return $tokens;
+    }
+
+    /** warn() devuelve `array<string, mixed>` (el contrato de parse()) -- los helpers de gradiente
+     *  necesitan devolver `null` en su lugar (el tipo de retorno ?Gradient de sus llamadores, que
+     *  aceptan perfectamente este `null` literal), así que no pueden reutilizar warn() directamente. */
+    private function warnGradientNull(string $message): null
+    {
+        $this->warnings[] = $message;
+        return null;
     }
 
     /**
@@ -806,6 +1605,33 @@ final class DeclarationParser
             'underline' => ['text-decoration' => true],
             default => $this->warn("Unsupported text-decoration: $value"),
         };
+    }
+
+    /**
+     * M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing -- 'normal' (initial value real,
+     * AMBAS heredan) produce un `null` EXPLÍCITO (mismo patrón que parseLineHeight('normal') justo
+     * arriba), no un array vacío -- ComputedStyle::compute() necesita distinguir "declarado normal"
+     * (resetea a 0.0, corta cualquier herencia de un ancestro) de "no declarado en absoluto"
+     * (hereda el valor computado del padre tal cual); un array vacío sería indistinguible de este
+     * segundo caso (ver el `array_key_exists` de compute()). Cualquier <length> (px/em/rem, mismo
+     * parseLength() que height/border-width/etc.) es válida, INCLUSO negativa -- a diferencia de
+     * casi cualquier otra longitud de este parser, letter-spacing/word-spacing SÍ admiten valores
+     * negativos (CSS 2.2 §16.4/§16.3.1): ninguna de las 2 figura en NON_NEGATIVE_PROPERTIES, así
+     * que no hay chequeo de signo aquí. % no tiene interpretación (fuera de alcance M8, reducido a
+     * longitud pura) -- cae al warning genérico ya emitido por parseLength()/CssLength::fromCss().
+     *
+     * @return array<string, mixed>
+     */
+    private function parseSpacing(string $property, string $value): array
+    {
+        if (strtolower(trim($value)) === 'normal') {
+            return [$property => null];
+        }
+        $length = $this->parseLength($value);
+        if ($length === null) {
+            return $this->warn("Unsupported length for $property: $value");
+        }
+        return [$property => $length];
     }
 
     /**

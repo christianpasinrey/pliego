@@ -42,15 +42,36 @@ final class StyleResolver
      * $declarationParser arriba): necesita reescribirse a null en cada resolve() (ver ahí) para que
      * una segunda llamada a resolve() en la misma instancia (con las mismas $sources, pero
      * potencialmente invocada desde un test o Engine que reutiliza el resolver) no herede un
-     * $rulesCache "atascado" de forma sorprendente — aunque en la práctica el resultado sería
+     * $rulesByTag "atascado" de forma sorprendente — aunque en la práctica el resultado sería
      * idéntico (las fuentes no cambian), resetear el cache al empezar resolve() documenta la
      * invariante "el cache vive dentro del ámbito de UN resolve()" en vez de "vive para siempre en
      * la instancia", evitando que un futuro cambio (p.ej. StyleSource mutable) reintroduzca un bug
      * de cache obsoleto sin que nadie lo note aquí.
      *
-     * @var list<StyleRule>|null
+     * M8-T1 housekeeping (M7 final-review finding, perf): memoizar la CONCATENACIÓN (M7-T1, arriba)
+     * ya no basta una vez que el propio matches() se convierte en el cuello de botella — la review
+     * de M7 midió ~24 reglas candidatas probadas POR ELEMENTO en un documento con estilos densos
+     * (la hoja UA completa más las reglas de autor), un +35% de tiempo sobre M6. La MAYORÍA de esas
+     * candidatas son descartables ANTES de que matches() recorra su cadena right-to-left: una regla
+     * cuyo compuesto MÁS A LA DERECHA tiene un type concreto (`p`, `li`, `td`, ...) SOLO puede
+     * matchear un elemento de ESE tag exacto (selectors-3 §8: el compuesto derecho es SIEMPRE el
+     * primero que matches() prueba, directamente contra el elemento — ver ComplexSelector::
+     * rightmostType()/matches()). bucketedRules() sustituye la concatenación plana por un
+     * particionado en tres grupos: $byTag[$tag] (reglas cuyo compuesto derecho exige ESE tag exacto)
+     * y $any (el resto: universal, solo-clase, solo-id, solo-atributo, `:not()` solo — sin type
+     * alguno en el compuesto derecho, pueden matchear CUALQUIER elemento, así que se siguen probando
+     * contra todos, exactamente como antes). matchedDeclarationsAndCustomProperties() concatena
+     * $byTag[tagDelElemento] + $any como candidatas y sigue llamando a matches() sobre CADA una
+     * (sin cambios ahí) — este bucketing es un PRE-FILTRO puro: solo puede ENCOGER el conjunto de
+     * candidatas frente al de antes, nunca cambiarlo, porque "tag equivocado" es una condición
+     * necesaria que matches() también habría rechazado. El orden de concatenación de las
+     * candidatas es irrelevante para el resultado: el usort() de más abajo reordena TODO por
+     * (important, origen, especificidad, StyleRule::$order) — el mismo $order de siempre, fijado en
+     * StylesheetParser en el momento del parseo, independiente de en qué bucket cayó la regla aquí.
+     *
+     * @var array{byTag: array<string, list<StyleRule>>, any: list<StyleRule>}|null
      */
-    private ?array $rulesCache = null;
+    private ?array $rulesByTag = null;
 
     /** css-values-3 §5.2: font-size initial value — base de rem hasta que se resuelva el
      * font-size real del documentElement (ver resolveRoot()). */
@@ -58,9 +79,9 @@ final class StyleResolver
 
     public function resolve(\Dom\HTMLDocument $document): StyleMap
     {
-        // M7-T1: ver docblock de $rulesCache — recalculado a demanda por allRules() en su primer
-        // uso de ESTE resolve(), nunca reutilizado de una llamada anterior.
-        $this->rulesCache = null;
+        // M7-T1 / M8-T1: ver docblock de $rulesByTag — recalculado a demanda por bucketedRules()
+        // en su primer uso de ESTE resolve(), nunca reutilizado de una llamada anterior.
+        $this->rulesByTag = null;
         $map = new StyleMap();
         $root = $document->documentElement;
         if ($root !== null) {
@@ -126,8 +147,16 @@ final class StyleResolver
      */
     private function matchedDeclarationsAndCustomProperties(\Dom\Element $element, array $parentCustomProperties): array
     {
+        // M8-T1 (perf): candidatas = solo las reglas cuyo compuesto derecho podría matchear el tag
+        // de ESTE elemento (bucketedRules()['byTag'][tag]) + las que no exigen ningún tag concreto
+        // (['any']) — ver el docblock de $rulesByTag para la justificación completa. matches() se
+        // sigue llamando sobre CADA candidata exactamente igual que antes (esto es un pre-filtro,
+        // no un atajo que se salte la verificación real de la cadena completa del selector).
+        $buckets = $this->bucketedRules();
+        $tag = strtolower($element->tagName);
+        $candidates = [...($buckets['byTag'][$tag] ?? []), ...$buckets['any']];
         $matching = array_values(array_filter(
-            $this->allRules(),
+            $candidates,
             static fn(StyleRule $rule): bool => $rule->selector->matches($element),
         ));
         // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2) + M7-T2 (§6.4.1, origen): el orden de
@@ -239,20 +268,36 @@ final class StyleResolver
      * wiring propio para tenerla, igual que un navegador real siempre carga su hoja UA sin que la
      * página la pida. El orden de concatenación aquí es cosmético (UA primero, luego $sources en
      * orden): el ganador real entre UA y autor lo decide el comparador de
-     * matchedDeclarationsAndCustomProperties() por ORIGEN, no por esta posición en el array.
+     * matchedDeclarationsAndCustomProperties() por ORIGEN, no por esta posición en el array —
+     * tampoco importa aquí para el particionado por tag de más abajo, ver su docblock.
      *
-     * @return list<StyleRule>
+     * M8-T1 (perf): sustituye la lista plana que producía la antigua allRules() por un particionado
+     * en dos grupos — ver el docblock de $rulesByTag para la justificación. Cada regla cae en
+     * EXACTAMENTE un bucket (nunca los dos): `rightmostType() !== null` → $byTag[ese tag], si no →
+     * $any. Ninguna regla se duplica ni se pierde frente al conjunto que producía allRules().
+     *
+     * @return array{byTag: array<string, list<StyleRule>>, any: list<StyleRule>}
      */
-    private function allRules(): array
+    private function bucketedRules(): array
     {
-        if ($this->rulesCache !== null) {
-            return $this->rulesCache;
+        if ($this->rulesByTag !== null) {
+            return $this->rulesByTag;
         }
         $rules = UserAgentStylesheet::rules();
         foreach ($this->sources as $source) {
             $rules = [...$rules, ...$source->rules()];
         }
-        return $this->rulesCache = $rules;
+        $byTag = [];
+        $any = [];
+        foreach ($rules as $rule) {
+            $type = $rule->selector->rightmostType();
+            if ($type !== null) {
+                $byTag[$type][] = $rule;
+            } else {
+                $any[] = $rule;
+            }
+        }
+        return $this->rulesByTag = ['byTag' => $byTag, 'any' => $any];
     }
 
     /** UA (userAgent=true) siempre por debajo del autor (false) — ver comparador de arriba. */

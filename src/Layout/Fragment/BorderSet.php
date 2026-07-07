@@ -28,11 +28,17 @@ final readonly class BorderSet
         return new self($none, $none, $none, $none);
     }
 
-    /** true si al menos un lado tiene anchura > 0 y estilo Solid (css-backgrounds-3: visible border). */
+    /**
+     * true si al menos un lado tiene anchura > 0 y estilo != None (css-backgrounds-3: visible
+     * border). M8-T4: `!== None` en vez de `=== Solid` -- Dashed/Dotted también son estilos
+     * PINTABLES (con su propio camino de trazo en Paint\Painter, ver su docblock), no solo Solid;
+     * observacionalmente un no-op para M2-M7 (Solid/None eran los únicos dos valores posibles
+     * hasta esta tarea).
+     */
     public function isVisible(): bool
     {
         foreach ([$this->top, $this->right, $this->bottom, $this->left] as $side) {
-            if ($side->widthPx > 0.0 && $side->style === BorderStyle::Solid) {
+            if ($side->widthPx > 0.0 && $side->style !== BorderStyle::None) {
                 return true;
             }
         }

@@ -191,3 +191,18 @@ it('golden: flex-wrap -- 3 fixed-width/height images wrap into 2 lines inside a 
 
     assertMatchesGolden('flex-wrap', new FragmentDumper()->dump($fragment));
 });
+
+it('golden: border-radius -- a uniform-radius card and a per-corner card (M8-T2)', function () {
+    // Two boxes: one with a single-value shorthand (all 4 corners equal, no clamp) and one with
+    // the 4-value clockwise shorthand (tl/tr/br/bl all distinct) plus box-sizing:border-box so
+    // the declared width IS the border-box width used for the % adjudication/clamp math.
+    $html = '<body>'
+        . '<div class="uniform">a</div>'
+        . '<div class="per-corner">b</div>'
+        . '</body>';
+    $css = '.uniform { width: 100px; box-sizing: border-box; border: 4px solid #000000; border-radius: 10px }'
+        . '.per-corner { width: 100px; box-sizing: border-box; border-radius: 1px 2px 3px 4px }';
+    $fragment = goldenLayoutHtml($html, $css, 300.0);
+
+    assertMatchesGolden('border-radius', new FragmentDumper()->dump($fragment));
+});

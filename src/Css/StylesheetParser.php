@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pliego\Css;
 
+use Pliego\Css\Value\FontFaceRule;
 use Pliego\Css\Value\Length;
 use Sabberworm\CSS\Parser as SabberwormParser;
 
@@ -14,6 +15,11 @@ use Sabberworm\CSS\Parser as SabberwormParser;
  * segundo margin-box (p.ej. `@bottom-right`) aparece como AtRuleSet HERMANO de nivel superior en
  * vez de anidado. Por eso @page se extrae con un tokenizer-lite de brace-matching ANTES de pasar
  * el resto de la hoja a sabberworm (que sigue gestionando reglas normales sin problema).
+ *
+ * M8-T7: @font-face se extrae con el MISMO tokenizer-lite (misma justificación — un at-rule de
+ * nivel superior con su propio cuerpo de declaraciones, sin selectores, que sabberworm no tiene
+ * por qué tratar mejor que @page) vía extractAtRuleBlocks(), generalizado a partir de
+ * extractAtPageBlocks() para que ambos at-rules compartan el brace-matching en vez de duplicarlo.
  */
 final class StylesheetParser
 {
@@ -26,6 +32,18 @@ final class StylesheetParser
 
     public function parse(string $css): ParseResult
     {
+        $css = $this->stripComments($css);
+        [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
+        $fontFaceRules = [];
+        $fontFaceWarnings = [];
+        foreach ($fontFaceBodies as $body) {
+            [$fontFaceRule, $warns] = $this->parseFontFaceBody($body);
+            $fontFaceWarnings = [...$fontFaceWarnings, ...$warns];
+            if ($fontFaceRule !== null) {
+                $fontFaceRules[] = $fontFaceRule;
+            }
+        }
+
         [$css, $pageBodies] = $this->extractAtPageBlocks($css);
         $pageRule = null;
         $pageWarnings = [];
@@ -42,7 +60,7 @@ final class StylesheetParser
         $selectorWarnings = new WarningCollector();
         $selectorParser = new SelectorParser($selectorWarnings);
         $rules = [];
-        $warnings = $pageWarnings;
+        $warnings = [...$fontFaceWarnings, ...$pageWarnings];
         $order = 0;
         foreach ($document->getAllDeclarationBlocks() as $block) {
             // M6 final-review fix (Finding 1, CSS 2.2 §6.4.2): un bloque puede mezclar
@@ -76,7 +94,7 @@ final class StylesheetParser
                 }
             }
         }
-        return new ParseResult($rules, $warnings, $pageRule);
+        return new ParseResult($rules, $warnings, $pageRule, $fontFaceRules);
     }
 
     /**
@@ -118,16 +136,94 @@ final class StylesheetParser
     }
 
     /**
-     * Extrae todos los bloques @page de nivel superior (brace-matching manual, ver docblock de
-     * clase) y los sustituye por un espacio en el CSS que se le pasa a sabberworm.
+     * Extrae todos los bloques @page de nivel superior — delegado en extractAtRuleBlocks() (M8-T7,
+     * generalizado a partir de esta misma implementación para que @font-face la comparta).
      *
      * @return array{0: string, 1: list<string>} [cssSinPage, bodies]
      */
     private function extractAtPageBlocks(string $css): array
     {
+        return $this->extractAtRuleBlocks($css, 'page');
+    }
+
+    /**
+     * M8 final-review Finding D (bundled Minor 4): strips CSS comments from the ENTIRE stylesheet
+     * BEFORE either at-rule extraction (extractAtRuleBlocks(), see its own docblock) runs. Bug
+     * this closes: extractAtRuleBlocks()'s regex used to scan the RAW css, so a comment merely
+     * MENTIONING "@font-face"/"@page" (a comment whose text contains the literal substring
+     * "@font-face", followed by an unrelated rule) matched that literal text inside the comment --
+     * its `[^{]*` then greedily ate everything up to the NEXT real opening brace in the document
+     * (the FOLLOWING rule's own `{`), so the brace-matcher captured that rule's declarations as if
+     * they were the @font-face BODY, deleted the whole rule from the css handed to sabberworm, and
+     * (that "body" having no family/src) dropped it with bogus descriptor warnings. Same latent
+     * hijack existed for @page.
+     *
+     * A plain regex strip is UNSAFE here: a `url()`/quoted string can legitimately contain a
+     * comment-OPEN-like substring with no matching comment-CLOSE nearby (see the "literal
+     * slash-star inside url()" test) -- a naive stripper would treat that as a comment start and
+     * eat everything up to some LATER, unrelated comment-close token elsewhere in the sheet. This
+     * is instead a conservative character-by-character state machine: single/double-quoted
+     * strings are copied VERBATIM (a comment-like substring inside one never triggers comment
+     * mode); outside any string, a comment-open token enters comment mode until the matching
+     * comment-close token (or end of string, if unterminated -- treated as "rest of the sheet is a
+     * comment", same as a real CSS tokenizer). Each stripped comment is replaced by a single space
+     * (never simply deleted), so two tokens that only had a comment between them don't
+     * accidentally fuse into one. No backslash-escape handling inside strings -- out of scope for
+     * this conservative fix, same "reduced" spirit as SelectorParser/DeclarationParser, neither of
+     * which handles CSS escapes either.
+     */
+    private function stripComments(string $css): string
+    {
+        $result = '';
+        $length = strlen($css);
+        $quote = null;
+        $i = 0;
+        while ($i < $length) {
+            $char = $css[$i];
+            if ($quote !== null) {
+                $result .= $char;
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                $i++;
+                continue;
+            }
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                $result .= $char;
+                $i++;
+                continue;
+            }
+            if ($char === '/' && $i + 1 < $length && $css[$i + 1] === '*') {
+                $close = strpos($css, '*/', $i + 2);
+                $i = $close === false ? $length : $close + 2;
+                $result .= ' ';
+                continue;
+            }
+            $result .= $char;
+            $i++;
+        }
+        return $result;
+    }
+
+    /**
+     * M8-T7: generalización de la extracción de @page (brace-matching manual, ver docblock de
+     * clase) a cualquier at-rule de nivel superior identificado por nombre — @font-face es el
+     * segundo consumidor. Sustituye cada bloque encontrado por un espacio en el CSS que se le
+     * pasa a sabberworm, exactamente igual que antes de esta tarea para @page.
+     *
+     * M8 final-review Finding D: $css llega aquí YA sin comentarios (stripComments(), llamado al
+     * principio de parse() antes de la primera invocación de este método) -- este método en sí no
+     * necesita saber nada de comentarios, el fix vive enteramente aguas arriba.
+     *
+     * @return array{0: string, 1: list<string>} [cssSinElAtRule, bodies]
+     */
+    private function extractAtRuleBlocks(string $css, string $atRuleName): array
+    {
         $bodies = [];
         $offset = 0;
-        while (preg_match('/@page\b[^{]*\{/i', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
+        $pattern = '/@' . preg_quote($atRuleName, '/') . '\b[^{]*\{/i';
+        while (preg_match($pattern, $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
             $matchStart = (int) $m[0][1];
             $openBrace = $matchStart + strlen((string) $m[0][0]) - 1;
             $closeBrace = $this->findMatchingBrace($css, $openBrace);
@@ -139,6 +235,161 @@ final class StylesheetParser
             $offset = $matchStart;
         }
         return [$css, $bodies];
+    }
+
+    /**
+     * css-fonts-4 §4 reducido: family (comillas despojadas) + src (fallback list separada por
+     * comas, ver parseFontFaceSrc() — solo TTF/OTF local en M8) + font-weight (400/700/normal/
+     * bold/cualquier numérico 100-900; un rango "100 900" toma el PRIMER valor + warning, ver
+     * parseFontFaceWeight()) + font-style (normal/italic, ver parseFontFaceStyle()). Cualquier
+     * otro descriptor (unicode-range, font-stretch, font-display, ...) se ignora con warning —
+     * nunca aborta la regla completa. Sin family, o sin un src usable, SÍ descarta la regla
+     * entera (con warning): no tiene sentido registrar una cara sin nombre o sin fichero.
+     *
+     * @return array{0: ?FontFaceRule, 1: list<string>}
+     */
+    private function parseFontFaceBody(string $body): array
+    {
+        $warnings = [];
+        $family = null;
+        $srcValue = null;
+        $weight = 400;
+        $italic = false;
+        foreach (array_filter(array_map('trim', explode(';', $body))) as $declaration) {
+            if (!str_contains($declaration, ':')) {
+                $warnings[] = "Unsupported @font-face descriptor: $declaration";
+                continue;
+            }
+            [$name, $value] = array_map('trim', explode(':', $declaration, 2));
+            $name = strtolower($name);
+            if ($name === 'font-family') {
+                $family = trim($value, "\"' \t\n\r\0\x0B");
+                continue;
+            }
+            if ($name === 'src') {
+                $srcValue = $value;
+                continue;
+            }
+            if ($name === 'font-weight') {
+                [$weight, $weightWarning] = $this->parseFontFaceWeight($value);
+                if ($weightWarning !== null) {
+                    $warnings[] = $weightWarning;
+                }
+                continue;
+            }
+            if ($name === 'font-style') {
+                [$italic, $styleWarning] = $this->parseFontFaceStyle($value);
+                if ($styleWarning !== null) {
+                    $warnings[] = $styleWarning;
+                }
+                continue;
+            }
+            if ($name === 'unicode-range') {
+                $warnings[] = "@font-face unicode-range is not supported; the whole font is loaded: $value";
+                continue;
+            }
+            $warnings[] = "Unsupported @font-face descriptor: $name";
+        }
+
+        if ($family === null || $family === '') {
+            $warnings[] = 'Missing font-family in @font-face rule; rule dropped';
+            return [null, $warnings];
+        }
+        if ($srcValue === null) {
+            $warnings[] = "Missing src in @font-face rule for family '$family'; rule dropped";
+            return [null, $warnings];
+        }
+
+        [$path, $srcWarnings] = $this->parseFontFaceSrc($srcValue);
+        $warnings = [...$warnings, ...$srcWarnings];
+        if ($path === null) {
+            $warnings[] = "No usable local TTF/OTF src for @font-face family '$family'; rule dropped";
+            return [null, $warnings];
+        }
+
+        return [new FontFaceRule($family, $path, $weight, $italic), $warnings];
+    }
+
+    /**
+     * css-fonts-4 §4 reducido: recorre la lista de `src` separada por comas EN ORDEN (fallback
+     * list de CSS), devolviendo la ruta de la PRIMERA entrada usable — un url() local .ttf/.otf.
+     * woff/woff2 y remotos (http/https) generan warning y se SALTAN (se prueba la siguiente
+     * entrada); local() también se salta con warning (M8 no tiene acceso a fuentes de sistema).
+     * Si ninguna entrada es usable, devuelve null (el llamador descarta la regla entera).
+     *
+     * @return array{0: ?string, 1: list<string>}
+     */
+    private function parseFontFaceSrc(string $value): array
+    {
+        $warnings = [];
+        foreach (array_map('trim', explode(',', $value)) as $entry) {
+            if ($entry === '') {
+                continue;
+            }
+            if (preg_match('/^local\(/i', $entry) === 1) {
+                $warnings[] = "@font-face local() is not supported (no system font access): $entry";
+                continue;
+            }
+            if (preg_match('/^url\(\s*([\'"]?)(.*?)\1\s*\)/i', $entry, $m) !== 1) {
+                $warnings[] = "Unsupported @font-face src entry: $entry";
+                continue;
+            }
+            $path = $m[2];
+            if (preg_match('#^https?://#i', $path) === 1) {
+                $warnings[] = "@font-face remote src is not supported: $path";
+                continue;
+            }
+            $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if ($extension === 'ttf' || $extension === 'otf') {
+                return [$path, $warnings];
+            }
+            if ($extension === 'woff' || $extension === 'woff2') {
+                $warnings[] = "@font-face woff/woff2 is not supported; convert to ttf/otf: $path";
+                continue;
+            }
+            $warnings[] = "Unsupported @font-face src format: $path";
+        }
+        return [null, $warnings];
+    }
+
+    /**
+     * css-fonts-4 §4 reducido: 'normal'/'bold' + cualquier numérico 100-900. Un RANGO de dos
+     * valores ("100 900", variable font descriptor) no tiene sentido para un TTF/OTF estático de
+     * cara única (M8 no soporta variable fonts) — se colapsa al PRIMER valor, con warning.
+     *
+     * @return array{0: int, 1: ?string}
+     */
+    private function parseFontFaceWeight(string $value): array
+    {
+        $trimmed = trim($value);
+        $lower = strtolower($trimmed);
+        if ($lower === 'normal') {
+            return [400, null];
+        }
+        if ($lower === 'bold') {
+            return [700, null];
+        }
+        $parts = preg_split('/\s+/', $trimmed) ?: [];
+        if (count($parts) === 2 && ctype_digit($parts[0]) && ctype_digit($parts[1])) {
+            return [(int) $parts[0], "@font-face font-weight range \"$trimmed\" is not supported; using the first value: {$parts[0]}"];
+        }
+        if (count($parts) === 1 && ctype_digit($parts[0])) {
+            return [(int) $parts[0], null];
+        }
+        return [400, "Unsupported @font-face font-weight: $value"];
+    }
+
+    /** @return array{0: bool, 1: ?string} */
+    private function parseFontFaceStyle(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        if ($keyword === 'normal') {
+            return [false, null];
+        }
+        if ($keyword === 'italic') {
+            return [true, null];
+        }
+        return [false, "Unsupported @font-face font-style: $value"];
     }
 
     /**

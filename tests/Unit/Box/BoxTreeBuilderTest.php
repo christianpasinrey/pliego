@@ -805,6 +805,91 @@ it('Finding D: a plain inline element with neither float nor position emits neit
     expect($relevant)->toBeEmpty();
 });
 
+// --- M8-T1 housekeeping (M7 final-review Finding D, remaining gap): float/position:absolute on a
+// display:inline-block element warn (no behavioral change) -------------------------------------
+
+it('Finding D: float on a display:inline-block element (direct child) warns once and still builds a normal BlockBox atomic token', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <a class="btn">middle</a> after</p></body>',
+        __DIR__,
+        '.btn { display: inline-block; float: left }',
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    // No behavioral change: the inline-block still becomes a real BlockBox token in the same
+    // place as before (InlineFlowContext::layoutInlineBlockAtomic() never looks at $style->float).
+    $btn = null;
+    foreach ($p->children as $child) {
+        if ($child instanceof BlockBox) {
+            $btn = $child;
+        }
+    }
+    expect($btn)->not->toBeNull();
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on a display:inline-block element')));
+    expect($floatWarnings)->toHaveCount(1);
+});
+
+it('Finding D: float on a NESTED display:inline-block element (descendant, via collectInline()) warns once too', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><span>outer <a class="btn">inner</a></span></p></body>',
+        __DIR__,
+        '.btn { display: inline-block; float: left }',
+    );
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on a display:inline-block element')));
+    expect($floatWarnings)->toHaveCount(1);
+});
+
+it('Finding D: position:absolute on a display:inline-block element warns once and still lays out as a normal atomic token', function () {
+    [$root, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <a class="btn">middle</a> after</p></body>',
+        __DIR__,
+        '.btn { display: inline-block; position: absolute; top: 10px }',
+    );
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $btn = null;
+    foreach ($p->children as $child) {
+        if ($child instanceof BlockBox) {
+            $btn = $child;
+        }
+    }
+    expect($btn)->not->toBeNull();
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:absolute on a display:inline-block element')));
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: position:relative on a display:inline-block element does NOT warn (it already works, applied by BlockFlowContext itself)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <a class="btn">middle</a> after</p></body>',
+        __DIR__,
+        '.btn { display: inline-block; position: relative; top: 10px }',
+    );
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'display:inline-block element'));
+    expect($relevant)->toBeEmpty();
+});
+
+it('Finding D: float/position:absolute on a display:inline-block element only warn ONCE each even with multiple occurrences (addWarningOnce dedup)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p><a class="a">one</a> <a class="b">two</a> <a class="c">three</a></p></body>',
+        __DIR__,
+        '.a { display: inline-block; float: left } .b { display: inline-block; float: right } .c { display: inline-block; position: absolute; top: 5px }',
+    );
+    $floatWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'float on a display:inline-block element')));
+    $posWarnings = array_values(array_filter($warnings, static fn(string $w): bool => str_contains($w, 'position:absolute on a display:inline-block element')));
+    expect($floatWarnings)->toHaveCount(1);
+    expect($posWarnings)->toHaveCount(1);
+});
+
+it('Finding D: a plain display:inline-block with neither float nor position emits neither warning (no false positive)', function () {
+    [, $warnings] = buildTreeCollectingWarnings(
+        '<body><p>before <a class="btn">middle</a> after</p></body>',
+        __DIR__,
+        '.btn { display: inline-block }',
+    );
+    $relevant = array_filter($warnings, static fn(string $w): bool => str_contains($w, 'display:inline-block element'));
+    expect($relevant)->toBeEmpty();
+});
+
 // --- M7-T3: <li> display:list-item + <ol start> ------------------------------------------------
 
 it('gives <li> a Display::ListItem BlockBox via the UA stylesheet default', function () {
@@ -842,4 +927,79 @@ it('treats a non-numeric start attribute on <ol> as absent (null)', function () 
     $ol = $root->children[0];
     assert($ol instanceof BlockBox);
     expect($ol->listStart)->toBeNull();
+});
+
+// --- M8-T5 (css-text-3 §8 reducido): text-transform applied to run TEXT before measurement -----
+
+it('leaves text untouched with text-transform: none (the default)', function () {
+    $root = buildTree('<body><p>Hola mundo</p></body>');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hola mundo');
+});
+
+it('uppercases run text with text-transform: uppercase, preserving accented characters (á -> Á)', function () {
+    $root = buildTree('<body><p>café ñoño</p></body>', 'p { text-transform: uppercase }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('CAFÉ ÑOÑO');
+});
+
+it('lowercases run text with text-transform: lowercase, preserving accented characters', function () {
+    $root = buildTree('<body><p>CAFÉ ÑOÑO</p></body>', 'p { text-transform: lowercase }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('café ñoño');
+});
+
+it('capitalizes the first letter of each word with text-transform: capitalize (space/tab boundaries)', function () {
+    $root = buildTree('<body><p>hello world</p></body>', 'p { text-transform: capitalize }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hello World');
+});
+
+it('does NOT treat a hyphen as a word boundary for capitalize (documented divergence from some browsers)', function () {
+    $root = buildTree('<body><p>hello-world</p></body>', 'p { text-transform: capitalize }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hello-world');
+});
+
+it('capitalizes an accented first letter (á -> Á)', function () {
+    $root = buildTree('<body><p>árbol alto</p></body>', 'p { text-transform: capitalize }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Árbol Alto');
+});
+
+it('inherits text-transform from an ancestor onto a nested inline run', function () {
+    $root = buildTree('<body><p>Hola <strong>mundo</strong></p></body>', 'p { text-transform: uppercase }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    [$first, $second] = $p->children;
+    assert($first instanceof TextRun && $second instanceof TextRun);
+    expect($first->text)->toBe('HOLA ');
+    expect($second->text)->toBe('MUNDO');
+});
+
+it('applies text-transform to each line of a white-space:pre run independently', function () {
+    $root = buildTree("<body><pre>hello world\nsecond line</pre></body>", 'pre { text-transform: capitalize }');
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    $firstLine = $pre->children[0];
+    assert($firstLine instanceof TextRun);
+    expect($firstLine->text)->toBe('Hello World');
 });

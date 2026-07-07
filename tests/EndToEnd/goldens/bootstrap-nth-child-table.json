@@ -9,6 +9,7 @@
     "background": null,
     "borders": null,
     "atomic": false,
+    "clipsChildren": false,
     "children": [
         {
             "type": "box",
@@ -21,6 +22,7 @@
             "background": null,
             "borders": null,
             "atomic": false,
+            "clipsChildren": false,
             "children": [
                 {
                     "type": "box",
@@ -33,6 +35,7 @@
                     "background": "#000000",
                     "borders": null,
                     "atomic": true,
+                    "clipsChildren": false,
                     "children": [
                         {
                             "type": "box",
@@ -45,6 +48,7 @@
                             "background": null,
                             "borders": null,
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
@@ -74,6 +78,7 @@
                     "background": null,
                     "borders": null,
                     "atomic": true,
+                    "clipsChildren": false,
                     "children": [
                         {
                             "type": "box",
@@ -86,6 +91,7 @@
                             "background": null,
                             "borders": null,
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
@@ -115,6 +121,7 @@
                     "background": "#000000",
                     "borders": null,
                     "atomic": true,
+                    "clipsChildren": false,
                     "children": [
                         {
                             "type": "box",
@@ -127,6 +134,7 @@
                             "background": null,
                             "borders": null,
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
@@ -156,6 +164,7 @@
                     "background": null,
                     "borders": null,
                     "atomic": true,
+                    "clipsChildren": false,
                     "children": [
                         {
                             "type": "box",
@@ -168,6 +177,7 @@
                             "background": null,
                             "borders": null,
                             "atomic": false,
+                            "clipsChildren": false,
                             "children": [
                                 {
                                     "type": "text",
