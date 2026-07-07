@@ -72,4 +72,43 @@ final readonly class BorderRadius
 
         return new self($tl * $factor, $tr * $factor, $br * $factor, $bl * $factor);
     }
+
+    /**
+     * M8-T2 review Finding 2 (css-backgrounds-3 §5.5): re-aplica el MISMO clamp proporcional de
+     * solapes que fromCss() aplica al resolver por primera vez, pero partiendo de radios YA
+     * resueltos (px) en vez de LengthPercentage simbólicos -- necesario porque
+     * FlexFormattingContext::withHeight()/TableFormattingContext::withHeight() (mismo mecanismo
+     * "geometry-only": el rect crece o encoge el fragmento SIN re-layoutear su contenido, ver
+     * ambos docblocks) pueden dejar el border-box con una $borderBoxHeight DISTINTA a la que se
+     * usó para el clamp original (p.ej. align-items:stretch en row, o el ajuste de main size en
+     * flex-direction:column vía flex-shrink) -- un radio que cabía a la altura NATURAL puede dejar
+     * de caber a la altura FINAL (tl+bl > altura final), produciendo un path Bézier que se cruza a
+     * sí mismo (bowtie) en vez de una esquina redondeada real.
+     *
+     * Mismo criterio "nunca agranda": el ratio 1.0 siempre participa en el mínimo, así que un
+     * $borderBoxHeight MAYOR (el fragmento CRECE, p.ej. align-items:stretch normal) nunca infla
+     * los radios más allá de lo que ya eran -- coherente con que este método solo se llama para
+     * REACLAMPAR tras un cambio geométrico post-hoc, nunca para "recuperar" un clamp aplicado de
+     * más en el pasado (esa información ya no está disponible aquí, ni hace falta: un radio que
+     * cabía en la altura natural sigue cabiendo, o cabe MEJOR, a una altura mayor).
+     */
+    public function reclampFor(float $borderBoxWidth, float $borderBoxHeight): self
+    {
+        $ratios = [1.0];
+        if ($this->tl + $this->tr > 0.0) {
+            $ratios[] = $borderBoxWidth / ($this->tl + $this->tr);
+        }
+        if ($this->bl + $this->br > 0.0) {
+            $ratios[] = $borderBoxWidth / ($this->bl + $this->br);
+        }
+        if ($this->tl + $this->bl > 0.0) {
+            $ratios[] = $borderBoxHeight / ($this->tl + $this->bl);
+        }
+        if ($this->tr + $this->br > 0.0) {
+            $ratios[] = $borderBoxHeight / ($this->tr + $this->br);
+        }
+        $factor = min($ratios);
+
+        return new self($this->tl * $factor, $this->tr * $factor, $this->br * $factor, $this->bl * $factor);
+    }
 }

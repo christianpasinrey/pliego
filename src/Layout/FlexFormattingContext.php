@@ -459,10 +459,14 @@ final readonly class FlexFormattingContext implements FormattingContext
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
-        // M8-T2: $borderRadius se PRESERVA tal cual (mismo criterio "geometry-only" que $atomic/
-        // $opacity/$clipsChildren arriba) -- ya venía resuelto/clampeado (§5.5) contra la altura
-        // NATURAL del fragmento original; este ajuste no lo re-resuelve contra la nueva altura
-        // (simplificación documentada, coherente con que este método tampoco re-layoutea nada más).
+        // M8-T2 review Finding 2 (css-backgrounds-3 §5.5): $borderRadius se RE-CLAMPA contra la
+        // altura FINAL, no se preserva tal cual -- ya venía resuelto/clampeado contra la altura
+        // NATURAL del fragmento original, pero un radio que cabía a ESA altura puede dejar de
+        // caber tras este ajuste geometry-only (p.ej. flex-shrink en column: tl+bl > la nueva
+        // altura), produciendo un path Bézier auto-intersecante (bowtie) en vez de una esquina
+        // real. BorderRadius::reclampFor() reaplica el MISMO algoritmo proporcional que el clamp
+        // inicial (fromCss()) -- nunca agranda (ver su docblock), así que el caso de CRECER
+        // (align-items:stretch normal) deja los radios intactos, byte a byte.
         return new BoxFragment(
             new Rect($fragment->rect->x, $fragment->rect->y, $fragment->rect->width, $height),
             $fragment->background,
@@ -471,7 +475,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
-            $fragment->borderRadius,
+            $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
         );
     }
 

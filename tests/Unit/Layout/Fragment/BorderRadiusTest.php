@@ -94,3 +94,51 @@ it('clamps on the vertical pair alone when only left-side corners overlap the he
     expect($resolved->tr)->toBe(0.0);
     expect($resolved->br)->toBe(0.0);
 });
+
+// --- M8-T2 review Finding 2 (Important): reclampFor() -- re-applying §5.5's proportional clamp
+// to an ALREADY-RESOLVED radius against a NEW border-box height (FlexFormattingContext::
+// withHeight()/TableFormattingContext::withHeight() call this after a geometry-only height
+// change, see both docblocks) instead of preserving it unchanged.
+
+it('reclampFor(): reviewer\'s exact repro -- 50/50 radius (fit at height 200) re-clamps to 30/30 when shrunk to height 60', function () {
+    // 100px-wide box, radius 50 on all 4 corners: at height 200, tl+bl=100<=200 (no clamp, this
+    // IS the "clamped to 50/50 at height 200" starting point from the finding). Shrink the SAME
+    // box to height 60 (flex-column flex-shrink, the reviewer's repro): tl+bl=100 > 60 -> ratio
+    // 60/100 = 0.6 -> 50*0.6 = 30.0 exact, on all 4 (symmetric input).
+    $radius = new BorderRadius(50.0, 50.0, 50.0, 50.0);
+    $reclamped = $radius->reclampFor(100.0, 60.0);
+    expect($reclamped->tl)->toBe(30.0);
+    expect($reclamped->tr)->toBe(30.0);
+    expect($reclamped->br)->toBe(30.0);
+    expect($reclamped->bl)->toBe(30.0);
+    // The clamp invariant §5.5 is meant to guarantee: no adjacent pair may exceed the side they
+    // share -- this is exactly what stops roundedRectPathOps() from emitting a self-intersecting
+    // (bowtie) curve on the shrunk box.
+    expect($reclamped->tl + $reclamped->bl)->toBeLessThanOrEqual(60.0);
+    expect($reclamped->tr + $reclamped->br)->toBeLessThanOrEqual(60.0);
+});
+
+it('reclampFor(): does NOT enlarge radii when the border box GROWS (stretch case, room to spare)', function () {
+    // Same 50/50/50/50 radius, now the height GROWS from 60 to 200 (e.g. align-items:stretch
+    // making an item taller than its natural content) -- §5.5's clamp only ever shrinks, the
+    // ratio-1.0 floor in the min() means a bigger height never inflates a radius past what it
+    // already was.
+    $radius = new BorderRadius(50.0, 50.0, 50.0, 50.0);
+    $reclamped = $radius->reclampFor(100.0, 200.0);
+    expect($reclamped->tl)->toBe(50.0);
+    expect($reclamped->tr)->toBe(50.0);
+    expect($reclamped->br)->toBe(50.0);
+    expect($reclamped->bl)->toBe(50.0);
+});
+
+it('reclampFor(): still scales an ALREADY-clamped-by-width radius consistently (round-trips with fromCss on the same box)', function () {
+    // 40x100 box, 30px radii -- same fixture as the fromCss() §5.5 test above (clamps to 20 via
+    // the WIDTH pair, 40/60). Calling reclampFor() with the SAME dimensions on an ALREADY-clamped
+    // 20/20/20/20 radius must be a no-op (nothing new overlaps).
+    $already = new BorderRadius(20.0, 20.0, 20.0, 20.0);
+    $reclamped = $already->reclampFor(40.0, 100.0);
+    expect($reclamped->tl)->toBe(20.0);
+    expect($reclamped->tr)->toBe(20.0);
+    expect($reclamped->br)->toBe(20.0);
+    expect($reclamped->bl)->toBe(20.0);
+});

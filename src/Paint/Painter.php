@@ -186,15 +186,28 @@ final readonly class Painter
      *
      * M8-T2 (css-backgrounds-3 §5): con $radius cero, comportamiento IDÉNTICO a antes de esta
      * tarea (paintBordersFlat(), el mismo código de siempre). Con $radius no-cero:
-     *   - los 4 lados IDÉNTICOS (mismo ancho/estilo/color, ver bordersUniform()): un ÚNICO
-     *     Canvas::fillRoundedRectRing() (path anular outer-menos-inner, f* even-odd) -- el radio
-     *     interior se reduce por el ancho de borde, clampeado >= 0 (mismo criterio que
-     *     css-backgrounds-3 §5.3 para el border-box interior).
-     *   - los 4 lados NO idénticos (ancho/color/estilo heterogéneo): la geometría anular de un
-     *     solo color no representa un borde con lados distintos -- aproximación adjudicada M8:
-     *     paintBordersFlat() (los mismos 4 rects rectos de siempre, radios ignorados en el
-     *     pintado de bordes) + un warning UNA SOLA VEZ ("mixed border widths with border-radius
-     *     approximated", ver WarningCollector::addWarningOnce()).
+     *   - los lados VISIBLES (style != None) son todos IDÉNTICOS entre sí (mismo ancho/estilo/
+     *     color, ver bordersUniform()): un ÚNICO Canvas::fillRoundedRectRing() (path anular
+     *     outer-menos-inner, f* even-odd). El offset hacia el rect interior es POR LADO
+     *     (effectiveWidth(): un lado None aporta 0), no un único $bw simétrico -- así un lado
+     *     suprimido por box-decoration-break:slice (InlineFlowContext::buildInlineBoxFragment(),
+     *     BorderStyle::None en un lateral no-extremo) queda con el borde interior a ras del
+     *     exterior en ESE lado (ancho de relleno cero ahí, ninguna curva "cortada" a mitad de
+     *     esquina) en vez de descalificar el path anular entero -- M8-T2 review Finding 1: antes
+     *     de este fix, bordersUniform() exigía los 4 lados byte-idénticos SIN excepción, así que
+     *     un slice con un lateral suprimido caía siempre en la rama "mixed" de abajo (esquinas
+     *     rectas + warning falso, aunque el borde declarado fuera uniforme). El radio interior
+     *     por esquina sigue reduciéndose por el ancho COMÚN de los lados visibles (mismo $bw que
+     *     antes) porque, por construcción de InlineFlowContext, toda esquina con radio > 0
+     *     siempre tiene AMBOS lados adyacentes visibles (las esquinas tocadas por un lado
+     *     suprimido ya llegan con radio 0 desde el slicing, ver su docblock) -- nunca hace falta
+     *     mezclar dos anchos distintos en la resta de un mismo corner.
+     *   - los lados VISIBLES NO son idénticos entre sí (ancho/color/estilo heterogéneo, esto es
+     *     heterogeneidad REAL declarada por el usuario, no una supresión de slice): la geometría
+     *     anular de un solo color no representa un borde con lados distintos -- aproximación
+     *     adjudicada M8: paintBordersFlat() (los mismos 4 rects rectos de siempre, radios
+     *     ignorados en el pintado de bordes) + un warning UNA SOLA VEZ ("mixed border widths with
+     *     border-radius approximated", ver WarningCollector::addWarningOnce()).
      */
     /**
      * M7-T4: generalizado de `(BoxFragment $fragment)` a params sueltos (rect/borders/opacity) —
@@ -223,8 +236,21 @@ final readonly class Painter
             // (T3: currentColor eager) -- guardia defensiva, mismo criterio que paintBorderSide().
             return;
         }
+        // M8-T2 review Finding 1: offset POR LADO (un lado None -- suprimido por slice --
+        // aporta 0, ver el docblock de paintBorders() de arriba), no un único $bw simétrico. Esto
+        // deja el rect interior a ras del exterior en el lado suprimido (relleno de ancho cero
+        // ahí -- ese lado, correctamente, no pinta nada).
         $bw = $uniform->widthPx;
-        $inner = new Rect($rect->x + $bw, $rect->y + $bw, $rect->width - 2 * $bw, $rect->height - 2 * $bw);
+        $topW = $this->effectiveWidth($borders->top);
+        $rightW = $this->effectiveWidth($borders->right);
+        $bottomW = $this->effectiveWidth($borders->bottom);
+        $leftW = $this->effectiveWidth($borders->left);
+        $inner = new Rect(
+            $rect->x + $leftW,
+            $rect->y + $topW,
+            $rect->width - $leftW - $rightW,
+            $rect->height - $topW - $bottomW,
+        );
         $innerRadius = new BorderRadius(
             max(0.0, $radius->tl - $bw),
             max(0.0, $radius->tr - $bw),
@@ -234,14 +260,40 @@ final readonly class Painter
         $canvas->fillRoundedRectRing($rect, $radius, $inner, $innerRadius, $uniform->color->withOpacity($opacity));
     }
 
-    /** true (con el BorderSide común) solo si LOS 4 LADOS son idénticos (mismo ancho/estilo/
-     * color) -- el único caso en el que un ÚNICO path anular representa el borde real. */
+    /**
+     * M8-T2 review Finding 1: la uniformidad ya NO exige los 4 BorderSide byte-idénticos SIN
+     * excepción -- exige que los lados VISIBLES (style != None) sean idénticos entre sí (mismo
+     * ancho/estilo/color); un lado None (BorderStyle::None, el que InlineFlowContext deja en un
+     * lateral no-extremo de un slice de box-decoration-break:slice, ver su docblock) participa
+     * con ancho efectivo 0 en la geometría (paintBorders() de arriba) pero NO tiene que
+     * "coincidir" con nada para que el path anular siga siendo válido -- geométricamente, un lado
+     * suprimido simplemente no reserva relleno en ESE lado del anillo, que es exactamente la
+     * semántica de slice (sin borde ahí). Antes de este fix, un slice con un lateral suprimido
+     * (Solid en 3 lados + None en 1) caía siempre por esta comprobación -- BorderSide::None !=
+     * BorderSide::Solid siempre -- perdiendo el path anular Y emitiendo el warning de "mixed" de
+     * forma FALSA (el borde declarado era uniforme; solo el slicing suprimió un lado).
+     *
+     * Devuelve `null` (heterogeneidad REAL, declarada por el usuario) solo cuando dos lados
+     * visibles difieren entre sí; si TODOS los lados fueran None, paintBorders() nunca llega
+     * aquí (ya cortó antes vía `!$borders->isVisible()`), así que $styled siempre trae al menos
+     * un elemento cuando este método se invoca desde el pipeline real.
+     */
     private function bordersUniform(BorderSet $borders): ?BorderSide
     {
-        if ($borders->top == $borders->right && $borders->top == $borders->bottom && $borders->top == $borders->left) {
-            return $borders->top;
+        $styled = array_values(array_filter(
+            [$borders->top, $borders->right, $borders->bottom, $borders->left],
+            static fn(BorderSide $side): bool => $side->style !== BorderStyle::None,
+        ));
+        if ($styled === []) {
+            return null;
         }
-        return null;
+        $first = $styled[0];
+        foreach ($styled as $side) {
+            if ($side != $first) {
+                return null;
+            }
+        }
+        return $first;
     }
 
     /** El pintado de 4 rects rectos de siempre (pre-M8-T2) -- usado tanto para $radius cero como

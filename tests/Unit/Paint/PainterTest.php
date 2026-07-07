@@ -618,3 +618,79 @@ it('paints a rounded InlineBoxFragment background+border the same way as a BoxFr
         'roundedRing(outer=0.00,0.00,100.00,50.00,r=6.00/6.00/6.00/6.00;inner=2.00,2.00,96.00,46.00,r=4.00/4.00/4.00/4.00,#000000)',
     ]);
 });
+
+// --- M8-T2 review Finding 1 (Critical): multi-slice inline boxes with a UNIFORM declared border
+// must keep the annular ring path -- a lateral side suppressed to BorderStyle::None by
+// box-decoration-break:slice (InlineFlowContext::buildInlineBoxFragment(), see its docblock) is
+// NOT genuine heterogeneity, and must not disqualify bordersUniform() nor fire the "mixed border
+// widths" warning. Before this fix, bordersUniform() required all 4 BorderSide byte-equal, so
+// every non-terminal slice (with one lateral forced to None) fell into the flat/warning branch
+// even though the AUTHOR declared a perfectly uniform border -- flat corners everywhere + a false
+// "mixed border widths" warning.
+
+it('Finding 1: a FIRST slice (right side suppressed to None) still paints via the ring path -- left corners curved, right corners already zeroed by slicing, no warning', function () {
+    $canvas = new RecordingCanvas();
+    $warnings = new WarningCollector();
+    $black = new Color(0, 0, 0);
+    $side = new BorderSide(2.0, BorderStyle::Solid, $black);
+    $noSide = new BorderSide(0.0, BorderStyle::None, null);
+    // isFirstSlice=true, isLastSlice=false: InlineFlowContext suppresses ONLY the right side
+    // (left survives, see buildInlineBoxFragment()) and zeroes the tr/br corners of the radius
+    // (also its responsibility, verified by the M8-T2 docblock at InlineFlowContext.php:~793).
+    $borders = new BorderSet($side, $noSide, $side, $side);
+    $radius = new BorderRadius(8.0, 0.0, 0.0, 8.0);
+    $box = new InlineBoxFragment(new Rect(0, 0, 100, 50), null, $borders, 1.0, true, false, $radius);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        // inner inset: left/top/bottom by the common 2px width, right by 0 (None side, flush to
+        // the outer edge -- zero-width fill there, exactly the slice semantics); inner radius
+        // reduced by the SAME 2px on the corners that survive (tl/bl), already-zero corners
+        // (tr/br) stay at max(0, 0-2)=0.
+        'roundedRing(outer=0.00,0.00,100.00,50.00,r=8.00/0.00/0.00/8.00;inner=2.00,2.00,98.00,46.00,r=6.00/0.00/0.00/6.00,#000000)',
+    ]);
+    expect($warnings->drain())->toBe([]);
+});
+
+it('Finding 1: a LAST slice (left side suppressed to None) still paints via the ring path -- right corners curved, left corners already zeroed by slicing, no warning', function () {
+    $canvas = new RecordingCanvas();
+    $warnings = new WarningCollector();
+    $black = new Color(0, 0, 0);
+    $side = new BorderSide(2.0, BorderStyle::Solid, $black);
+    $noSide = new BorderSide(0.0, BorderStyle::None, null);
+    // isFirstSlice=false, isLastSlice=true: the mirror case -- left suppressed, tl/bl zeroed.
+    $borders = new BorderSet($side, $side, $side, $noSide);
+    $radius = new BorderRadius(0.0, 8.0, 8.0, 0.0);
+    $box = new InlineBoxFragment(new Rect(0, 0, 100, 50), null, $borders, 1.0, false, true, $radius);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'roundedRing(outer=0.00,0.00,100.00,50.00,r=0.00/8.00/8.00/0.00;inner=0.00,2.00,98.00,46.00,r=0.00/6.00/6.00/0.00,#000000)',
+    ]);
+    expect($warnings->drain())->toBe([]);
+});
+
+it('Finding 1 regression guard: GENUINELY mixed declared border widths (no None side involved) still warn and fall back to flat painting', function () {
+    // Same shape as the pre-existing "falls back... MIXED" test above, restated here next to the
+    // slice fix as an explicit regression guard: a real user-declared width mismatch (2px vs 4px,
+    // both Solid, no slicing involved at all) must NOT be swallowed by the relaxed slice-aware
+    // uniformity check -- it is still genuine heterogeneity, still warns, still paints flat.
+    $canvas = new RecordingCanvas();
+    $warnings = new WarningCollector();
+    $top = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $right = new BorderSide(4.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $borders = new BorderSet($top, $right, $top, $top);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,2.00,#000000)',
+        'rect(96.00,2.00,4.00,46.00,#000000)',
+        'rect(0.00,48.00,100.00,2.00,#000000)',
+        'rect(0.00,2.00,2.00,46.00,#000000)',
+    ]);
+    expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
+});

@@ -492,8 +492,13 @@ final readonly class TableFormattingContext
      * entre ambas clases porque no comparten ninguna otra cosa que justifique un trait): agranda
      * el rect de un fragmento de celda ya calculado sin re-layoutear su contenido (que queda
      * anclado arriba — alignCell() se encarga después de desplazarlo si vertical-align no es top).
-     * M8-T2: $borderRadius se preserva tal cual, mismo criterio documentado en el gemelo de
-     * FlexFormattingContext.
+     * M8-T2 review Finding 2: $borderRadius se RE-CLAMPA (BorderRadius::reclampFor(), §5.5) contra
+     * la altura de fila FINAL en vez de preservarse tal cual -- mismo criterio corregido en el
+     * gemelo de FlexFormattingContext (ver su docblock). Esta clase solo ESTIRA celdas (nunca las
+     * encoge -- alignCell() solo llama aquí cuando $contentHeight < $rowHeight, ver su docblock),
+     * así que reclampFor() es normalmente un no-op aquí (nunca agranda, ver su propio docblock);
+     * se añade de todos modos por coherencia con el gemelo y para no dejar una asimetría
+     * silenciosa si esa invariante de "solo estira" cambiara en el futuro.
      */
     private static function withHeight(BoxFragment $fragment, float $height): BoxFragment
     {
@@ -505,7 +510,7 @@ final readonly class TableFormattingContext
             $fragment->atomic,
             $fragment->opacity,
             $fragment->clipsChildren,
-            $fragment->borderRadius,
+            $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
         );
     }
 

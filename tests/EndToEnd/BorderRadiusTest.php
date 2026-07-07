@@ -4,6 +4,8 @@
 declare(strict_types=1);
 
 use Pliego\Engine;
+use Pliego\Layout\TextMeasurer;
+use Pliego\Text\FontCatalog;
 
 /**
  * M8-T2 acceptance (css-backgrounds-3 §5 reducido): border-radius end to end through the real
@@ -84,4 +86,37 @@ it('renders a zero-radius box completely unaffected (byte-stable regression guar
     expect($report->warnings)->toBe([]);
     expect($pdf)->not->toContain(" c\n");
     expect($pdf)->not->toContain('f*');
+});
+
+// --- M8-T2 review Finding 1 (Critical), end to end: a `.btn` inline span with a UNIFORM declared
+// border+radius, wrapped across two lines by box-decoration-break:slice, must paint rounded
+// corners on BOTH slices via the annular ring path (f*), not the flat 4-rect approximation, and
+// must NOT trigger the "mixed border widths" warning -- the lateral side suppressed to
+// BorderStyle::None on each non-terminal slice (InlineFlowContext::buildInlineBoxFragment()) is
+// slice bookkeeping, not user-declared heterogeneity (see Painter::bordersUniform()).
+
+it('golden E2E: a .btn span with uniform border+radius wrapped across two lines paints BOTH slices via the ring path, zero warnings', function () {
+    // Same forced-wrap recipe as BootstrapComponentsTest's "golden: a bordered/padded inline span
+    // slices across two wrapped lines" (tests/EndToEnd/BootstrapComponentsTest.php): "aaa" fits
+    // on the line but "aaa bbb" doesn't, forcing the wrap between the two words -- here run
+    // through the FULL Engine pipeline (real PDF bytes), not just the layout fragment tree, and
+    // with border-radius added on top of the M7 border/padding slicing.
+    $measurer = new TextMeasurer();
+    $catalog = FontCatalog::withDefaults();
+    $face = $catalog->select('default', 400, false);
+    $aaaSpaceWidth = $measurer->widthOf('aaa ', $face, 16.0);
+    $bbbWidth = $measurer->widthOf('bbb', $face, 16.0);
+    $wrapWidthPx = $aaaSpaceWidth + $bbbWidth * 0.5;
+
+    $css = sprintf('.wrap { width: %.2Fpx; } ', $wrapWidthPx)
+        . '.btn { border: 2px solid #333333; border-radius: 8px; padding: 0 4px; background-color: #ffe08a; }';
+    $html = '<body><div class="wrap"><p><span class="btn">aaa bbb</span></p></div></body>';
+    [$pdf, $report] = borderRadiusRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toBe([]); // NOT ['mixed border widths with border-radius approximated']
+    expect($pdf)->toContain(" c\n"); // rounded (Bézier) paths present
+    expect($pdf)->not->toContain(' re f'); // no flat-rect border/background fallback anywhere
+    // One annular ring fill (f*) PER slice -- both slices went through the rounded-border path,
+    // neither fell back to the flat 4-rect approximation.
+    expect(substr_count($pdf, 'f*'))->toBe(2);
 });

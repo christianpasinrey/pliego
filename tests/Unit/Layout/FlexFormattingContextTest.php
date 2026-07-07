@@ -680,6 +680,95 @@ it('Finding B: max-height caps the column base itself (no grow to redistribute)'
     expect($itemFrag->rect->height)->toBe(60.0);
 });
 
+// --- M8-T2 review Finding 2 (Important): withHeight() must RE-CLAMP border-radius, not preserve
+// it -- a radius that fit at the item's NATURAL height can stop fitting once flex-shrink (column
+// main axis) or align-items:stretch resizes it post-hoc, producing a self-intersecting (bowtie)
+// Bézier path in the PDF instead of a real rounded corner (Painter/PdfCanvas never validate this
+// -- the geometry handed to them must already be valid).
+
+it('Finding 2: reviewer\'s exact repro -- a flex-column item shrunk from height 200 to 60 re-clamps its 50/50 radius to 30/30 (factor 60/100), no self-intersection', function () {
+    // The item is ITSELF a (childless) flex container with an explicit height:200px --
+    // BlockFlowContext ignores `height` for a plain block (pre-existing gap, undocumented here),
+    // so a nested display:flex item is the way to get a REAL declared height honored for the
+    // item's own fragment (see the `$items === []` branch of FlexFormattingContext::layout()):
+    // border-radius:50px on all 4 corners, resolved against that height 200 -- tl+bl=100<=200, no
+    // clamp needed yet (this IS the "clamped to 50/50 at height 200" starting point from the
+    // finding).
+    //
+    // The OUTER column container declares height:60px with THIS single item inside (flex-shrink
+    // defaults to 1, css-flexbox-1 initial value) -- the only way to fit is shrinking the item's
+    // resolved main size (height, column axis) down to the full 60px available via
+    // layoutColumnItem()'s withHeight() call. tl+bl=100 > 60 (the post-shrink height) -> ratio
+    // 60/100 = 0.6 -> 50*0.6 = 30.0 exact on all 4 corners (symmetric input, same corner pairs
+    // both hit the height constraint).
+    $radiusLength = LengthPercentage::px(50.0);
+    $item = new BlockBox(flexStyle([
+        'display' => 'flex',
+        'width' => LengthPercentage::px(100.0),
+        'height' => Length::px(200.0),
+        'border-top-left-radius' => $radiusLength,
+        'border-top-right-radius' => $radiusLength,
+        'border-bottom-right-radius' => $radiusLength,
+        'border-bottom-left-radius' => $radiusLength,
+    ]), [], 'div');
+    $container = new BlockBox(
+        flexStyle(['width' => LengthPercentage::px(100.0), 'height' => Length::px(60.0), 'flex-direction' => 'column']),
+        [$item],
+        'div',
+    );
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 300.0, INF));
+    $itemFrag = $frag->children[0];
+    assert($itemFrag instanceof BoxFragment);
+
+    expect($itemFrag->rect->height)->toBe(60.0);
+    expect($itemFrag->borderRadius->tl)->toBe(30.0);
+    expect($itemFrag->borderRadius->tr)->toBe(30.0);
+    expect($itemFrag->borderRadius->br)->toBe(30.0);
+    expect($itemFrag->borderRadius->bl)->toBe(30.0);
+
+    // Path monotonicity, stated as the exact geometric condition roundedRectPathOps() needs to
+    // avoid a reversed (self-intersecting/bowtie) curve on the left/right edges: the two corner
+    // radii sharing a side must not exceed that side's length. Pre-fix (radius preserved at
+    // 50/50), tl+bl=100 > height=60 -- a REAL bowtie; post-fix, it lands exactly at the boundary
+    // (30+30=60), never past it.
+    expect($itemFrag->borderRadius->tl + $itemFrag->borderRadius->bl)->toBeLessThanOrEqual($itemFrag->rect->height);
+    expect($itemFrag->borderRadius->tr + $itemFrag->borderRadius->br)->toBeLessThanOrEqual($itemFrag->rect->height);
+});
+
+it('Finding 2: a flex-row item that GROWS (align-items:stretch, more room) keeps its border-radius unchanged -- no over-clamping', function () {
+    // Row-direction stretch: the item's own natural height comes from its vertical padding alone
+    // (20px top + 20px bottom = 40px, no content, no declared `height` -- BlockFlowContext
+    // ignores that CSS property for a plain block, pre-existing gap unrelated to this fix) --
+    // 10px radius on all 4 corners fits comfortably (tl+bl=20<=40, no clamp at construction).
+    // align-items:stretch (the default) then grows it to the line's cross size (150px, driven by
+    // the sibling flex item's OWN declared height) via withHeight() -- growing must never inflate
+    // the radius past what it already was.
+    $item = new BlockBox(flexStyle([
+        'width' => LengthPercentage::px(50.0),
+        'padding-top' => LengthPercentage::px(20.0),
+        'padding-bottom' => LengthPercentage::px(20.0),
+        'border-top-left-radius' => LengthPercentage::px(10.0),
+        'border-top-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-right-radius' => LengthPercentage::px(10.0),
+        'border-bottom-left-radius' => LengthPercentage::px(10.0),
+    ]), [], 'div');
+    // A nested (childless) flex item to get a REAL declared height honored (same reason as the
+    // shrink repro above: BlockFlowContext ignores `height` on a plain block).
+    $taller = new BlockBox(flexStyle(['display' => 'flex', 'width' => LengthPercentage::px(50.0), 'height' => Length::px(150.0)]), [], 'div');
+    $container = new BlockBox(flexStyle(['width' => LengthPercentage::px(200.0)]), [$item, $taller], 'div');
+
+    $frag = $this->ctx->layout($container, new Rect(0.0, 0.0, 300.0, INF));
+    [$itemFrag, $tallerFrag] = $frag->children;
+    assert($itemFrag instanceof BoxFragment && $tallerFrag instanceof BoxFragment);
+
+    expect($itemFrag->rect->height)->toBe(150.0); // stretched to the line's cross size
+    expect($itemFrag->borderRadius->tl)->toBe(10.0);
+    expect($itemFrag->borderRadius->tr)->toBe(10.0);
+    expect($itemFrag->borderRadius->br)->toBe(10.0);
+    expect($itemFrag->borderRadius->bl)->toBe(10.0);
+});
+
 it('warns exactly once when column justify-content has no effect because the container has auto height', function () {
     $warnings = new WarningCollector();
     $ctx = new FlexFormattingContext($this->measurer, $this->catalog, $this->sizer, $warnings);
