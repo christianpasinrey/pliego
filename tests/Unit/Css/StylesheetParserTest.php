@@ -426,8 +426,49 @@ it('is case-insensitive and whitespace-tolerant on the media type keyword', func
     expect($result->warnings)->toBe([]);
 });
 
-it('skips a @media (min-width: ...) block, with one aggregated warning', function () {
+// --- M10-T1 (css-mediaqueries-3 §2.3): 'only' prefix normalization -----------------------------
+
+it('applies rules inside @media only print (the "only" prefix carries no evaluation semantics)', function () {
+    $result = new StylesheetParser()->parse('@media only print { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->warnings)->toBe([]);
+});
+
+it('applies rules inside @media only all', function () {
+    $result = new StylesheetParser()->parse('@media only all { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('is case-insensitive and whitespace-tolerant on the "only" prefix too', function () {
+    $result = new StylesheetParser()->parse('@media   ONLY   PRINT  { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('still skips @media only screen -- "only" does not make an otherwise-excluded medium apply', function () {
+    $result = new StylesheetParser()->parse('@media only screen { p { color: red } }');
+    expect($result->rules)->toBe([]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+// --- M10-T2 (css-mediaqueries-4, reduced): real min-width/max-width evaluation -------------------
+// Detailed grammar coverage (rem/em, 'and', comma lists) lives in MediaQueryEvaluatorTest -- these
+// StylesheetParser-level tests only confirm the wiring: $pageWidthPx threads through to the parsed
+// ParseResult (block kept vs. dropped, warning aggregation unaffected). parse()'s default page
+// width is A4 (793.70px, same as Engine::render()'s real default paper) unless a caller threads a
+// different one explicitly (see the dedicated threading tests further below).
+
+it('applies a @media (min-width: ...) block that holds against the default (A4) page width', function () {
     $result = new StylesheetParser()->parse('@media (min-width: 768px) { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->warnings)->toBe([]);
+});
+
+it('skips a @media (min-width: ...) block that does not hold against the default (A4) page width', function () {
+    $result = new StylesheetParser()->parse('@media (min-width: 992px) { p { color: red } }');
     expect($result->rules)->toBe([]);
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
@@ -438,18 +479,41 @@ it('skips a plain @media screen block, with one aggregated warning', function ()
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
 
-it('skips @media (prefers-reduced-motion: reduce) (a feature query, not print/all)', function () {
+it('skips @media (prefers-reduced-motion: reduce) (an unknown feature query)', function () {
     $result = new StylesheetParser()->parse('@media (prefers-reduced-motion: reduce) { .x { color: red } }');
     expect($result->rules)->toBe([]);
     expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
 });
 
 it('aggregates multiple skipped @media blocks into a SINGLE warning with the total count', function () {
-    $css = '@media (min-width: 768px) { a { color: red } } @media screen { b { color: blue } }
-        @media (max-width: 991.98px) { c { color: green } }';
+    $css = '@media (min-width: 1200px) { a { color: red } } @media screen { b { color: blue } }
+        @media (prefers-reduced-motion: reduce) { c { color: green } }';
     $result = new StylesheetParser()->parse($css);
     expect($result->rules)->toBe([]);
     expect($result->warnings)->toBe(['3 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('mixes applying and skipped @media blocks in the same sheet, aggregating only the skipped ones', function () {
+    $css = '@media (min-width: 768px) { a { color: red } } @media (min-width: 1200px) { b { color: blue } }
+        @media (max-width: 991.98px) { c { color: green } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect(array_map(static fn($r) => $r->declarations['color'], $result->rules))->toEqual([
+        new Color(255, 0, 0), new Color(0, 128, 0),
+    ]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('threads an explicit non-default page width into min-width/max-width evaluation', function () {
+    $css = '@media (min-width: 768px) { p { color: red } }';
+    // A narrow page (400px) makes a 768px min-width breakpoint NOT apply, unlike the A4 default.
+    $narrow = new StylesheetParser()->parse($css, 400.0);
+    expect($narrow->rules)->toBe([]);
+    expect($narrow->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+
+    $wide = new StylesheetParser()->parse($css, 1000.0);
+    expect($wide->rules)->toHaveCount(1);
+    expect($wide->warnings)->toBe([]);
 });
 
 it('preserves in-file author order across an applying @media block (rules before/inside/after keep ascending $order)', function () {
@@ -492,5 +556,294 @@ it('an @page nested inside an applying @media print is still recognized (media r
 
 it('has no @media warning at all when the stylesheet has no @media blocks', function () {
     $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});
+
+// --- M10 final-review Finding C: resolveLayers() must not hoist @layer out of a conditional
+// at-rule (css-cascade-5 / css-conditional-3) ------------------------------------------------------
+//
+// resolveLayers() used to scan for `@layer` with a flat, depth-blind regex -- it matched a
+// `@layer` construct at ANY brace depth, including one nested inside an UNRESOLVED @media. Since
+// resolveLayers() HOISTS a layer's body out to wherever that layer's rank places it (never an
+// in-place splice), finding a `@layer` inside `@media screen { @layer x { p{color:red} } }` and
+// hoisting `p{color:red}` out UNCONDITIONALLY (before @media ever got to decide screen doesn't
+// apply) made it apply on EVERY medium, including print -- plus resolveMediaBlocks() then saw an
+// @media screen block that LOOKED empty (already hollowed out) and reported "1 @media rule blocks
+// skipped", technically true but misleading (something from inside it had already leaked through
+// unconditionally). Fix: (1) resolveLayers() now only matches `@layer` at brace depth 0 (skips
+// and leaves untouched any match nested inside something else); (2) @media now resolves BEFORE
+// @layer (see parse()'s own docblock at that call site for why this ordering, combined with (1),
+// is what makes BOTH nesting directions work: `@layer` wrapping `@media` AND `@media` wrapping
+// `@layer`).
+
+it('Finding C repro: a @layer nested inside a skipped @media screen does NOT leak its rule onto every medium, and the skip warning is accurate (not misleading)', function () {
+    $css = '@media screen { @layer x { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(0);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('Finding C: a @layer nested inside an APPLYING @media print DOES apply (media resolves first, unwrapping the @layer to top level for a later, safe top-level pass)', function () {
+    $css = '@media print { @layer x { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe([]);
+});
+
+it('Finding C: the reverse nesting (@media inside @layer) still works -- an applying @media print inside a @layer keeps applying, a skipped @media screen inside stays skipped', function () {
+    $css = '@layer x { @media print { p { color: red } } @media screen { p { color: blue } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('Finding C: a @layer nested inside an unresolved @container does NOT leak its rule out unconditionally (depth guard, not just the @media/@layer ordering swap)', function () {
+    // @container is never evaluated (M10-T6, out of scope) and always extracted+discarded AFTER
+    // @layer resolution -- so a @layer nested inside one is STILL at brace depth > 0 when
+    // resolveLayers() scans, even after Finding C's @media-vs-@layer ordering swap (that swap only
+    // reorders @media relative to @layer, @container still resolves after both). Without the
+    // top-level-only depth guard, resolveLayers()'s old flat regex would hoist `p{color:red}` out
+    // of the @container conditional entirely, making it apply unconditionally -- exactly the same
+    // "misleading skip count" shape as the @media repro above, proving the depth guard does real
+    // work beyond the ordering swap alone.
+    $css = '@container (min-width: 200px) { @layer x { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(0);
+    expect($result->warnings)->toBe(['1 @container rule blocks skipped (not supported)']);
+});
+
+it('Finding C: a top-level @layer with NO @media involved is completely unchanged', function () {
+    $css = '@layer base { p { color: red } } p { color: blue }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->warnings)->toBe([]);
+});
+
+// --- M10-T3: @layer (css-cascade-5, reduced) -----------------------------------------------------
+
+it('unwraps a single named @layer block, rules parse normally', function () {
+    $result = new StylesheetParser()->parse('@layer base { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe([]);
+});
+
+it('orders rules by DECLARATION order of layer names (a bare @layer a, b; statement), not textual block order', function () {
+    // "utilities" is declared FIRST in the bare statement (rank 0), "base" SECOND (rank 1) -- even
+    // though the "utilities" BLOCK appears before the "base" block textually, "base" outranks it.
+    $css = '@layer utilities, base; @layer utilities { p { color: blue } } @layer base { p { color: red } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[0]->order)->toBeLessThan($result->rules[1]->order);
+});
+
+it('un-layered rules always come AFTER every named layer, winning ties regardless of layer declaration order', function () {
+    $css = '@layer a { p { color: red } } p { color: blue }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->rules[0]->order)->toBeLessThan($result->rules[1]->order);
+});
+
+it('an anonymous @layer {} gets its OWN rank slot, distinct from any named layer', function () {
+    $css = '@layer { p { color: red } } @layer named { p { color: blue } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('blue'));
+});
+
+it('two @layer blocks with the SAME name accumulate into that layer\'s single rank, in encounter order, grouped together', function () {
+    // Registration order: base (rank 0, first seen), utilities (rank 1). The SECOND "base" block
+    // (color: purple) is textually AFTER the "utilities" block, but still lands in base's bucket
+    // -- reopening an earlier layer does not bump its rank, and its content stays grouped with the
+    // first base block, both BEFORE utilities' content in the final flattened stream.
+    $css = '@layer base { p { color: red } } @layer utilities { p { color: green } } @layer base { p { color: purple } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(3);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('purple'));
+    expect($result->rules[2]->declarations['color'])->toEqual(Color::fromCss('green'));
+});
+
+it('a bare @layer name; statement with NO body registers the rank but contributes no rules', function () {
+    $result = new StylesheetParser()->parse('@layer empty; @layer named { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('warns ONCE, with adjudicated fixed wording, when !important appears inside a layer (simplified, non-inverted precedence)', function () {
+    $result = new StylesheetParser()->parse('@layer base { p { color: red !important } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->important)->toBeTrue();
+    $layerWarnings = array_values(array_filter(
+        $result->warnings,
+        static fn(string $w): bool => str_contains($w, 'layered !important uses simplified precedence'),
+    ));
+    expect($layerWarnings)->toHaveCount(1);
+});
+
+it('does not warn about layered !important when no layer contains one', function () {
+    $result = new StylesheetParser()->parse('@layer base { p { color: red } } p { color: blue !important }');
+    expect($result->warnings)->toBe([]);
+});
+
+it('reproduces Tailwind v4\'s exact bootstrap shape: two bare declarations pin 5 layer ranks before any block exists', function () {
+    $css = <<<'CSS'
+    @layer properties;
+    @layer theme, base, components, utilities;
+    @layer utilities { .u { color: blue } }
+    @layer theme { .t { color: red } }
+    @layer properties { .p { color: green } }
+    CSS;
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(3);
+    // properties(0) < theme(1) < base(2) < components(3) < utilities(4) -- "properties" and
+    // "theme" both got their rank from the BARE statements, before either ever had a body.
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('green')); // properties
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('red'));   // theme
+    expect($result->rules[2]->declarations['color'])->toEqual(Color::fromCss('blue'));  // utilities
+});
+
+// --- M10-T3: @property (css-properties-values-api-1) -- parse-skip + ONE aggregated warning -------
+
+it('drops a single @property rule with one warning, other rules parse normally', function () {
+    $css = '@property --foo { syntax: "<color>"; inherits: false; initial-value: red; } p { color: red }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['1 @property rule blocks skipped (not supported)']);
+});
+
+it('aggregates multiple @property rules into a SINGLE warning with the total count', function () {
+    $css = '@property --a { syntax: "*"; inherits: false; } @property --b { syntax: "*"; inherits: false; } p { color: red }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['2 @property rule blocks skipped (not supported)']);
+});
+
+it('has no @property warning at all when the stylesheet declares none', function () {
+    $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});
+
+it('drops @property rules found inside a @layer block too (layer resolution runs before @property extraction)', function () {
+    $css = '@layer base { @property --foo { syntax: "*"; inherits: false; } p { color: red } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['1 @property rule blocks skipped (not supported)']);
+});
+
+// --- M10-T6 (css-conditional-5, out of scope): @container -- parse-skip + ONE aggregated warning ---
+// Found while auditing the milestone's own "excluded WITH warning" list (RESTRICCIONES GLOBALES):
+// unlike @property/@media/color-mix()/:has(), an unextracted @container was silently swallowing its
+// OWN body AND every rule that came after it in the same stylesheet (sabberworm's at-rule dispatcher
+// doesn't recurse into it, same mishandling class @layer had pre-M10-T3, but nobody had extracted
+// @container the way @property/@page/@font-face already are) -- zero rules, zero warnings, not just
+// "container queries aren't supported" but real, silent document-wide data loss. Same
+// extractAtRuleBlocks() brace-matcher + aggregated-count warning shape as @property above closes it.
+
+it('drops a single @container rule with one warning, other rules parse normally', function () {
+    $css = '@container (min-width: 200px) { .card { color: red } } p { color: blue }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->warnings)->toBe(['1 @container rule blocks skipped (not supported)']);
+});
+
+it('does not silently drop rules AFTER a @container block (the bug this task found)', function () {
+    $css = '@container (min-width: 200px) { .card { color: red } } .after { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('green'));
+});
+
+it('aggregates multiple @container rules into a SINGLE warning with the total count', function () {
+    $css = '@container (min-width: 200px) { .a { color: red } } @container card (max-width: 400px) { .b { color: blue } } p { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe(['2 @container rule blocks skipped (not supported)']);
+});
+
+it('has no @container warning at all when the stylesheet declares none', function () {
+    $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});
+
+// --- M10 final-review Finding B: CSS nesting (&) guard ---------------------------------------
+//
+// sabberworm/php-css-parser 8.9 does not understand css-nesting-1's `&` syntax -- probed by hand
+// (see StylesheetParser::resolveCssNesting()'s own docblock): `.a { &:hover { color: red } }
+// .b { color: blue } .c { color: green }` parses through sabberworm DIRECTLY to `.a {}` (its own
+// nested block silently swallowed) AND `.b` gone too -- only `.c` survives. Zero warnings, real
+// silent data loss, not just "nesting unsupported". This is exactly Tailwind v4's `odd:`/`even:`
+// (and every other pseudo-class variant) compiled shape: `.odd\:bg-white { &:nth-child(odd) {
+// background-color: ... } }` (README's Tailwind section). Fix: a pre-extraction pass strips the
+// nested `&...{...}` construct out of the css BEFORE sabberworm ever sees it, replaced by a
+// single space (same precise, non-hoisting, in-place removal shape as extractAtRuleBlocks()) --
+// the outer rule keeps whatever plain declarations it had of its own, and NOTHING after it is
+// ever lost, with ONE aggregated warning for the whole document.
+
+it('the exact repro: .a{&:x{...}} silently ate .b before this fix -- now .a survives (empty), .b AND .c both survive, ONE warning', function () {
+    $css = '.a { &:hover { color: red } } .b { color: blue } .c { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    // .a has no declarations of its own (its only content was the nested block) -- Sabberworm's
+    // getAllDeclarationBlocks() never emits a block with zero rules, so only .b and .c produce
+    // StyleRule entries.
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('green'));
+    expect($result->warnings)->toBe(['1 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('keeps the outer rule\'s OWN plain declarations when it has some, alongside the nested block that gets stripped', function () {
+    $css = '.a { color: red; &:hover { color: blue } } .b { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('green'));
+    expect($result->warnings)->toBe(['1 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('strips Tailwind\'s real odd:/even: nested-variant SHAPE (the & nesting itself) without losing any sibling rule', function () {
+    // Same nesting shape Tailwind v4 actually emits for `odd:`/`even:` variants
+    // (`.odd\:bg-white { &:nth-child(odd) { ... } }`, see README's Tailwind section) -- unescaped
+    // class names here on purpose, to isolate THIS finding (the `&` nesting) from the separate,
+    // already-documented `\:`-escaping gap (SelectorParser's ident regex) that a literal
+    // `.odd\:bg-white` selector would ALSO trip, independently of nesting.
+    $css = '.oddbg { &:nth-child(odd) { background-color: #ffffff } } '
+        . '.evenbg { &:nth-child(even) { background-color: #f0f0f0 } } '
+        . '.static { color: red }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe(['2 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('declaration-block-count regression: N ordinary rules with ONE nested-variant rule in the middle all survive except the nested content itself', function () {
+    $css = 'a1 { color: red } a2 { color: blue } a3 { &:hover { color: purple } } a4 { color: green } a5 { color: orange }';
+    $result = new StylesheetParser()->parse($css);
+    // 5 selectors total; a3 contributes no declarations of its own (nested-only), so 4 StyleRule
+    // entries -- none of a1/a2/a4/a5 is silently dropped the way the unfixed sabberworm bug would
+    // have dropped the rule immediately AFTER a3 (a4).
+    expect($result->rules)->toHaveCount(4);
+    $colors = array_map(static fn($rule) => $rule->declarations['color'], $result->rules);
+    expect($colors)->toEqual([
+        Color::fromCss('red'),
+        Color::fromCss('blue'),
+        Color::fromCss('green'),
+        Color::fromCss('orange'),
+    ]);
+    expect($result->warnings)->toBe(['1 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('has no nesting warning at all when the stylesheet uses no & nesting', function () {
+    $result = new StylesheetParser()->parse('p { color: red } .a.bar { color: blue }');
     expect($result->warnings)->toBe([]);
 });

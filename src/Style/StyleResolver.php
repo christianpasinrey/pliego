@@ -13,6 +13,15 @@ use Pliego\Css\WarningCollector;
 
 final class StyleResolver
 {
+    /**
+     * M10-T1 (css-values-4 §5.1.1): default page size for a StyleResolver built without an
+     * explicit one (mostly tests) — A4 in CSS px, same formula duplicated in
+     * Style\ComputedStyle (Style: [Css, Vendor] in deptrac.yaml, cannot import Page\PaperSize —
+     * see that class's own DEFAULT_PAGE_WIDTH_PX/DEFAULT_PAGE_HEIGHT_PX docblock for why).
+     */
+    private const float DEFAULT_PAGE_WIDTH_PX = 210.0 / 25.4 * 96.0;
+    private const float DEFAULT_PAGE_HEIGHT_PX = 297.0 / 25.4 * 96.0;
+
     /** @param list<StyleSource> $sources */
     public function __construct(
         private readonly array $sources,
@@ -21,6 +30,13 @@ final class StyleResolver
         // aquí (ciclos, referencias desconocidas, % en una propiedad sin soporte de %, división por
         // cero cuyo divisor depende de em/rem propios del elemento).
         private readonly ?WarningCollector $warnings = null,
+        // M10-T1: el tamaño de página en CSS px (Engine::render() lo hila desde su
+        // Page\PaperSize configurado, $this->paper->widthPx()/heightPx()) — vw/vh resuelven
+        // contra ESTE valor (el PAPER box, adjudicado -- ver Css\Value\LengthUnit), threadeado
+        // hasta ComputedStyle::compute() exactamente igual que $remBase (capturado una vez por
+        // resolve(), reenviado a cada compute() del árbol, ver resolveRoot()/resolveElement()).
+        private readonly float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX,
+        private readonly float $pageHeightPx = self::DEFAULT_PAGE_HEIGHT_PX,
     ) {
         $this->declarationParser = new DeclarationParser();
     }
@@ -109,9 +125,11 @@ final class StyleResolver
             $declarations['font-size'] ?? null,
             $syntheticParent->fontSizePx,
             self::INITIAL_FONT_SIZE_PX,
+            $this->pageWidthPx,
+            $this->pageHeightPx,
         );
         $declarations['font-size'] = Length::px($remBase);
-        $style = ComputedStyle::compute($declarations, $syntheticParent, $root->tagName, $remBase, $customProperties, $this->warnings);
+        $style = ComputedStyle::compute($declarations, $syntheticParent, $root->tagName, $remBase, $customProperties, $this->warnings, $this->pageWidthPx, $this->pageHeightPx);
         $map->set($root, $style);
         for ($child = $root->firstElementChild; $child !== null; $child = $child->nextElementSibling) {
             $this->resolveElement($child, $style, $map, $remBase);
@@ -121,7 +139,7 @@ final class StyleResolver
     private function resolveElement(\Dom\Element $element, ComputedStyle $parent, StyleMap $map, float $remBase): void
     {
         [$declarations, $customProperties] = $this->matchedDeclarationsAndCustomProperties($element, $parent->customProperties);
-        $style = ComputedStyle::compute($declarations, $parent, $element->tagName, $remBase, $customProperties, $this->warnings);
+        $style = ComputedStyle::compute($declarations, $parent, $element->tagName, $remBase, $customProperties, $this->warnings, $this->pageWidthPx, $this->pageHeightPx);
         $map->set($element, $style);
         for ($child = $element->firstElementChild; $child !== null; $child = $child->nextElementSibling) {
             $this->resolveElement($child, $style, $map, $remBase);

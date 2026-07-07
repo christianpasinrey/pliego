@@ -35,6 +35,25 @@ it('keeps percent symbolic', function () {
     expect($css?->value)->toBe(150.0);
 });
 
+// --- M10-T1 (css-values-4 §5.1.1): vw/vh join em/rem/% as symbolic units, resolved at
+// computed-value time against the page's own CSS-px size (Style\ComputedStyle), never here. ---
+
+it('keeps vw symbolic', function () {
+    $css = CssLength::fromCss('1.5vw');
+    expect($css?->unit)->toBe(LengthUnit::Vw);
+    expect($css?->value)->toBe(1.5);
+});
+
+it('keeps vh symbolic', function () {
+    $css = CssLength::fromCss('100vh');
+    expect($css?->unit)->toBe(LengthUnit::Vh);
+    expect($css?->value)->toBe(100.0);
+});
+
+it('parses a negative vw', function () {
+    expect(CssLength::fromCss('-2vw')?->value)->toBe(-2.0);
+});
+
 it('folds 1in to exactly 96px at parse time', function () {
     $css = CssLength::fromCss('1in');
     expect($css?->unit)->toBe(LengthUnit::Px);
@@ -66,7 +85,9 @@ it('handles negative values across units', function () {
 
 it('returns null for garbage or unsupported units', function () {
     expect(CssLength::fromCss('auto'))->toBeNull();
-    expect(CssLength::fromCss('2vh'))->toBeNull();
+    // M10-T1: vh is now supported (see 'keeps vh symbolic' above) -- 'ch' (character unit) takes
+    // over as the still-unsupported-unit example.
+    expect(CssLength::fromCss('2ch'))->toBeNull();
     expect(CssLength::fromCss(''))->toBeNull();
 });
 

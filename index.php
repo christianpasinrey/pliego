@@ -258,6 +258,134 @@ $bootstrapSampleHtml = <<<'HTML'
 HTML;
 
 $bootstrapSampleCss = '';
+
+// M10-T4: the "Ejemplo Tailwind" sample -- unlike Bootstrap, there is NO Engine::tailwindPreset()
+// (adjudicated against, see README's "Tailwind" section and .superpowers/sdd/m10-task-4-report.md
+// for the full reasoning): Tailwind v4 is per-project JIT output, no single canonical CSS file
+// exists to vendor as a preset asset. So this sample's CSS is a SLIM, hand-curated slice of the
+// REAL vendored build (tests/Fixtures/tailwind/tailwind-output.css, v4.3.2, MIT) -- every
+// selector/value below copied VERBATIM from that file, trimmed to just the classes this sample's
+// HTML actually uses (plus the theme vars / --tw-* custom-property fallbacks those classes
+// depend on) -- demonstrating the documented "generate with the CLI, paste into ->stylesheet()"
+// workflow without the playground shelling out to npx itself.
+$tailwindSampleHtml = <<<'HTML'
+<body>
+  <div class="p-6 mb-3 rounded-lg bg-slate-50 shadow-md">
+    <p class="mb-2 text-sm font-bold tracking-wide text-slate-700">TAILWIND SAMPLE</p>
+    <h1 class="mb-3 text-2xl font-bold text-slate-900">Invoice #1042</h1>
+    <p class="text-base text-slate-700 leading-normal">Bring your own Tailwind build: this CSS is a slim, hand-curated slice of a real npx @tailwindcss/cli output, pasted straight into stylesheet(). No CLI runs inside pliego -- see the README's "Tailwind" section for the full workflow and its honest gaps. Variant classes (hover:/sm:/odd: etc.) don't apply (CSS nesting isn't supported); fractions like w-1/2 fail similarly (same escaped-character parsing gap); grid is unsupported; the all-sides border shorthand this sample deliberately avoids is unsupported too.</p>
+    <div class="flex items-center justify-between gap-4 mb-2">
+      <span class="p-4 rounded-md bg-blue-500 text-white font-bold text-sm">Pay now</span>
+      <span class="p-4 rounded-md bg-slate-100 text-slate-700 text-sm">Details</span>
+    </div>
+  </div>
+
+  <table class="w-full">
+    <thead>
+      <tr class="bg-slate-100">
+        <th class="p-2 text-left text-sm font-bold text-slate-900">#</th>
+        <th class="p-2 text-left text-sm font-bold text-slate-900">Item</th>
+        <th class="p-2 text-left text-sm font-bold text-slate-900">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="p-2 text-sm text-slate-700">1</td>
+        <td class="p-2 text-sm text-slate-700">Consulting</td>
+        <td class="p-2 text-sm text-slate-700">296,33 &euro;</td>
+      </tr>
+      <tr class="bg-slate-50">
+        <td class="p-2 text-sm text-slate-700">2</td>
+        <td class="p-2 text-sm text-slate-700">Support plan</td>
+        <td class="p-2 text-sm text-slate-700">120,00 &euro;</td>
+      </tr>
+    </tbody>
+  </table>
+</body>
+HTML;
+
+$tailwindSampleCss = <<<'CSS'
+/* Slim curated slice of tests/Fixtures/tailwind/tailwind-output.css (real Tailwind v4.3.2 CLI
+   build output, MIT) -- selectors/values copied verbatim, trimmed to this sample's own classes.
+   ONE real, pre-existing engine gap (already documented in the README's "Tailwind" section and
+   audited in tests/EndToEnd/TailwindIngestionTest.php) is deliberately worked around here rather
+   than demoed broken: the all-sides `border-width`/`border-style`/`border-color` shorthand
+   Tailwind's plain `.border`/`.border-{color}` utilities emit is unsupported (only the 4-part
+   per-side `border-{side}-{width,style,color}` longhands are), so this sample uses
+   shadow/background for visual definition instead of borders. `line-height` via a bare-number
+   calc() (`--text-sm--line-height: calc(1.25 / .875)`, Tailwind's real per-size ratio) is FIXED
+   as of M10-T5 (`CalcParser::parseNumberOrLength()`, see the README's "Tailwind" section) -- no
+   longer a gap this sample needs to avoid; its --text-* vars simply were never revisited to add
+   the paired --text-*--line-height companion back in, not because it would fail. */
+@layer theme, utilities;
+@layer theme {
+  :root {
+    --color-blue-500: oklch(62.3% 0.214 259.815);
+    --color-slate-50: oklch(98.4% 0.003 247.858);
+    --color-slate-100: oklch(96.8% 0.007 247.896);
+    --color-slate-700: oklch(37.2% 0.044 257.287);
+    --color-slate-900: oklch(20.8% 0.042 265.755);
+    --color-white: #fff;
+    --spacing: 0.25rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-2xl: 1.5rem;
+    --font-weight-bold: 700;
+    --tracking-wide: 0.025em;
+    --leading-normal: 1.5;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+  }
+}
+/* Real Tailwind v4 pins its --tw-shadow-* custom properties via @property (dropped by this
+   engine, one aggregated warning) with an @supports fallback block for browsers without
+   @property support (tailwind-output.css lines 983-1030) -- trimmed here to only the props
+   .shadow-md below actually consumes, and to the `*` selector alone (the real block's
+   `::before`/`::after`/`::backdrop` siblings are pseudo-elements this engine's SelectorParser
+   doesn't implement -- see README -- keeping them here would just be three guaranteed
+   invalid-selector warnings for no benefit, since this sample has no ::before/::after content). */
+@supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
+  * {
+    --tw-shadow: 0 0 #0000;
+    --tw-shadow-color: initial;
+    --tw-inset-shadow: 0 0 #0000;
+    --tw-inset-ring-shadow: 0 0 #0000;
+    --tw-ring-shadow: 0 0 #0000;
+    --tw-ring-offset-shadow: 0 0 #0000;
+  }
+}
+@layer utilities {
+  .mb-2 { margin-bottom: calc(var(--spacing) * 2); }
+  .mb-3 { margin-bottom: calc(var(--spacing) * 3); }
+  .flex { display: flex; }
+  .items-center { align-items: center; }
+  .justify-between { justify-content: space-between; }
+  .gap-4 { gap: calc(var(--spacing) * 4); }
+  .w-full { width: 100%; }
+  .rounded-md { border-radius: var(--radius-md); }
+  .rounded-lg { border-radius: var(--radius-lg); }
+  .bg-blue-500 { background-color: var(--color-blue-500); }
+  .bg-slate-50 { background-color: var(--color-slate-50); }
+  .bg-slate-100 { background-color: var(--color-slate-100); }
+  .p-2 { padding: calc(var(--spacing) * 2); }
+  .p-4 { padding: calc(var(--spacing) * 4); }
+  .p-6 { padding: calc(var(--spacing) * 6); }
+  .text-sm { font-size: var(--text-sm); }
+  .text-base { font-size: var(--text-base); }
+  .text-2xl { font-size: var(--text-2xl); }
+  .text-left { text-align: left; }
+  .font-bold { --tw-font-weight: var(--font-weight-bold); font-weight: var(--font-weight-bold); }
+  .tracking-wide { --tw-tracking: var(--tracking-wide); letter-spacing: var(--tracking-wide); }
+  .leading-normal { --tw-leading: var(--leading-normal); line-height: var(--leading-normal); }
+  .text-white { color: var(--color-white); }
+  .text-slate-700 { color: var(--color-slate-700); }
+  .text-slate-900 { color: var(--color-slate-900); }
+  .shadow-md {
+    --tw-shadow: 0 4px 6px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 2px 4px -2px var(--tw-shadow-color, rgb(0 0 0 / 0.1));
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+  }
+}
+CSS;
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -326,6 +454,7 @@ $bootstrapSampleCss = '';
       <button id="btn-download" class="secondary" type="button">Descargar</button>
       <button id="btn-sample" class="secondary" type="button">Ejemplo</button>
       <button id="btn-sample-bootstrap" class="secondary" type="button">Ejemplo Bootstrap</button>
+      <button id="btn-sample-tailwind" class="secondary" type="button">Ejemplo Tailwind</button>
       <label class="preset-toggle"><input type="checkbox" id="chk-bootstrap"> Bootstrap preset</label>
       <span class="stats" id="stats"></span>
     </div>
@@ -358,6 +487,10 @@ $bootstrapSampleCss = '';
   const SAMPLES = {
     default: { html: <?= json_encode($sampleHtml, JSON_UNESCAPED_UNICODE) ?>, css: <?= json_encode($sampleCss, JSON_UNESCAPED_UNICODE) ?>, bootstrap: false },
     bootstrap: { html: <?= json_encode($bootstrapSampleHtml, JSON_UNESCAPED_UNICODE) ?>, css: <?= json_encode($bootstrapSampleCss, JSON_UNESCAPED_UNICODE) ?>, bootstrap: true },
+    // M10-T4: no preset flag exists for Tailwind (see README's "Tailwind" section) -- this sample
+    // always renders via Engine::make(), its CSS is the curated slice defined above, so
+    // "bootstrap: false" here just means "leave the Bootstrap preset checkbox unchecked".
+    tailwind: { html: <?= json_encode($tailwindSampleHtml, JSON_UNESCAPED_UNICODE) ?>, css: <?= json_encode($tailwindSampleCss, JSON_UNESCAPED_UNICODE) ?>, bootstrap: false },
   };
   const chkBootstrap = document.getElementById('chk-bootstrap');
   function loadSample(name) {
@@ -368,6 +501,7 @@ $bootstrapSampleCss = '';
   }
   document.getElementById('btn-sample').addEventListener('click', () => loadSample('default'));
   document.getElementById('btn-sample-bootstrap').addEventListener('click', () => loadSample('bootstrap'));
+  document.getElementById('btn-sample-tailwind').addEventListener('click', () => loadSample('tailwind'));
 
   const tabs = { html: document.getElementById('tab-html'), css: document.getElementById('tab-css') };
   const wraps = { html: document.getElementById('wrap-html'), css: document.getElementById('wrap-css') };

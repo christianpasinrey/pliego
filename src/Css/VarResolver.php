@@ -123,6 +123,34 @@ final class VarResolver
             $this->warnings[] = "Unknown custom property: $name";
             return null;
         }
+        // M10-T1 finding fix (css-variables-1 §7.3, css-cascade-4 §7.3): `--x: initial` is the
+        // CSS-wide keyword `initial`, which sets a custom property to the GUARANTEED-INVALID
+        // value — NOT the literal three-letter string "initial". A var() reference to it must be
+        // treated exactly like a reference to an unknown/cyclic custom property: engage the
+        // fallback if present, else IACVT. Before this check, the literal text "initial" won
+        // substitution and flowed into whatever property consumed it (e.g. Bootstrap's own
+        // `.table` reset, `--bs-table-bg-state: initial` consumed via `var(--bs-table-bg-state,
+        // var(--bs-table-bg-type, var(--bs-table-accent-bg)))`), producing bogus values like
+        // `box-shadow: inset 0 0 0 9999px initial` instead of engaging the real fallback chain.
+        //
+        // Adjudicated scope for the OTHER three CSS-wide keywords on a custom property (not
+        // exercised by any real sheet in this milestone, so left undriven/untested rather than
+        // guessed at): `inherit` is already the DEFAULT behavior of custom properties (they always
+        // inherit unless re-declared — StyleResolver merges parentCustomProperties before
+        // ownCustomProperties, see matchedDeclarationsAndCustomProperties()), so `--x: inherit`
+        // only diverges from today's behavior in the edge case of an element re-asserting it after
+        // a MORE specific same-element rule already overrode --x with something else — a real but
+        // rare pattern, deferred. `unset` is defined as `inherit` for custom properties specifically
+        // (they are always inherited-type per spec), same deferral. `revert` would need cascade-
+        // origin tracking this engine doesn't have; treating it as `initial` (this same GIV path)
+        // is the pragmatic approximation, deferred until a real sheet drives it.
+        if ($this->isCssWideInitialKeyword($this->customProperties[$name])) {
+            if ($fallback !== null) {
+                return $this->substituteText($fallback, $stack);
+            }
+            $this->warnings[] = "Custom property $name is the guaranteed-invalid value (set to the CSS-wide keyword 'initial')";
+            return null;
+        }
         $resolved = $this->substituteText($this->customProperties[$name], [...$stack, $name]);
         if ($resolved === null) {
             return $fallback !== null ? $this->substituteText($fallback, $stack) : null;
@@ -149,6 +177,14 @@ final class VarResolver
             }
         }
         return [$inner, null];
+    }
+
+    /** css-cascade-4 §7.3: the CSS-wide keyword `initial`, matched case-insensitively with
+     * surrounding whitespace trimmed (same tolerance css-syntax-3 tokenizing already affords any
+     * other bare keyword token, e.g. `transparent`/`inherit` elsewhere in this codebase). */
+    private function isCssWideInitialKeyword(string $rawValue): bool
+    {
+        return strtolower(trim($rawValue)) === 'initial';
     }
 
     private function findMatchingParen(string $text, int $openParenIndex): ?int

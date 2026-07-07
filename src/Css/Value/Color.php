@@ -246,7 +246,179 @@ final readonly class Color
         if (str_starts_with($value, 'hsl')) {
             return self::parseHslFunction($value);
         }
+        // M10-T3 (css-color-4 §10, Tailwind v4's default color function -- every generated
+        // theme color, e.g. `--color-blue-500: oklch(62.3% 0.214 259.815)`, is emitted as oklch()):
+        // see parseOklchFunction()/oklchToLinearSrgb() for the full conversion pipeline.
+        if (str_starts_with($value, 'oklch(')) {
+            return self::parseOklchFunction($value);
+        }
+        // M10-T3 (css-color-4 §16, reduced): color-mix() is NOT actually mixed -- adjudicated
+        // (RESTRICCIONES GLOBALES M10, brief M10-T3) to fall back to its FIRST color argument
+        // verbatim, with a warning raised by the caller (DeclarationParser::parse(), which is the
+        // only place with a WarningCollector -- Color itself has none, see class docblock). This
+        // branch only RESOLVES the fallback color; it never warns by itself, so calling
+        // Color::fromCss('color-mix(...)') directly (e.g. from a unit test) is silent by design.
+        if (str_starts_with($value, 'color-mix(')) {
+            return self::parseColorMixFirstColor($value);
+        }
         return null;
+    }
+
+    /**
+     * css-color-4 §16: `color-mix(in <color-space> [<hue-method> hue]?, <color> <percent>?, <color>
+     * <percent>?)`. Reduced support (brief M10-T3): no actual channel mixing math, no color-space
+     * conversion, no hue-interpolation handling -- just extracts the FIRST `<color>` argument
+     * (percentage suffix stripped, if present) and parses THAT through the normal fromCss()
+     * dispatch. A depth-aware comma split (splitTopLevelCommas()) is used instead of a naive
+     * explode(',', ...) because a color argument can itself be a comma-syntax function
+     * (`color-mix(in srgb, rgb(0, 0, 0) 50%, white)`) -- exploding on every comma would cut
+     * `rgb(0` off from its own arguments.
+     */
+    private static function parseColorMixFirstColor(string $value): ?self
+    {
+        if (preg_match('/^color-mix\(\s*in\s+[a-z0-9-]+(?:\s+[a-z]+\s+hue)?\s*,\s*(.*)\)$/is', $value, $m) !== 1) {
+            return null;
+        }
+        $args = self::splitTopLevelCommas($m[1]);
+        if ($args === [] || $args[0] === '') {
+            return null;
+        }
+        // Strip a trailing "<percentage>" mix-weight off the first color argument, e.g.
+        // "currentcolor 50%" -> "currentcolor". A color-mix() argument can ALSO lead with the
+        // percentage ("50% currentcolor", css-color-4 §16.1) -- reduced scope does not support
+        // that ordering, it simply fails to strip and the subsequent fromCss() call rejects the
+        // still-percentage-prefixed token (falls through to the generic "Unsupported color"
+        // warning at the call site, same honest degradation as any other unparseable value).
+        $first = preg_replace('/\s+-?\d+(?:\.\d+)?%$/', '', $args[0]) ?? $args[0];
+        return self::fromCss(trim($first));
+    }
+
+    /**
+     * Paren-depth-aware top-level comma split, shared by parseColorMixFirstColor() -- a plain
+     * explode(',', ...) would incorrectly split INSIDE a nested color function's own comma-syntax
+     * arguments (e.g. `rgb(0, 0, 0)` inside a color-mix() argument list).
+     *
+     * @return list<string>
+     */
+    private static function splitTopLevelCommas(string $value): array
+    {
+        $parts = [];
+        $depth = 0;
+        $current = '';
+        for ($i = 0, $length = strlen($value); $i < $length; $i++) {
+            $char = $value[$i];
+            if ($char === '(') {
+                $depth++;
+            } elseif ($char === ')') {
+                $depth--;
+            }
+            if ($char === ',' && $depth === 0) {
+                $parts[] = trim($current);
+                $current = '';
+                continue;
+            }
+            $current .= $char;
+        }
+        $parts[] = trim($current);
+        return $parts;
+    }
+
+    /**
+     * css-color-4 §10 (oklch()): `L C H [/ A]` -- per the M10-T3 brief's reduced contract, L
+     * accepts either a percentage (0%-100%) or a bare number (0-1, both map to the same [0,1]
+     * lightness range), C is a bare number only (NOT a percentage of the 0.4 reference range that
+     * the full spec also allows -- Tailwind's generated output never uses %-chroma, so this is a
+     * deliberate narrowing, not an oversight), H is a number in degrees (an optional trailing
+     * "deg" is accepted and ignored -- bare numbers are degrees by css-values-4 §6.1's <angle>
+     * default for this context). Alpha, if present after '/', follows the same % or 0-1 rule as
+     * every other color function in this class.
+     */
+    private static function parseOklchFunction(string $value): ?self
+    {
+        if (preg_match(
+            '/^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)\s+([\d.]+)(?:deg)?\s*(?:\/\s*([\d.]+)(%)?\s*)?\)$/i',
+            $value,
+            $m,
+        ) !== 1) {
+            return null;
+        }
+        $lightness = (float) $m[1];
+        if ($m[2] === '%') {
+            $lightness /= 100.0;
+        }
+        $chroma = (float) $m[3];
+        $hueDegrees = (float) $m[4];
+        $alpha = null;
+        if (($m[5] ?? '') !== '') {
+            $alphaRaw = (float) $m[5];
+            $alpha = max(0.0, min(1.0, ($m[6] ?? '') === '%' ? $alphaRaw / 100.0 : $alphaRaw));
+        }
+        [$r, $g, $b] = self::oklchToSrgb($lightness, $chroma, $hueDegrees);
+        return new self($r, $g, $b, $alpha);
+    }
+
+    /**
+     * css-color-4 §10-12, the FULL conversion pipeline (OKLCH -> OKLab -> LMS' -> LMS -> linear
+     * sRGB -> gamma-encoded sRGB -> clamped 8-bit), matrices copied verbatim from the spec's own
+     * sample conversion code (Björn Ottosson's original OKLab reference matrices, the same ones
+     * colorjs.io/culori use — cross-checked by hand against the `culori` npm package, MIT, for
+     * every value in ColorTest.php's oklch() table before pinning: e.g. oklch(62.3% 0.214
+     * 259.815), Tailwind v4's OWN `--color-blue-500`, converts to #2b7fff, NOT the old Tailwind v3
+     * hex #3b82f6 the M10-T3 brief assumed -- v4's palette was recomputed directly in OKLCH, it is
+     * only VISUALLY close to v3's sRGB hex table, not byte-identical; see the M10-T3 report for
+     * the full by-hand matrix derivation that caught this and the independent-library
+     * cross-check).
+     *
+     * Gamut clamp (brief's adjudicated "simple channel clamp, documented vs proper gamut
+     * mapping"): an out-of-sRGB-gamut OKLCH color (high chroma) is clamped by the FINAL
+     * round()+max()/min() to [0,255] per channel independently -- NOT the spec's alternative
+     * binary-search-in-OKLCH-chroma "CSS gamut mapping algorithm" (css-color-4 §13.2), which
+     * preserves hue/lightness more faithfully for way-out-of-gamut colors at the cost of a
+     * per-color iterative search. A plain channel clamp can shift perceived hue for extreme
+     * inputs; Tailwind's own palette (verified against every scale referenced by the fixture)
+     * never produces one, so this simplification is invisible for the actual M10-T3 use case.
+     *
+     * @return array{int, int, int}
+     */
+    private static function oklchToSrgb(float $lightness, float $chroma, float $hueDegrees): array
+    {
+        $hueRadians = deg2rad($hueDegrees);
+        $a = $chroma * cos($hueRadians);
+        $b = $chroma * sin($hueRadians);
+
+        $lPrime = $lightness + 0.3963377774 * $a + 0.2158037573 * $b;
+        $mPrime = $lightness - 0.1055613458 * $a - 0.0638541728 * $b;
+        $sPrime = $lightness - 0.0894841775 * $a - 1.2914855480 * $b;
+
+        $l = $lPrime ** 3;
+        $m = $mPrime ** 3;
+        $s = $sPrime ** 3;
+
+        $rLinear = 4.0767416621 * $l - 3.3077115913 * $m + 0.2309699292 * $s;
+        $gLinear = -1.2684380046 * $l + 2.6097574011 * $m - 0.3413193965 * $s;
+        $bLinear = -0.0041960863 * $l - 0.7034186147 * $m + 1.7076147010 * $s;
+
+        return [
+            self::clampGammaChannel($rLinear),
+            self::clampGammaChannel($gLinear),
+            self::clampGammaChannel($bLinear),
+        ];
+    }
+
+    /**
+     * css-color-4 §12.2 (sRGB transfer function, the standard piecewise gamma encoding), applied
+     * to ONE linear-light channel and immediately quantized to a clamped 8-bit int -- the "simple
+     * channel clamp" gamut strategy documented on oklchToSrgb() happens exactly HERE, at the
+     * max(0, min(255, ...)) boundary.
+     */
+    private static function clampGammaChannel(float $linear): int
+    {
+        $sign = $linear < 0.0 ? -1.0 : 1.0;
+        $magnitude = abs($linear);
+        $encoded = $magnitude <= 0.0031308
+            ? 12.92 * $magnitude
+            : 1.055 * ($magnitude ** (1.0 / 2.4)) - 0.055;
+        return max(0, min(255, (int) round($sign * $encoded * 255.0)));
     }
 
     /**

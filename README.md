@@ -4,14 +4,41 @@ Pure-PHP HTML/CSS to PDF rendering engine. No binaries, no Node, no headless
 browser — the full pipeline (HTML parsing, CSS cascade, box tree, block
 layout, inline layout, pagination, PDF writing) runs as plain PHP code.
 
-> **Not published to Packagist yet.** M9 makes pliego genuinely usable for
+> **Not published to Packagist yet.** M9 made pliego genuinely usable for
 > real-world **reports, invoices and transactional emails with a Bootstrap
-> look** — `Engine::bootstrap()` renders real, unmodified upstream Bootstrap
-> 5.3.6 markup with an honestly-measured, Chrome-verified visual fidelity
+> look**; M10 adds the CSS a real, unmodified **Tailwind v4** build needs
+> (`oklch()`, `@layer`, viewport units, real width media queries) on top of
+> that — both `Engine::bootstrap()` and a hand-fed Tailwind build render with
+> an honestly-measured, Chrome-verified visual fidelity across **8** fixtures
 > (see [Oracle](#oracle-chrome-as-ground-truth) below). The package is still
 > not installable via Composer from a registry at this point.
 
-## Status: M9 — Real Bootstrap ingestion (vendored preset, tiling patterns, soft-mask gradient alpha, Chrome oracle)
+## Status: M10 — Tailwind ingestion, viewport units, real media queries, two general layout-fidelity fixes
+
+M10 does for **Tailwind v4** what M9 did for Bootstrap: it ingests a real,
+pinned, unmodified upstream build end to end, rather than widening the
+CSS/box-model surface further. Getting there required two prerequisites
+Tailwind's own output leans on hard — CSS `vw`/`vh` **viewport units**
+(`calc(1.375rem + 1.5vw)`-style fluid Bootstrap headings, same fix) and real
+`min-width`/`max-width` **width media query evaluation** against the page's
+own CSS-px width (Bootstrap's responsive grid breakpoints, e.g.
+`.row-cols-md-3`, now genuinely apply on a printed A4 page instead of being
+uniformly skipped) — plus `@layer` unwrapping and an `oklch()`→sRGB
+conversion pipeline for Tailwind's own default color palette. Investigating
+*why* those two prerequisites moved the Chrome-oracle numbers less than
+expected surfaced **two general, milestone-wide layout bugs**, not
+Bootstrap- or Tailwind-specific ones: adjacent inline elements inside a
+`display: flex` container used to merge into one shared flex item instead of
+two (`Box\BoxTreeBuilder`), and a bare-number `line-height` (`body {
+line-height: 1.5 }`) used to inherit its ALREADY-RESOLVED px value instead of
+being re-derived against each descendant's own font-size
+(`Style\ComputedStyle`) — both fixed, both general (see
+[Supported as of M10](#supported-as-of-m10) below and the fidelity table's
+own deltas). A from-scratch **8th Chrome-oracle fixture**, a full real
+Tailwind page, measures the result the same honest way M9's 7 Bootstrap
+fixtures already do. See [Roadmap](#roadmap) for where **M11** (a CSS→PHP
+compiler, Flate compression, hard limits, hyperlinks, first Packagist
+release) picks up from here.
 
 M0 proved the pipeline end to end on a deliberately small subset of
 HTML/CSS; M1 replaced its flattened, single-face, single-line-height text
@@ -67,9 +94,11 @@ insensitive family lookup) — everything a Bootstrap-derived `.card`/`.btn`/
 `.badge`/`.display-*` document needs to look, not just lay out, like the
 real thing. M9 closes the loop opened by M6-M8's hand-picked "Bootstrap-
 flavored" CSS: it ingests the **real, unmodified, vendored upstream
-`bootstrap.min.css` (5.3.6)** end to end (895 warnings from parsing the
-232KB sheet alone, every one categorized and pinned as a golden — a
-complete, honest partition, not a sample), exposes it as
+`bootstrap.min.css` (5.3.6)** end to end (1066 warnings from parsing the
+232KB sheet alone as of M10-T2 — 870 as of M10-T1, 895 as of M9, before
+`vw`/`vh`, `:nth-of-type`/`:nth-last-of-type` and width `@media` queries
+gained real support, see below — every one categorized and pinned as a
+golden — a complete, honest partition, not a sample), exposes it as
 `Engine::bootstrap()` (a preset that stacks author-order before your own
 `->stylesheet()` calls, see [Presets](#presets)), adds the two PDF primitives
 a real striped/gradiented Bootstrap page actually needs — `PatternType 1`
@@ -87,6 +116,112 @@ still not a general-purpose renderer — `:hover`-style dynamic pseudo-classes
 `border-image`, and the rest of tables/flex-to-spec are the milestones ahead
 (see [Roadmap](#roadmap)).
 
+### Supported as of M10
+
+- **Viewport units (`vw`/`vh`)** (css-values-4 §5.1.1): resolve against the
+  **paper box** (`Page\PaperSize::widthPx()`/`heightPx()`, A4 by default),
+  not the content box — threaded from `Engine::render()` into
+  `StyleResolver`/`ComputedStyle` (a trailing-optional param, same pattern
+  `$remBase` already used). Bare (`50vw`) and inside `calc()`
+  (`calc(1.375rem + 1.5vw)`, Bootstrap's own fluid heading sizes) both work;
+  resolved **eagerly** at compute time, unlike `%` (deferred), since the page
+  size is known statically for the whole render — there is no "viewport
+  resize" event in a paginated PDF.
+- **Width media queries** (css-mediaqueries-4, reduced): `min-width`/
+  `max-width`/`width` inside `@media` are evaluated as REAL numeric
+  comparisons against the page's own CSS-px width (`Css\MediaQueryEvaluator`)
+  instead of being uniformly skipped — `and` combinators, comma-separated
+  lists (OR), and `em`/`rem`/px units all work (rem/em resolve against a
+  fixed 16px root; media-feature evaluation happens before any cascade
+  exists, so there is no author root font-size yet). `screen` never applies
+  (this is a print/paginated engine); any other feature (`hover`,
+  `prefers-reduced-motion`, `prefers-color-scheme`, …) stays a conservative
+  skip. Real, practical effect: Bootstrap's own responsive grid
+  (`.row-cols-md-3`, `.d-md-*`, …) now genuinely reacts to the page's A4
+  width (793.70px CSS px) exactly the way it would react to a browser window
+  that size — 30 of Bootstrap's 108 non-print/all `@media` blocks now apply.
+- **Tailwind v4 ingestion** — the M10 headline feature, documented in full in
+  its own [Tailwind](#tailwind) section below: a real, pinned Tailwind
+  v4.3.2 CLI build (MIT, vendored as a golden test fixture, never
+  re-executed) ingested end to end — `@layer` unwrapping (css-cascade-5,
+  reduced — theme/base/components/utilities in real cascade rank order) and
+  `oklch()`→sRGB color conversion (css-color-4, the full OKLCH→OKLab→
+  XYZ-D65→linear-sRGB→sRGB matrix chain, hand-verified against the spec and
+  cross-checked with the `culori` npm library — Tailwind v4's entire default
+  palette is defined in OKLCH, not the old v3 sRGB hex values) are the two
+  new CSS primitives that build leans on; there is deliberately **no**
+  `Engine::tailwind()` preset (see the Tailwind section's own "Why no
+  preflight preset" for the full adjudication).
+- **Custom-property `initial` fix**: a custom property explicitly set to the
+  CSS-wide keyword `initial` (css-variables-1 §7.3 — e.g. real Bootstrap's
+  own `.table` reset, `--bs-table-bg-type: initial`) now correctly engages
+  the `var()` fallback chain (`Css\VarResolver`) instead of substituting the
+  literal string `"initial"` into the color/box-shadow it
+  feeds — a real correctness fix, not Tailwind-specific (found auditing
+  Bootstrap's own `.table-striped` mechanism, M10-T1).
+- **`line-height` accepting a bare-number `calc()`**: Tailwind v4 emits every
+  `--text-*--line-height` theme variable as a bare-number RATIO wrapped in
+  `calc()` (e.g. `calc(1.25 / .875)`, since it computes line-height as a
+  multiplier of its own font-size variable rather than a pre-divided
+  number) — `Css\Value\CalcParser::parseNumberOrLength()` (a `line-height`-
+  only entry point) now accepts a `calc()` that folds to a bare NUMBER
+  (css-inline-3 §5.2's own unitless multiplier), becoming the SAME
+  line-height multiplier a literal `line-height: 1.5` already produces.
+  Every OTHER property (`width`, `padding`, `font-size`, …) still rejects a
+  bare-number `calc()` with the pre-existing warning, unchanged — this is a
+  `line-height`-only leniency, not a general `calc()` relaxation. (Found and
+  fixed mid-milestone, M10-T5 — the fix dropped oracle fixture 08's diff
+  3.6×, see the fidelity table below; it wasn't sub-pixel font noise, as
+  first assumed, but a genuine page-wide vertical drift from the WHOLE
+  `line-height` declaration being discarded on the bare-number rejection.)
+- **Two general layout-fidelity fixes** (found investigating fixture 07's
+  navbar, both apply everywhere — not Bootstrap-specific, not Tailwind-
+  specific):
+  - **Adjacent inline flex-item children.** Two adjacent `Display::Inline`
+    elements (e.g. Bootstrap's `.navbar-brand`/`.navbar-text`, both with
+    their own padding) sitting directly inside a `display: flex` container
+    used to merge into ONE shared anonymous flex item instead of two
+    separate ones (css-flexbox-1 §4 requires each in-flow child to become
+    its OWN flex item) — broke both cross-axis placement
+    (`justify-content: space-between` never saw two items to space apart)
+    and the container's auto height. Fixed in
+    `Box\BoxTreeBuilder::collectChildren()` (a direct `Display::Inline`
+    child of a flex container is now treated like a block child, never
+    entering the inline-run coalescing path at all). `Display::InlineBlock`
+    direct children are deliberately left unchanged (still coalesce),
+    narrower documented scope.
+  - **Bare-number `line-height` inheritance.** A `line-height` declared as a
+    bare `<number>` (css-inline-3 §5.2 — e.g. Bootstrap's own
+    `body { line-height: 1.5 }`) used to inherit its ALREADY-RESOLVED px
+    value straight down the tree, instead of inheriting the NUMBER and
+    re-deriving `number × ownFontSizePx` at each descendant with a
+    different own font-size — pervasive in real Bootstrap (`.small`,
+    `.card-text`, `.text-muted`, most text utilities declare only
+    `font-size`, never their own `line-height`). Fixed via
+    `Style\ComputedStyle::$lineHeightMultiplier` (`null` = "the current px
+    value is absolute, inherits unchanged"; a non-null float is the pending
+    multiplier a descendant with a different font-size must reapply).
+- **Excluded, with a warning** (never a silent drop): container queries
+  (`@container`, css-conditional-5 — extracted and dropped with ONE
+  aggregated warning, `Css\StylesheetParser`; **found and fixed this task**:
+  an unextracted `@container` used to silently swallow its own body AND
+  every rule that came AFTER it in the same stylesheet — real, silent,
+  document-wide data loss, not just "unsupported", see
+  `extractAtRuleBlocks()`'s own docblock), `:has()` (an unknown functional
+  pseudo-class — `SelectorParser` warns `"Unknown pseudo-class: :has"` and
+  it never matches, same treatment as any other unrecognized pseudo-class),
+  `color-mix()` (falls back to its first color argument, with a warning —
+  M10-T3), `oklab()`/`lab()`/`lch()` (`oklch()` alone is implemented — any
+  other css-color-4/5 color function still falls through to the generic
+  unsupported-color warning), `@property` (dropped with one aggregated
+  warning per stylesheet, same shape as `@container`/`@media`'s own skip
+  counts), and animations/transitions (out of scope for a paginated,
+  static-render PDF engine regardless of the property).
+- **Fidelity, measured**: the Chrome-oracle now covers **8** fixtures (was
+  7 as of M9) — see the [fidelity table](#fidelity-table-radical-transparency)
+  for the full, honest before/after per fixture, with each delta's root
+  cause named.
+
 ### Supported as of M9
 
 M9 doesn't widen the CSS/box-model surface the way M1-M7 did — it proves
@@ -102,20 +237,37 @@ used, and adds the couple of PDF primitives that stylesheet actually needs.
   same-specificity overrides win by cascade order alone, no `!important`
   needed. Full detail, including what it deliberately does **not** do (no
   JS, no sheet rewriting), in [Presets](#presets).
-- **Honest capability audit**: parsing the vendored sheet alone produces 895
-  warnings, every one bucketed by a regex-per-category classifier and pinned
-  as a golden snapshot with a `'other'`-must-be-empty safety net (i.e. a
-  *complete* partition, not a sample) — `@media` blocks (skipped as a single
-  aggregate warning, not one per block), unknown/unsupported pseudo-classes,
+- **Honest capability audit**: parsing the vendored sheet alone produces
+  1066 warnings (M10-T2; 870 as of M10-T1, 895 as of M9). M10-T1 removed 25
+  of the old 895 (`vw`/`vh` viewport units and `:nth-of-type`/
+  `:nth-last-of-type` gaining real support, css-values-4 §5.1.1 /
+  Selectors-4 §14.4: 9 "Unsupported length" + 15 "Invalid calc() expression"
+  for `vw`/`vh`, plus 1 "Pseudo-class not supported yet: :nth-of-type").
+  M10-T2 ADDS 196 (real `min-width`/`max-width` evaluation against the
+  page's own CSS-px width, `Css\MediaQueryEvaluator` — 30 of the sheet's
+  108 non-print/all `@media` blocks now genuinely apply at A4 width instead
+  of being uniformly skipped, e.g. Bootstrap's `.row-cols-md-3` responsive
+  grid; those 30 blocks' own real declarations surface 196 genuinely new
+  instances of already-documented gaps — `position: sticky`, `width: auto`,
+  `z-index`, `transform`, `margin: auto` shorthand — not new KINDS of gaps,
+  see `MediaQueryEvaluatorTest`/`BootstrapIngestionTest` for the exact
+  per-category breakdown), every one bucketed by a
+  regex-per-category classifier and pinned as a golden snapshot with a
+  `'other'`-must-be-empty safety net (i.e. a *complete* partition, not a
+  sample) — `@media` blocks that don't apply (skipped as a single aggregate
+  warning, not one per block), unknown/unsupported pseudo-classes,
   unsupported properties/keywords/lengths/colors, invalid `calc()`
-  expressions (mostly Bootstrap's own `vw`-based responsive type scale — see
-  [Oracle](#oracle-chrome-as-ground-truth) for the visible consequence of
-  that one). Rendering an actual page pushes the count higher still (944 for
-  the M9-T2 component showcase, 1175 for the full page used as oracle
-  fixture 07) as more declarations get resolved against real elements
-  (unresolved `var()` chains, atomic flex fragments taller than a page,
-  …) — this is the *whole point*: pliego tells you exactly what it didn't
-  understand instead of silently dropping it.
+  expressions. Rendering an actual page pushes the count higher still (1100
+  for the M9-T2 component showcase, 1240 for the full page used as oracle
+  fixture 07) as more
+  declarations get resolved against real elements (unresolved `var()`
+  chains, atomic flex fragments taller than a page, …) — this is the *whole
+  point*: pliego tells you exactly what it didn't understand instead of
+  silently dropping it. (M10-T1 finding fix: a custom property set to the
+  CSS-wide keyword `initial` — e.g. Bootstrap's own `.table` reset — now
+  correctly engages the `var()` fallback chain instead of substituting the
+  literal string `"initial"`, dropping 105/15 of those two counts
+  respectively; see `Css\VarResolver`.)
 - **`PatternType 1` tiling patterns** (ISO 32000-1 §8.7.3.3, `/PaintType 1`):
   `PdfWriter::registerTilingPattern()` registers a small tile as a pattern
   cell once; `PdfCanvas` then fills a border box with `/Pattern cs`/`/Pn
@@ -430,24 +582,30 @@ gradient-filled, shadowed `.card` still lays out through the exact same
     falls back to case-sensitive matching (one-time warning) — it is not
     actually honored.
   - **Pseudo-classes**: `:root`, `:first-child`, `:last-child`,
-    `:nth-child(An+B|odd|even)`, `:not(<single compound selector>)` (no
-    nesting, no comma-separated compounds inside `:not()`).
+    `:nth-child(An+B|odd|even)`, `:nth-of-type(An+B|odd|even)`,
+    `:nth-last-of-type(An+B|odd|even)` (M10-T1, Selectors-4 §14.4 — same
+    An+B machinery as `:nth-child`, counting position only among siblings
+    that share the element's own tag name), `:not(<single compound
+    selector>)` (no nesting, no comma-separated compounds inside `:not()`).
   - **Not supported, reported as a warning rather than silently ignored**:
     `:hover`/`:focus`/`:active`/`:visited`/`:link` (parsed for specificity,
     but permanently excluded from matching — dynamic states have no
     meaning in paged/print media, not a "not implemented yet" gap),
-    `:nth-of-type` and the rest of the `-of-type` family, and any unknown
-    pseudo-class. `::before`/`::after` and every other pseudo-*element*
-    aren't parsed at all (they need to generate boxes of their own — M7).
-- **Units** (css-values-3 §5-6): `em` (relative to the element's **own**
-  computed font-size — except in `font-size` itself, where css-values-3
-  §5.2 measures em/% against the **parent's** font-size to avoid a
-  self-referential circularity) and `rem` (always relative to the
-  **document root**'s computed font-size, however deeply nested the
+    `:first-of-type`/`:last-of-type`/`:only-of-type`/`:only-child`/`:empty`/
+    `:nth-last-child`, and any unknown pseudo-class. `::before`/`::after`
+    and every other pseudo-*element* aren't parsed at all (they need to
+    generate boxes of their own — M7).
+- **Units** (css-values-3 §5-6, css-values-4 §5.1.1): `em` (relative to the
+  element's **own** computed font-size — except in `font-size` itself,
+  where css-values-3 §5.2 measures em/% against the **parent's** font-size
+  to avoid a self-referential circularity) and `rem` (always relative to
+  the **document root**'s computed font-size, however deeply nested the
   element is — never the nearest ancestor). Physical units `pt`/`cm`/`mm`/
-  `in` fold to px at parse time (exact 96dpi factors). No viewport units
-  (`vh`/`vw`) — reported as an unsupported-unit warning like any other
-  unrecognized token.
+  `in` fold to px at parse time (exact 96dpi factors). `vw`/`vh` (M10-T1)
+  resolve against the **paper's own CSS-px size** (`Page\PaperSize`, e.g.
+  794×1123 for A4) — not a content box, and not a browser viewport (a
+  paginated engine has no such thing): the adjudicated equivalent, since a
+  browser's print viewport IS the full page.
 - **Custom properties and `calc()`** (css-variables-1, css-values-3 §8):
   `--name: value` declarations (inherited down the tree, resolved at
   compute time) and `var(--name, fallback)` with cycle detection (a cyclic
@@ -916,15 +1074,198 @@ What it does:
 What it does **not** do:
 
 - It doesn't add Bootstrap's JS (no interactivity exists in a PDF) or any
-  `:hover`/`:focus`/responsive breakpoint behavior — this engine targets a
-  single paged medium, so screen-only `@media` rules are dropped and dynamic
-  pseudo-classes are permanently excluded (see the M9 warning audit).
+  `:hover`/`:focus` behavior — dynamic pseudo-classes are permanently
+  excluded (see the M9 warning audit) and `screen`-typed `@media` rules
+  (and any feature this engine doesn't evaluate — `hover`,
+  `prefers-reduced-motion`, `prefers-color-scheme`, …) are dropped. Width
+  breakpoints (`min-width`/`max-width`/`width`, M10-T2) DO genuinely
+  evaluate, though, against the page's own CSS-px width (`Css\
+  MediaQueryEvaluator`) — the same width Chrome would use printing a page
+  of that size, no viewport/device emulation involved.
 - It doesn't rewrite or subset the vendored sheet — the file is the real,
-  unmodified upstream release; unsupported constructs (`:nth-of-type`, inset
-  `box-shadow`, `transform`, …) simply warn and get skipped, same as any CSS
-  you'd write by hand. `Engine::make()` (no preset) is completely unaffected —
-  never calling `->bootstrap()` renders byte-for-byte as before this feature
+  unmodified upstream release; unsupported constructs (inset `box-shadow`,
+  `transform`, …) simply warn and get skipped, same as any CSS you'd write
+  by hand. `Engine::make()` (no preset) is completely unaffected — never
+  calling `->bootstrap()` renders byte-for-byte as before this feature
   existed.
+
+## Tailwind
+
+There is **no `Engine::tailwind()`/`Engine::tailwindPreflight()`** — unlike
+Bootstrap, Tailwind gets no preset API at all, a deliberate M10-T4
+adjudication (full reasoning in `.superpowers/sdd/m10-task-4-report.md`).
+The short version: Bootstrap ships one authoritative `bootstrap.min.css`
+that's the same for every project, so vendoring it once is genuinely
+useful. Tailwind v4 doesn't work that way — every real build is
+**per-project JIT output**, containing only the utility classes *your own*
+HTML actually uses. There is no single canonical "Tailwind CSS" file to
+vendor; a copy of "a" build would just be one arbitrary sample page's worth
+of classes, useless for anyone else's markup.
+
+### The workflow: bring your own build
+
+1. Write HTML with Tailwind utility classes, same as any Tailwind project.
+2. Generate the CSS locally with the standalone CLI, pointed at your HTML:
+   ```
+   npm install -D tailwindcss @tailwindcss/cli
+   npx @tailwindcss/cli -i input.css -o output.css --content "path/to/your/*.html"
+   ```
+   (`input.css` needs only `@import "tailwindcss";` — Tailwind v4's entry
+   point, replacing v3's `@tailwind base/components/utilities;`.)
+3. Pass the generated CSS straight into `->stylesheet()`, same as any other
+   hand-written or third-party sheet:
+   ```php
+   use Pliego\Engine;
+
+   $css = file_get_contents('output.css');
+   $report = Engine::make()->stylesheet($css)->render($html)->save('out.pdf');
+   ```
+
+pliego never shells out to the CLI itself and never vendors a copy of
+Tailwind's CSS — no new runtime dependency, and nothing that can drift out
+of sync with whatever Tailwind version your own build actually used.
+
+### What genuinely works
+
+M10-T3 ingested a **real, pinned Tailwind v4.3.2 CLI build**
+(`tests/Fixtures/tailwind/tailwind-output.css`, MIT — generated once
+against a representative utilities page and vendored as a golden fixture,
+never re-run) end to end: 191 rules, 106 warnings across 17 categories
+(M10 final-review Finding B added `nesting-skipped`: +2 vs. the original
+104/16 — the css-nesting `&` guard below now correctly extracts and warns
+about the 2 nested `&:nth-child()` variants the vendored sheet uses,
+instead of one of them being silently swallowed by sabberworm with zero
+warning), a complete honest partition just like the Bootstrap audit.
+
+- Static utility classes: spacing (`p-*`/`m-*`/`gap-*`), flexbox (`flex`,
+  `flex-direction`, `flex-wrap`, `justify-*`, `items-*`), colors
+  (`bg-*`/`text-*`), typography (`text-*`/`font-*`/`tracking-*`/
+  `leading-*`), `rounded-*`, `shadow-*`, width/height.
+- `oklch()` colors — Tailwind v4's entire default palette is defined in
+  OKLCH, not sRGB hex; converted through the real css-color-4 matrix chain
+  (`Color::oklchToSrgb()`), hand-verified against the spec and
+  cross-checked with the `culori` npm library. **Not** the old Tailwind v3
+  hex values for the same class names (v4 recomputed its whole palette
+  directly in OKLCH for wider-gamut displays — only visually close to v3,
+  never byte-identical).
+- `@layer` (`theme`/`base`/`components`/`utilities`) — a real Tailwind v4
+  build wraps virtually everything in `@layer`; unwrapped here in cascade
+  rank order (css-cascade-5, reduced: no recursion into a nested `@layer`,
+  and layered `!important` doesn't invert cross-layer precedence per
+  §4.4 — one document-wide warning instead).
+- Hand-written `:nth-child(odd)`/`:nth-child(even)` CSS pseudo-classes
+  and CSS custom properties/`calc()` (Tailwind's entire spacing scale is
+  `calc(var(--spacing) * N)`). Note: Tailwind's own `odd:` and `even:`
+  **utilities** do **not** work — they compile to CSS nesting, which this
+  engine does not implement (see below).
+
+### What doesn't, and why
+
+- **Variant classes never apply**: `hover:`, `sm:`, `md:`, `dark:`,
+  `odd:`, `even:`, … all fail to match. Tailwind v4 compiles these to CSS
+  nesting rules (e.g., `.odd\:bg-white { &:nth-child(odd) {...} }`), which
+  this engine does not implement (css-nesting-1 is out of scope). The
+  escaped colon in the class name (`.odd\:bg-white`) is secondary; the
+  nesting itself is the primary reason the rule never matches. Static
+  (non-variant) utilities on the same element are unaffected.
+  sabberworm (the vendored CSS parser) mishandles `&` nesting on its own —
+  a **pre-existing gap** in the library, not something a pliego task
+  regressed — it returns an empty block for the nested rule **and, when
+  fed directly, silently drops the immediately following rule too**
+  (measured; not "all subsequent rules in the stylesheet", see M10 final
+  review's Finding B for the exact repro and count). M10 final-review
+  Finding B closes the silent-data-loss half of that: `StylesheetParser`
+  now pre-extracts every `&`-nested rule **before** sabberworm ever sees
+  the text, with one aggregated `"N nested CSS rules skipped (CSS nesting
+  is not supported)"` warning — the immediately-following rule is no
+  longer lost, only the nested variant's own content is (now loudly, not
+  silently). Real CSS nesting **support** (making `&:hover`/etc. actually
+  apply) is still out of scope, not currently on the roadmap.
+- **Fraction utilities fail the exact same way**: `w-1/2`, `h-1/2`, …
+  Tailwind escapes the `/` as `\/` in the class name for the identical
+  reason above — the same backslash-escape gap, not a fraction-math
+  problem.
+- **`.container`'s responsive max-widths never apply**: Tailwind v4's
+  default build emits its `@media` breakpoints in the modern **range
+  syntax** (`@media (width >= 40rem) { ... }`, repeated at 48rem/64rem/
+  80rem/96rem for `.container`), not the `min-width:`/`max-width:` feature
+  form `Css\MediaQueryEvaluator` implements (see that class's own docblock:
+  "no ranges like `(400px <= width)`") — conservatively skipped like any
+  other unrecognized feature clause, so `.container` stays at its
+  mobile-first base rule (`width: 100%`) at every page width instead of
+  ever picking up a breakpoint's `max-width`, unlike Chrome.
+- **No grid support**: `display: grid`, `grid-template-columns`,
+  `grid-cols-*`, `col-span-*`, etc. all warn and are dropped — this engine
+  only implements block/inline/flex/table layout, no grid formatting
+  context (see [Roadmap](#roadmap)).
+- **The all-sides `border` shorthand doesn't apply**: Tailwind's plain
+  `.border`/`.border-{color}` utilities emit the all-sides `border-width`/
+  `border-style`/`border-color` shorthand properties, which this engine
+  doesn't recognize (`DeclarationParser::isBorderLonghand()` only matches
+  the 4-part **per-side** form, `border-{side}-{width,style,color}`) — a
+  pre-existing gap, not introduced by Tailwind ingestion.
+- **Pseudo-elements aren't matched**: `::before`, `::after`,
+  `::placeholder`, `::-webkit-*`, etc. — `SelectorParser` doesn't
+  implement pseudo-elements at all yet, so any rule keyed on one
+  (including most of Tailwind's own preflight reset, see below) falls
+  into `invalid-selector`.
+- `@property` rules (Tailwind emits dozens — one per animatable custom
+  property) are dropped with a single aggregated warning; animation/
+  transition support is out of scope for a paginated PDF regardless.
+
+Every gap above surfaces as a real, warned entry in `RenderReport::$warnings`
+(the same list the playground's warnings panel renders) — including nested
+variant rules, as of M10 final-review Finding B: `&` nesting used to be the
+one silent exception (sabberworm dropping the immediately following rule
+with zero warning, see the bullet above), now guarded by
+`StylesheetParser`'s own pre-extraction pass and its aggregated
+`nesting-skipped` warning. The counts come from ingesting the **entire**
+real build with zero exceptions carved out, not a cherry-picked sample.
+
+### Why no preflight preset
+
+The milestone plan considered a narrower preset — just Tailwind's reset
+(`@layer base`, the part of every build that normalizes `box-sizing`,
+zeroes margins, sets font stacks), extracted the way `Engine::bootstrap()`
+vendors the whole Bootstrap sheet. Adjudicated **against** it:
+
+- The one rule in the preflight with real, non-duplicate value — `*,
+  ::before, ::after { box-sizing: border-box; margin: 0; padding: 0 }` —
+  is one line a user can write by hand if they need it. Everything else
+  either duplicates pliego's own user-agent stylesheet
+  (`Style\UserAgentStylesheet` already gives spec-compliant Appendix-D
+  margins for headings/paragraphs/lists) or actively **conflicts** with
+  it: Tailwind's preflight zeroes `h1`-`h6` font-size/margin, assuming its
+  own typography utilities re-apply them — shipping that as a standalone
+  preset would silently strip pliego's sane heading defaults for anyone
+  who pastes it in without also writing utility classes, which is worse
+  than doing nothing.
+- Roughly half of preflight's own selectors target pseudo-elements this
+  engine doesn't support (`::after`, `::before`, `::backdrop`,
+  `::file-selector-button`, `::placeholder`, several `::-webkit-*`) — so
+  "extract it clean" isn't actually clean: a first-party preset built out
+  of rules that immediately warn `invalid-selector` would be a bad first
+  impression for something billed as an official asset.
+- Anyone following the bring-your-own-build workflow above already GETS
+  the preflight for free — it's embedded in `@layer base` of every real
+  Tailwind build, correctly version-matched to whatever Tailwind release
+  generated their own utilities. A vendored copy would be redundant at
+  best and version-drifted at worst, exactly the cost the milestone brief
+  itself flagged.
+
+### Playground
+
+The playground (`index.php`) has an **"Ejemplo Tailwind"** sample button,
+next to "Ejemplo" and "Ejemplo Bootstrap": a small invoice-style card and
+table styled entirely with Tailwind utility classes (`bg-blue-500`,
+`rounded-lg`, `shadow-md`, `flex`/`gap-4`, `text-*`/`font-bold`, …). Its
+CSS is a slim, hand-curated slice of the real vendored v4.3.2 build above
+— every selector/value copied verbatim and trimmed down to just the
+classes the sample HTML uses (the sample deliberately avoids the
+unsupported all-sides `border` shorthand, using `shadow-md`/background
+color for visual definition instead — see the code comment in `index.php`
+for the two specific gaps it works around). Nothing shells out to `npx`;
+it's a faithful excerpt of real Tailwind CLI output, not a live build.
 
 ## Oracle: Chrome as ground truth
 
@@ -975,22 +1316,23 @@ render through Engine without throwing, onto exactly one page".
 The real, measured numbers from the fixtures shipped today — not
 aspirational targets:
 
-| # | Fixture | Exercises | Diff % | Threshold | Root cause of the gap |
-|---|---|---|---:|---:|---|
-| 01 | Typography | Headings/paragraphs/lists, DejaVu Sans regular+bold+italic, numeric line-heights | 0.790% | 1.5% | Sub-pixel text metric rounding only; no structural gap |
-| 02 | Table striped | `border-collapse`, `:nth-child(odd)` striping, auto column widths | 3.270% | 4.0% | `border-collapse` unsupported (separated-borders model always used) + the auto column-width algorithm's own rounding |
-| 03 | Card, buttons, badges | `border-radius`, `box-shadow`, inline-block `.btn`/`.badge` | 1.529% | 2.5% | Approximated (non-Gaussian, 4-layer) `box-shadow` blur vs. Chrome's real blur convolution |
-| 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 1.471% | 2.0% | Minor cross-axis rounding in the flex subset |
-| 05 | Blockquote / monospace | `blockquote`, `pre`/`code`, `white-space: pre` | 0.144% | 1.0% | Near pixel-perfect — smallest, simplest fixture |
-| 06 | Gradients / shadows | Linear/radial `/Shading` gradients, `box-shadow` | 0.151% | 1.0% | Near pixel-perfect — native PDF shadings match Chrome's own gradient rendering closely |
-| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 4.704% | 5.5% | **The worst fixture, honestly.** Real Bootstrap's headings use a fluid, responsive type scale — `h1,.h1{font-size:calc(1.375rem + 1.5vw)}` (and h2-h6 likewise) with a fixed-size override inside a `@media (min-width: …)` block. `vw` has no meaning in a print engine (`calc()` with a viewport unit is rejected, warned, dropped) **and** the compensating `@media` override never applies either (all `@media` blocks are skipped for print) — so every heading falls back to the plain UA stylesheet's `h1{font-size:2em;font-weight:bold}`, visibly bigger/bolder than Bootstrap's intended size. That size difference at the top of the page then **compounds downward** (same cumulative-drift phenomenon documented on fixture 01, just much larger here) — nearly everything below the `<h1>` sits measurably lower in pliego's render than in Chrome's by the time you reach the footer. |
+| # | Fixture | Exercises | Diff % | Δ vs M9 | Threshold | Root cause of the gap |
+|---|---|---|---:|---|---:|---|
+| 01 | Typography | Headings/paragraphs/lists, DejaVu Sans regular+bold+italic, numeric line-heights | 0.790% | 0.790% — **igual** (not exercised by M10) | 1.5% | Sub-pixel text metric rounding only; no structural gap |
+| 02 | Table striped | `border-collapse`, `:nth-child(odd)` striping, auto column widths | 3.270% | 3.270% — **igual** (not exercised by M10) | 4.0% | `border-collapse` unsupported (separated-borders model always used) + the auto column-width algorithm's own rounding |
+| 03 | Card, buttons, badges | `border-radius`, `box-shadow`, inline-block `.btn`/`.badge` | 1.529% | 1.529% — **igual** (not exercised by M10) | 2.5% | Approximated (non-Gaussian, 4-layer) `box-shadow` blur vs. Chrome's real blur convolution |
+| 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 0.089% | **1.471% → 0.089%** (16.5×, flex-item fix) | 0.5% (tightened from 2.0%) | Near pixel-perfect since M10-T2's flex-item fix — two adjacent inline elements inside a flex container used to merge into ONE flex item instead of two, see fixture 07's own row below |
+| 05 | Blockquote / monospace | `blockquote`, `pre`/`code`, `white-space: pre` | 0.144% | 0.144% — **igual** (not exercised by M10) | 1.0% | Near pixel-perfect — smallest, simplest fixture |
+| 06 | Gradients / shadows | Linear/radial `/Shading` gradients, `box-shadow` | 0.151% | 0.151% — **igual** (not exercised by M10) | 1.0% | Near pixel-perfect — native PDF shadings match Chrome's own gradient rendering closely |
+| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 2.641% | **4.665% → 2.641%** (true M9 baseline, consistent with row 04 above — see the History column for the mid-M10 journey: M10-T1's `vw`/`vh` fix briefly REGRESSED this to 5.654% by unmasking a pre-existing navbar bug, before M10-T2's media queries + navbar flex-item fix + line-height inheritance fix brought it down to today's number) | 3.5% (tightened from 5.5%) | **Was still the worst fixture through M10-T1; three real fixes later (M10-T2), it comfortably passes.** History: 4.665% (pre-M10-T1) → 5.654% (M10-T1's `vw`/`vh` fix, a genuine correctness win for headings that UNMASKED a pre-existing, unrelated navbar bug instead of fixing it — see M10-T1's own report) → 5.558% (M10-T2 PART 1, real `min-width`/`max-width` evaluation against the page's own 793.70px A4 width — `Css\MediaQueryEvaluator`, e.g. Bootstrap's `.row-cols-md-3` grid now genuinely applies) → 5.523% (M10-T2 PART 2's navbar fix — see below — barely moved 07's own number because a second, larger issue below the navbar dominated the diff mass by then) → **2.641%** (a line-height inheritance fix found while investigating why the navbar fix barely moved the number). Two real M10-T2 root causes, found via `tools/oracle/probe-*.mjs` (Playwright `getComputedStyle()` dumps, not part of the oracle pipeline) diffed against `Layout\FragmentDumper` dumps of pliego's own box tree: (1) `Box\BoxTreeBuilder`'s flex-item construction merged TWO adjacent `Display::Inline` children (`.navbar-brand`/`.navbar-text`, both real elements with their own Bootstrap padding) into ONE shared anonymous flex item instead of two separate ones (css-flexbox-1 §4 violation) — pliego's navbar rendered 40px tall against Chrome's real 56px, now hand-verified identical; (2) `Style\ComputedStyle`'s line-height inheritance carried an ancestor's ALREADY-RESOLVED px value straight down the tree instead of re-deriving a bare-NUMBER `line-height` (css-inline-3 §5.2 — e.g. Bootstrap's `body{line-height:1.5}`) against each descendant's OWN font-size: `.small`/`.card-text` (14px) inherited the body's 24px (16×1.5) unchanged instead of the correct 21px (14×1.5), a small per-line drift that compounded across every line below the card row into the fixture's dominant remaining diff mass. Both fixes are general (not fixture-07-specific): the flex-item fix alone dropped fixture 04 (a flex-layout fixture unrelated to Bootstrap) from 1.471% to 0.089%. |
+| 08 | **Full Tailwind page** (NEW, M10-T5) | Real, unmodified vendored Tailwind v4.3.2 CLI build via `<link>`: dark header bar (`flex`, `justify-between`), rounded/shadowed stat cards, colored buttons, a zebra table — `oklch()` colors, `@layer`, `calc()`-based spacing/typography | 0.440% | **nueva** — no M9 baseline (fixture didn't exist before M10) | 1.2% (recalibrated from a first-pass 2.4%) | Two calibration passes, both honestly documented (`tools/oracle/thresholds.json`'s own `_08_comment`): first pass measured 1.582% against a WRONG root-cause narrative ("font-metric sub-pixel noise, same class as 01/03/07") — a code-review finding corrected it: the real dominant cause was Tailwind's bare-number `calc()` line-height ratios being rejected outright, discarding the WHOLE `line-height` declaration on every text-bearing element (a page-wide vertical drift, not sub-pixel noise) — see the `line-height`-calc fix above. Fixing that dropped the measurement to 0.440% (3.6×); what remains is genuine anti-aliasing edge-softness (rounded corners/shadows) plus a much smaller residual of real font-ascent sub-pixel noise, the same class of diff 01/03/07 already have. |
 
-Fixture 07 is deliberately kept to content that still fits **one** page
-(`OracleFixturesSmokeTest.php` hard-requires every oracle fixture to render
-to exactly one page, so `compare.php`'s "overlapping top-left region"
-normalization stays meaningful) — `tests/EndToEnd/BootstrapPageTest.php` is
-the *unbounded* companion E2E, a longer real page that's allowed (expected)
-to paginate.
+Fixtures 07 and 08 are both deliberately kept to content that still fits
+**one** page (`OracleFixturesSmokeTest.php` hard-requires every oracle
+fixture to render to exactly one page, so `compare.php`'s "overlapping
+top-left region" normalization stays meaningful) — `tests/EndToEnd/
+BootstrapPageTest.php`/`TailwindPageTest.php` are the *unbounded* companion
+E2Es, longer real pages that are allowed (expected) to paginate.
 
 ## Playground
 
@@ -1020,7 +1362,25 @@ to the original **"Ejemplo"** one swaps both editors for a second sample
 that has **no custom CSS at all** (`.btn`/`.card`/`.badge`/`.table`
 markup only) and auto-checks the preset box for you, so the very first
 click after loading it already shows the real Bootstrap look with zero
-authored styles.
+authored styles. As of M10, a third **"Ejemplo Tailwind"** button loads a
+small invoice-style card + table styled with Tailwind utility classes (a
+hand-curated slice of the real vendored v4.3.2 build, see the
+[Tailwind section's own Playground note](#playground) above for the full
+detail on what it avoids demoing broken and why).
+
+All three samples are smoke-tested end to end (`tests/EndToEnd/
+PlaygroundSamplesSmokeTest.php` for "Ejemplo"/"Ejemplo Bootstrap",
+`TailwindPlaygroundSampleTest.php` for "Ejemplo Tailwind"), each rendering a
+valid single-page PDF with **either zero warnings or exclusively
+already-documented ones**: the default sample renders with genuinely zero
+(every property it uses is fully supported); the Bootstrap sample — no
+author CSS at all, so `Engine::bootstrap()`'s entire real vendored sheet
+gets ingested against a small page — produces 1093 warnings, every single
+one falling into a category already catalogued in
+[Supported as of M9](#supported-as-of-m9)'s own audit (an `'other'` bucket
+would mean a genuinely new, undocumented gap slipped in — the safety net
+these tests assert); the Tailwind sample produces exactly the one
+well-known "multiple box-shadow layers" limitation.
 
 To run it locally:
 
@@ -1054,8 +1414,9 @@ of flexbox/grid:
 | **M6** | **CSS core**: selector combinators + `:nth-child`/`:not` + specificity, `em`/`rem`/physical units, `:root` custom properties + `calc()`, full color syntax (`rgb()`/`hsl()`/148 named colors) + alpha via `ExtGState` | Real-world stylesheets (Bootstrap-flavored CSS especially) lean on `var()`/`calc()`, `rem`, and combinators/`:nth-child` for the exact "striped table" pattern used everywhere — none of that worked before M6 |
 | **M7** | **Layout**: real user-agent stylesheet (`h1`-`h6`, list/blockquote/`pre` margins, monospace), list markers (`disc`/`circle`/`square`/`decimal`), real inline boxes + `display: inline-block` (THE `.btn`/`.badge` fix), `min`/`max-width`/`height` + `overflow: hidden` clipping, floats with line shortening, `position: relative`/`absolute` | A Bootstrap-derived `.btn`/`.badge`/`.card` finally paints in-line instead of flattening to plain text — the last big gap between this engine's box model and a real browser's |
 | **M8** | **Visual polish**: `border-radius` (Bézier + annular ring + rounded clipping), native PDF gradients (`linear-gradient()`/`radial-gradient()` as real `/Shading` objects), approximated `box-shadow` (4-layer, non-Gaussian) + `dashed`/`dotted` borders, `letter-spacing`/`word-spacing`/`text-transform`, `background-image` (`cover`/`contain`/tiling), `@font-face` (local TTF, case-insensitive) | The last mile between "the boxes are in the right place" (M1-M7) and "it actually looks like a real Bootstrap-derived document" — a rounded, shadowed, gradient-filled `.card`/`.btn`/pill `.badge` is the exact look the target document's author would reach for |
-| **M9** (this release) | **Real Bootstrap**: `Engine::bootstrap()` preset ingesting the real, unmodified, vendored `bootstrap.min.css` (5.3.6), `PatternType 1` tiling patterns + `ExtGState` soft-mask gradient alpha (the two PDF primitives that sheet needed), and a from-scratch **Chrome-as-oracle** visual regression pipeline (`tools/oracle/`) that measures fidelity in real pixels instead of asserting it | Proves the M1-M8 CSS/box-model subset against a real third-party stylesheet rather than a hand-picked one, and replaces "trust me, it looks right" with a measured, honestly-published fidelity table |
-| **M10+** | Pseudo-elements (`::before`/`::after`) → `@media` (conditional inclusion, not just skip) → `position: sticky` → CSS columns → flex to spec (`order`, `align-self`, `stretch`) → grid → `text-shadow`/`border-image` | Generated content and responsive/print media queries round out the CSS core; flex/grid get completed to spec in their own milestones; the remaining visual properties M8 explicitly excluded |
+| **M9** | **Real Bootstrap**: `Engine::bootstrap()` preset ingesting the real, unmodified, vendored `bootstrap.min.css` (5.3.6), `PatternType 1` tiling patterns + `ExtGState` soft-mask gradient alpha (the two PDF primitives that sheet needed), and a from-scratch **Chrome-as-oracle** visual regression pipeline (`tools/oracle/`) that measures fidelity in real pixels instead of asserting it | Proves the M1-M8 CSS/box-model subset against a real third-party stylesheet rather than a hand-picked one, and replaces "trust me, it looks right" with a measured, honestly-published fidelity table |
+| **M10** (this release) | **Real Tailwind v4**: `vw`/`vh` viewport units + real width `@media` evaluation against the page's own CSS-px width (Bootstrap's responsive grid now genuinely applies), `@layer` unwrapping + `oklch()`→sRGB conversion (the two primitives a real Tailwind v4.3.2 CLI build needs), two general layout-fidelity fixes (adjacent inline flex items, bare-number `line-height` inheritance) found chasing those two prerequisites, and an 8th Chrome-oracle fixture for a full real Tailwind page | Proves the engine against a SECOND major real-world CSS ecosystem (not just Bootstrap), the same "ingest it unmodified, measure the gap honestly" discipline M9 established — see [Supported as of M10](#supported-as-of-m10) and the [Tailwind](#tailwind) section |
+| **M11+** | A CSS→PHP **compiler** (pre-resolve the cascade once per stylesheet instead of per render), PDF stream **Flate compression**, hard **limits** (max pages/nodes/memory, a DoS-safety concern for a library that renders arbitrary author-supplied HTML), real **hyperlinks** (`/Annots` link + internal anchors), and the **first Packagist release** — plus the CSS surface still open: pseudo-elements (`::before`/`::after`), `position: sticky`, CSS columns, flex to spec (`order`, `align-self`, `stretch`), grid, `text-shadow`/`border-image` | The path from "correct and honestly measured" to "production-ready package": performance (compiler + compression), safety (limits), and the two features (compression, links) real invoices/reports actually expect from a PDF tool; the remaining CSS surface keeps widening in its own future milestones |
 
 ## License
 

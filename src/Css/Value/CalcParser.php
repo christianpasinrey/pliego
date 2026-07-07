@@ -18,6 +18,13 @@ namespace Pliego\Css\Value;
  *   - / exige que el DIVISOR sea un número puro y no cero.
  * Cualquier violación (incluida división por cero) produce un warning y aborta el parseo entero
  * (toda la declaración se descarta más arriba, en DeclarationParser).
+ *
+ * Dos puntos de entrada tras plegar el árbol (parseToNode()): parse() exige que el resultado sea
+ * una longitud/porcentaje (rechaza un número puro con warning -- válido para casi toda propiedad
+ * length/percentage) y parseNumberOrLength() (M10-T5), que acepta CUALQUIERA de los dos tipos --
+ * hoy solo lo usa line-height, la única propiedad donde el <number> puro es en sí mismo un valor
+ * legítimo (css-inline-3 §5.2), así que un calc() que se plegue a él (p.ej. la ratio de Tailwind v4
+ * calc(1.25 / .875)) debe aceptarse como el multiplicador unitless, no descartarse.
  */
 final class CalcParser
 {
@@ -29,6 +36,54 @@ final class CalcParser
     private array $warnings = [];
 
     public function parse(string $expression): ?CalcExpr
+    {
+        $node = $this->parseToNode($expression);
+        if ($node === null) {
+            return null;
+        }
+        if ($node->isNumber) {
+            $this->warn("calc() must resolve to a length or percentage, got a bare number: $expression");
+            return null;
+        }
+        return CalcExpr::of($node->percentFactor, $node->emFactor, $node->remFactor, $node->pxOffset, $node->vwFactor, $node->vhFactor);
+    }
+
+    /**
+     * M10-T5 fix: line-height is the one property whose unitless number IS the valid value
+     * (css-inline-3 §5.2 -- the bare-number multiplier, e.g. `line-height: 1.5`) rather than a
+     * rejected type mismatch the way it is for every length/percentage property parse() serves.
+     * Tailwind v4 emits its `--text-*--line-height` theme vars as bare-number RATIOS wrapped in
+     * calc(), e.g. `calc(1.25 / .875)` (from `line-height: calc(var(--tw-leading, 1.25) / .875)`
+     * once font-size resolves --tw-leading) -- a dimensionless calc() result, exactly like typing
+     * `line-height: 1.4285714285714286` directly. parse() rejecting it (see above) meant every
+     * text-* utility's line-height silently fell back to inherited/UA leading instead, producing
+     * the page-wide vertical drift this fix addresses (see DeclarationParser::parseLineHeight()).
+     *
+     * Reuses the exact same tokenize/parseSum pass as parse() (parseToNode()) -- the ONLY
+     * difference is which of the two resulting CalcNode shapes (bare number vs length/percentage
+     * vector) counts as success vs failure, so there is no risk of the two entry points disagreeing
+     * on what a given calc() body actually folds to.
+     *
+     * @return array{number: float}|array{length: CalcExpr}|null
+     */
+    public function parseNumberOrLength(string $expression): ?array
+    {
+        $node = $this->parseToNode($expression);
+        if ($node === null) {
+            return null;
+        }
+        if ($node->isNumber) {
+            return ['number' => $node->number];
+        }
+        return ['length' => CalcExpr::of($node->percentFactor, $node->emFactor, $node->remFactor, $node->pxOffset, $node->vwFactor, $node->vhFactor)];
+    }
+
+    /**
+     * Shared tokenize -> parseSum -> "consumed everything" pass behind both parse() and
+     * parseNumberOrLength() -- the two entry points only differ in which CalcNode shape (bare
+     * number vs length/percentage) they accept, never in how the expression itself is parsed.
+     */
+    private function parseToNode(string $expression): ?CalcNode
     {
         $tokens = $this->tokenize($expression);
         if ($tokens === null) {
@@ -49,11 +104,7 @@ final class CalcParser
             $this->warn("Invalid calc() expression: $expression");
             return null;
         }
-        if ($node->isNumber) {
-            $this->warn("calc() must resolve to a length or percentage, got a bare number: $expression");
-            return null;
-        }
-        return CalcExpr::of($node->percentFactor, $node->emFactor, $node->remFactor, $node->pxOffset);
+        return $node;
     }
 
     /** @return list<string> */
@@ -108,7 +159,9 @@ final class CalcParser
             if (preg_match('/\G(?:\d+(?:\.\d+)?|\.\d+)/', $s, $m, 0, $i) === 1) {
                 $numStr = $m[0];
                 $i += strlen($numStr);
-                if (preg_match('/\G(px|rem|em|pt|cm|mm|in|%)/i', $s, $um, 0, $i) === 1) {
+                // M10-T1 (css-values-4 §5.1.1): vw/vh join the unit alternation — same treatment
+                // as % (kept symbolic here, resolved in ComputedStyle::compute(), see CalcExpr).
+                if (preg_match('/\G(px|rem|em|pt|cm|mm|in|vw|vh|%)/i', $s, $um, 0, $i) === 1) {
                     $unit = strtolower($um[0]);
                     $i += strlen($um[0]);
                     $tokens[] = CalcToken::dim((float) $numStr, $unit);
@@ -195,7 +248,14 @@ final class CalcParser
             }
             return $inner->isNumber
                 ? CalcNode::number(-$inner->number)
-                : CalcNode::dimension(-$inner->percentFactor, -$inner->emFactor, -$inner->remFactor, -$inner->pxOffset);
+                : CalcNode::dimension(
+                    -$inner->percentFactor,
+                    -$inner->emFactor,
+                    -$inner->remFactor,
+                    -$inner->pxOffset,
+                    -$inner->vwFactor,
+                    -$inner->vhFactor,
+                );
         }
         if ($op === '+') {
             $this->consumeOp();
@@ -242,6 +302,10 @@ final class CalcParser
                 'cm' => CalcNode::dimension(0.0, 0.0, 0.0, $value * CssLength::PX_PER_CM),
                 'mm' => CalcNode::dimension(0.0, 0.0, 0.0, $value * CssLength::PX_PER_MM),
                 'in' => CalcNode::dimension(0.0, 0.0, 0.0, $value * CssLength::PX_PER_IN),
+                // M10-T1 (css-values-4 §5.1.1): vw/vh — same symbolic slot as %/em/rem, own
+                // dedicated vwFactor/vhFactor component (see CalcNode/CalcExpr).
+                'vw' => CalcNode::dimension(0.0, 0.0, 0.0, 0.0, $value, 0.0),
+                'vh' => CalcNode::dimension(0.0, 0.0, 0.0, 0.0, 0.0, $value),
                 default => CalcNode::dimension(0.0, 0.0, 0.0, 0.0),
             };
         }
@@ -264,6 +328,8 @@ final class CalcParser
             $a->emFactor + $sign * $b->emFactor,
             $a->remFactor + $sign * $b->remFactor,
             $a->pxOffset + $sign * $b->pxOffset,
+            $a->vwFactor + $sign * $b->vwFactor,
+            $a->vhFactor + $sign * $b->vhFactor,
         );
     }
 
@@ -281,6 +347,8 @@ final class CalcParser
                     $b->emFactor * $a->number,
                     $b->remFactor * $a->number,
                     $b->pxOffset * $a->number,
+                    $b->vwFactor * $a->number,
+                    $b->vhFactor * $a->number,
                 );
             }
             if ($b->isNumber) {
@@ -289,6 +357,8 @@ final class CalcParser
                     $a->emFactor * $b->number,
                     $a->remFactor * $b->number,
                     $a->pxOffset * $b->number,
+                    $a->vwFactor * $b->number,
+                    $a->vhFactor * $b->number,
                 );
             }
             $this->warn('calc(): cannot multiply two lengths/percentages');
@@ -311,6 +381,8 @@ final class CalcParser
             $a->emFactor / $b->number,
             $a->remFactor / $b->number,
             $a->pxOffset / $b->number,
+            $a->vwFactor / $b->number,
+            $a->vhFactor / $b->number,
         );
     }
 }

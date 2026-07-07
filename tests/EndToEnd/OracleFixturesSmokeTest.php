@@ -49,6 +49,7 @@ const ORACLE_FIXTURE_NAMES = [
     '05-blockquote-pre.html',
     '06-gradients-shadows.html',
     '07-bootstrap-page.html',
+    '08-tailwind-page.html',
 ];
 
 it('finds exactly the oracle fixtures this task calibrated (no stray/missing files)', function () {

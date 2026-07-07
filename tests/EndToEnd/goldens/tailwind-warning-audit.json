@@ -1,0 +1,22 @@
+{
+    "total": 106,
+    "byCategory": {
+        "color-mix-fallback": 1,
+        "invalid-calc": 1,
+        "invalid-selector": 38,
+        "layer-important-simplified": 1,
+        "media-skipped": 1,
+        "nesting-skipped": 1,
+        "property-skipped": 1,
+        "pseudo-unknown": 6,
+        "unsupported-color": 3,
+        "unsupported-font-weight": 3,
+        "unsupported-keyword": 5,
+        "unsupported-length": 6,
+        "unsupported-property-other": 33,
+        "unsupported-shorthand": 1,
+        "unsupported-text-align": 1,
+        "unsupported-text-decoration": 2,
+        "unsupported-vertical-align": 2
+    }
+}

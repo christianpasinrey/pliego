@@ -18,7 +18,8 @@ use Pliego\Engine;
  *
  * tests/Fixtures/bootstrap/page.html carries the SAME documented `.table-striped-compat` shim as
  * components.html (see BootstrapRealComponentsTest's class docblock for why: real Bootstrap's own
- * striping mechanism, inset box-shadow + `:nth-of-type`, isn't supported yet).
+ * striping mechanism needs BOTH inset box-shadow (still unsupported) AND `:nth-of-type` (supported
+ * for real since M10-T1) -- the shim stays because of the FIRST gap alone now).
  *
  * Warning count: NOT the full audit (BootstrapIngestionTest.php owns the "parse the WHOLE sheet"
  * number, 895; BootstrapRealComponentsTest.php owns the components-page number, 944) -- a
@@ -152,28 +153,75 @@ it('produces a pinned, categorized warning count for this exact page (honest cap
     expect(array_sum($byCategory))->toBe(count($report->warnings));
 
     // Pinned exact total, observed from a real run against this exact fixture (not guessed) --
-    // see this file's class docblock for why it differs from BootstrapRealComponentsTest's 944:
+    // see this file's class docblock for why it differs from BootstrapRealComponentsTest's total:
     // a bigger, more varied page (six card variants, five badge/button variants, four alert
     // variants, a navbar) resolves MANY more distinct declarations against real elements than the
-    // components showcase does, each capable of its own var()-resolution-time warning.
-    expect($report->warnings)->toHaveCount(1175);
+    // components showcase does, each capable of its own var()-resolution-time warning. (1175
+    // pre-M10-T1; -25 for the same reason as BootstrapIngestionTest's golden and
+    // BootstrapRealComponentsTest's total -- vw/vh support + real :nth-of-type matching, see
+    // M10-T1's report -- this page shares the vendored sheet's sheet-level parse warnings 1:1.)
+    //
+    // M10-T1 finding fix (css-variables-1 §7.3): 1150 pre-fix, minus 105 more now GONE -- same
+    // Css\VarResolver fix as BootstrapRealComponentsTest's docblock (a custom property set to the
+    // CSS-wide keyword `initial` now correctly engages the var() fallback chain instead of
+    // substituting the literal string "initial"). This page's much bigger element mix (cards,
+    // buttons, badges, alerts, navbar, a 20-row table) hits Bootstrap's `--bs-*-color-state:
+    // initial`/`--bs-*-bg-state: initial` reset pattern far more often than the single-table
+    // components showcase (15 cells) does -- 105 "Unsupported color for color: initial" warnings
+    // vanish. `box-shadow-limitation`'s total is unaffected (same 113 before/after): inset
+    // box-shadow itself is still unsupported (M8), so those warnings survive, just fed a real
+    // resolved color now instead of the bogus literal keyword. (1045 post-M10-T1's `initial` fix.)
+    //
+    // M10-T2 (css-mediaqueries-4, reduced): 1045 -> 1240 (+195), hand-verified against an isolated
+    // parse of ONLY the 30 @media blocks that now newly apply at this page's A4 width (793.70px --
+    // see MediaQueryEvaluatorTest/StylesheetParserTest for the grammar, BootstrapIngestionTest's
+    // golden for the sheet-wide +196 delta this page's own +195 is one short of, explained below).
+    // Every one of those 30 blocks is a real Bootstrap responsive-utility rule (`.col-sm-*`,
+    // `.col-md-*`, `.g-sm-*`/`.g-md-*` gutters, sticky-top offsets, container max-widths, ...) that
+    // was WRONGLY never reaching this engine before (min-width:576/768 and max-width:991.98/
+    // 1199.98/1399.98 all hold against 793.70px, exactly like Chrome printing an A4 page) --
+    // parsing them for real surfaces genuinely NEW instances of already-documented gaps, not new
+    // KINDS of gaps: +29 unsupported-keyword (`position: sticky`/`-webkit-sticky`, Bootstrap's
+    // `.sticky-*-top` utilities), +42 unsupported-length (`width: auto`/`right: auto` on responsive
+    // offset utilities), +106 unsupported-property-other (`z-index`, `visibility`, `overflow-y`,
+    // ...), +17 unsupported-property-transform, +2 unsupported-shorthand (`margin: auto`).
+    //
+    // The ONE-LESS-than-the-sheet-wide-196 delta is a real, POSITIVE layout fix, not noise: this
+    // page's card grid uses `row-cols-1 row-cols-md-3` (tests/Fixtures/bootstrap/page.html) --
+    // `.row-cols-md-3>*{width:33.33333333%}` lives inside the now-applying `@media
+    // (min-width:768px)` block. Before this task, that rule NEVER reached this engine, so all six
+    // `.card`s stacked full-width (`.row-cols-1`'s unconditional 100%) in a single flex row taller
+    // than one page -- Page\Paginator's atomic-fragment guard (M5, a flex container is emitted as
+    // ONE indivisible fragment) fired its `atomic-fragment-oversized` warning. Now that
+    // `row-cols-md-3` genuinely applies (this page's A4 width IS >= the medium breakpoint, exactly
+    // like Chrome), the six cards lay out 3-per-row across two shorter rows, the flex fragment fits
+    // within one page, and the warning is GONE (hand-verified: `git stash` back to pre-T2 code
+    // reproduces the old 1045/atomic-fragment-oversized=1 exactly, confirming this is caused by the
+    // media-query fix and nothing else). +196 (sheet-level categories) - 1 (this fixed warning) =
+    // +195 net, landing on 1240.
+    expect($report->warnings)->toHaveCount(1240);
 
     // Spot categories: a handful of the categories this page is EXPECTED to exercise, pinned
     // individually so a change in exactly WHICH kind of warning fires is caught, not just a total
     // that could hide two categories drifting in opposite directions.
-    // -- sheet-level parse categories (same 895-warning source as BootstrapIngestionTest's golden,
-    //    independent of which classes THIS page happens to use):
+    // -- sheet-level parse categories (same source as BootstrapIngestionTest's golden, independent
+    //    of which classes THIS page happens to use): pseudo-unknown/pseudo-dynamic-permanent-
+    //    exclusion/media-skipped are UNCHANGED by this task (none of the 30 newly-applying blocks
+    //    contain a pseudo-class or another skipped @media); unsupported-property-other IS a
+    //    sheet-level category and DOES change (+106, see above).
     expect($byCategory['pseudo-unknown'] ?? 0)->toBe(103);
     expect($byCategory['pseudo-dynamic-permanent-exclusion'] ?? 0)->toBe(123);
-    expect($byCategory['unsupported-property-other'] ?? 0)->toBe(309);
+    expect($byCategory['unsupported-property-other'] ?? 0)->toBe(415);
     expect($byCategory['media-skipped'] ?? 0)->toBe(1);
     // -- resolved-against-real-elements categories, genuinely NEW to this page (the components
-    //    showcase's own pinned 944 never broke these out): var() chains this page's own mix of
-    //    card/button/navbar variants leaves unresolved, and one flex row of six cards too tall to
-    //    split across a page break (Page\Paginator's documented atomic-fragment limitation, M5).
+    //    showcase's own pinned total never broke these out): var() chains this page's own mix of
+    //    card/button/navbar variants leaves unresolved (UNCHANGED by this task -- these fire per
+    //    ELEMENT this page already had, not per newly-applying @media block), and the flex row of
+    //    six cards that USED TO be too tall to split across a page break now fits (see above --
+    //    `?? 0` reads as 0 now that the category never fires for this page/fixture pair).
     expect($byCategory['unresolved-custom-property'] ?? 0)->toBe(30);
     expect($byCategory['invalid-value-unresolved-var'] ?? 0)->toBe(30);
-    expect($byCategory['atomic-fragment-oversized'] ?? 0)->toBe(1);
+    expect($byCategory['atomic-fragment-oversized'] ?? 0)->toBe(0);
 });
 
 // --- Key bytes: the visual signature this page's Bootstrap components must actually paint --------

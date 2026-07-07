@@ -47,7 +47,11 @@ final readonly class CssLength
         // CalcParser::tokenize(), kept in sync to avoid a drift between the two sites that parse
         // the same <number-token> grammar (here the optional sign is part of the number itself,
         // since fromCss() matches the whole string in one shot instead of tokenizing operators).
-        if (preg_match('/^(-?(?:\d+(?:\.\d+)?|\.\d+))(px|rem|em|pt|cm|mm|in|%)$/', $value, $m) !== 1) {
+        //
+        // M10-T1 (css-values-4 §5.1.1): vw/vh join em/rem/% as SYMBOLIC units — kept unresolved
+        // here (see LengthUnit's docblock), resolved at computed-value time against the page's
+        // CSS-px size (Style\ComputedStyle, remBase's sibling threading).
+        if (preg_match('/^(-?(?:\d+(?:\.\d+)?|\.\d+))(px|rem|em|pt|cm|mm|in|vw|vh|%)$/', $value, $m) !== 1) {
             return null;
         }
         $num = (float) $m[1];
@@ -55,6 +59,8 @@ final readonly class CssLength
             'px' => new self($num, LengthUnit::Px),
             'em' => new self($num, LengthUnit::Em),
             'rem' => new self($num, LengthUnit::Rem),
+            'vw' => new self($num, LengthUnit::Vw),
+            'vh' => new self($num, LengthUnit::Vh),
             '%' => new self($num, LengthUnit::Percent),
             // Físicos: plegados a Px aquí mismo, factores exactos css-values-3 §5.2.
             'pt' => new self($num * self::PX_PER_PT, LengthUnit::Px),

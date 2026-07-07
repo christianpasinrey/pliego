@@ -156,6 +156,63 @@ it('inherits the resolved line-height px down the tree', function () {
     expect($map->get($p)->lineHeightPx)->toBe(20.0);
 });
 
+// --- M10-T2 (navbar/card investigation, CSS 2.2 §10.8.1 / css-inline-3 §5.2): a bare-NUMBER
+// line-height inherits the NUMBER (multiplier), which each descendant re-applies against ITS OWN
+// font-size -- NOT the ancestor's already-resolved px. Root cause found investigating fixture 07's
+// card-row height mismatch against Chrome (oracle task): Bootstrap's `body{line-height:1.5}` (16px
+// root -> 24px) used to leak that fixed 24px straight onto a `.small`/`.card-text` descendant
+// (font-size:14px, no own line-height declared), instead of correctly recomputing to 21px
+// (14 * 1.5) -- the exact 3px-per-line drift that, compounded across many lines below the fold,
+// dominated fixture 07's remaining diff after the navbar fix.
+
+it('a numeric (unitless) line-height re-normalizes against a DESCENDANT\'s own smaller font-size, not the ancestor\'s resolved px', function () {
+    [$doc, $map] = resolveDoc(
+        'body { font-size: 16px; line-height: 1.5 } .small { font-size: 14px }',
+        '<body><p class="small">x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // 14 * 1.5 = 21, NOT the body's own 16 * 1.5 = 24 leaking through unchanged.
+    expect($map->get($p)->lineHeightPx)->toBe(21.0);
+});
+
+it('a numeric line-height keeps re-normalizing across MULTIPLE inheritance levels with different font-sizes', function () {
+    [$doc, $map] = resolveDoc(
+        'body { font-size: 16px; line-height: 1.5 } .outer { font-size: 20px } .inner { font-size: 10px }',
+        '<body><div class="outer"><span class="inner">x</span></div></body>',
+    );
+    $outer = $doc->querySelector('.outer');
+    $inner = $doc->querySelector('.inner');
+    assert($outer !== null && $inner !== null);
+    expect($map->get($outer)->lineHeightPx)->toBe(30.0); // 20 * 1.5
+    expect($map->get($inner)->lineHeightPx)->toBe(15.0); // 10 * 1.5, NOT 20 * 1.5 (30) leaking through
+});
+
+it('an ABSOLUTE (px/%/em/rem) line-height inherits UNCHANGED, never re-normalized against a descendant\'s own font-size', function () {
+    [$doc, $map] = resolveDoc(
+        'body { font-size: 16px; line-height: 24px } .small { font-size: 14px }',
+        '<body><p class="small">x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // A Length-valued line-height is an absolute used value -- it inherits as that same 24px
+    // regardless of a descendant's own font-size, exactly like before this task (only the bare-
+    // NUMBER case re-normalizes, see the property's own ComputedStyle docblock).
+    expect($map->get($p)->lineHeightPx)->toBe(24.0);
+});
+
+it('a descendant\'s OWN numeric line-height declaration overrides the inherited multiplier and starts propagating its own', function () {
+    [$doc, $map] = resolveDoc(
+        'body { font-size: 16px; line-height: 1.5 } .card-title { font-size: 16px; line-height: 1.2 } .card-title em { font-size: 12px }',
+        '<body><h6 class="card-title">x <em>y</em></h6></body>',
+    );
+    $title = $doc->querySelector('.card-title');
+    $em = $doc->querySelector('em');
+    assert($title !== null && $em !== null);
+    expect($map->get($title)->lineHeightPx)->toBe(16.0 * 1.2); // Bootstrap's real heading ratio
+    expect($map->get($em)->lineHeightPx)->toBe(12.0 * 1.2); // inherits 1.2 from .card-title, NOT body's 1.5
+});
+
 it('keeps M0 styles intact', function () {
     [$doc, $map] = resolveDoc('body { color: #f00; font-size: 20px }', '<body><p>x</p></body>');
     $p = $doc->querySelector('p');
@@ -598,6 +655,41 @@ it('folds physical units (in/pt/cm) to their exact px factor at parse time, visi
     expect($map->get($c)->width?->value)->toBe(96.0 / 2.54);
 });
 
+// --- M10-T1 (css-values-4 §5.1.1): vw/vh resolve against the PAPER box's own CSS-px size
+// (adjudicated -- see Css\Value\LengthUnit's docblock), threaded from StyleResolver's own
+// pageWidthPx/pageHeightPx (default A4 when not overridden, same formula as Page\PaperSize::A4).
+
+it('resolves vw against the default A4 page width (50vw -> half of 793.7007874015748px)', function () {
+    [$doc, $map] = resolveDoc('p { width: 50vw }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->width?->value)->toBe((210.0 / 25.4 * 96.0) / 2.0);
+});
+
+it('resolves vh against the default A4 page height (1.5vh of 1122.5196850393701px, hand-verified to 16.84px)', function () {
+    [$doc, $map] = resolveDoc('p { padding-top: 1.5vh }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect(round($map->get($p)->paddingTop->value, 2))->toBe(16.84);
+});
+
+it('resolves an explicitly threaded page size (StyleResolver constructor), not just the A4 default', function () {
+    $doc = \Dom\HTMLDocument::createFromString('<body><p>x</p></body>', LIBXML_NOERROR);
+    $parseResult = new StylesheetParser()->parse('p { width: 50vw; height: 20vh }');
+    $map = new StyleResolver([new CssStyleSource($parseResult)], null, 800.0, 600.0)->resolve($doc);
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->width?->value)->toBe(400.0);
+    expect($map->get($p)->height?->px)->toBe(120.0);
+});
+
+it('resolves Bootstrap\'s calc(1.375rem + 1.5vw) end to end through StyleResolver (33.905511811023623px on default A4)', function () {
+    [$doc, $map] = resolveDoc('p { padding-left: calc(1.375rem + 1.5vw) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(22.0 + 11.905511811023623);
+});
+
 it('mixes em/rem/px/% in the margin shorthand ("1em 2rem 10px 5%")', function () {
     [$doc, $map] = resolveDoc(
         'html { font-size: 20px } p { font-size: 10px; margin: 1em 2rem 10px 5% }',
@@ -913,6 +1005,52 @@ it('unsets every longhand of a shorthand when its var() substitution fails, not 
     expect($style->marginBottom->value)->toBe(0.0);
     expect($style->marginLeft->value)->toBe(0.0);
     expect($warnings)->not->toBeEmpty();
+});
+
+// --- M10-T1 finding fix (css-variables-1 §7.3, css-cascade-4 §7.3): a custom property set to the
+// CSS-wide keyword `initial` is the GUARANTEED-INVALID value, not the literal string "initial" --
+// var(--x, fallback) must engage the fallback, var(--x) alone is IACVT (same machinery as the
+// unknown-custom-property/cyclic-reference cases above). Real-world driver: Bootstrap's own
+// `.table` reset (`--bs-table-bg-state: initial`) consumed through a 3-deep var() fallback chain.
+
+it('THE probe: --x:initial + var(--x, fallback) end to end resolves to the fallback, not the literal text "initial"', function () {
+    [$doc, $map] = resolveDoc(
+        ':root { --x: initial; } p { color: var(--x, #ff0000); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->color)->toEqual(new Color(255, 0, 0));
+});
+
+it('drops a declaration referencing a custom property set to "initial" with no fallback, with a warning (IACVT)', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings(
+        ':root { --x: initial; } p { color: var(--x); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // color inherits and falls to the initial value (black) — the "initial" keyword never
+    // substitutes as literal text.
+    expect($map->get($p)->color)->toEqual(new Color(0, 0, 0));
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('reproduces the real Bootstrap chain end to end: box-shadow color component resolves through a 3-deep var() fallback past two "initial" custom properties', function () {
+    [$doc, $map] = resolveDoc(
+        ':root {
+            --bs-table-bg-state: initial;
+            --bs-table-bg-type: initial;
+            --bs-table-accent-bg: transparent;
+        }
+        p { background-color: var(--bs-table-bg-state, var(--bs-table-bg-type, var(--bs-table-accent-bg))); }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    // "transparent" is a supported keyword for background-color -- resolves to alpha 0 (Color::
+    // fromCss()'s documented sentinel for the keyword), not the literal unsupported text "initial".
+    expect($map->get($p)->backgroundColor)->toEqual(new Color(0, 0, 0, 0.0));
 });
 
 // --- M7-T2: complete UA stylesheet (CSS 2.2 Appendix D, adapted) + cascade origin ---------------

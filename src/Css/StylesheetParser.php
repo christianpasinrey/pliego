@@ -35,21 +35,31 @@ use Sabberworm\CSS\Parser as SabberwormParser;
  * css principal); @media en cambio necesita DECIDIR si su contenido vuelve a quedar en el css que
  * sabberworm procesará (medium aplica) o se descarta (no aplica) -- ver resolveMediaBlocks().
  *
- * Adjudicado (RESTRICCIONES GLOBALES M9-T2): evaluación de media query MÍNIMA, sin listas de
- * features reales -- 'print' y 'all' (case-insensitive, ignorando espacios) APLICAN sus reglas al
- * mismo nivel de autor que el resto de la hoja (orden de documento preservado, ver más abajo);
- * cualquier otra cosa (`screen`, cualquier feature-query entre paréntesis como
- * `(min-width: 768px)`, `(prefers-reduced-motion: reduce)`, `hover`, etc.) se DESCARTA en
- * silencio, sin logging individual -- solo UN warning agregado al final de parse() con el total de
- * bloques descartados (bootstrap real dispara ~108 de estos; un warning por bloque sería ruido
- * puro, no información accionable). @media anidado hereda la decisión del @media exterior: si el
- * exterior no aplica, su cuerpo entero se descarta sin mirar dentro (ni siquiera para contar
- * anidados por separado -- "1 bloque descartado", no "1 + los que tuviera dentro"); si el exterior
- * SÍ aplica, cualquier @media anidado en su cuerpo se evalúa de forma independiente y recursiva
- * (puede perfectamente ser `@media print { @media (hover: hover) { ... } }`, descartándose solo el
- * anidado). "Aplican al mismo nivel de autor, orden preservado" se logra literalmente: el cuerpo de
- * un bloque que aplica se PEGA de vuelta en el css, en el mismo sitio donde estaba el `@media
- * print { ... }` -- así StylesheetParser::parse() ve un css COMPLETAMENTE PLANO (sin @media
+ * Adjudicado (RESTRICCIONES GLOBALES M9-T2): evaluación de media query -- 'print' y 'all'
+ * (case-insensitive, ignorando espacios) APLICAN sus reglas al mismo nivel de autor que el resto
+ * de la hoja (orden de documento preservado, ver más abajo); M10-T1 (css-mediaqueries-3 §2.3): un
+ * prefijo 'only' (p.ej. 'only print'/'only all') se NORMALIZA fuera antes de esa comparación --
+ * 'only' no aporta semántica de evaluación propia (solo existe para ocultar la query completa a
+ * UAs pre-css3), así que 'only print'/'only all' aplican exactamente igual que 'print'/'all' sin
+ * el prefijo, y 'only screen' sigue sin aplicar, igual que 'screen' a secas.
+ * M10-T2 (css-mediaqueries-4, reducido): la evaluación en sí se EXTRAE a MediaQueryEvaluator (ya no
+ * vive en este fichero, ver esa clase para la gramática completa) y deja de ser dos-valores-fijos --
+ * `(min-width: N)`/`(max-width: N)`/`(width: N)` (px/rem/em) se comparan REALMENTE contra el ancho
+ * de página en CSS px ($pageWidthPx, threadeado desde Engine::render() -> parse(), MISMO patrón que
+ * vw/vh de M10-T1 -- ver parse()'s propio parámetro), y combinadores 'and'/listas separadas por
+ * comas (OR) se resuelven de verdad. `screen` (sola o combinada) sigue sin aplicar NUNCA, y
+ * cualquier feature desconocida (`hover`, `prefers-reduced-motion`, `prefers-color-scheme`, ...)
+ * sigue siendo un DESCARTE conservador -- sin logging individual, solo UN warning agregado al
+ * final de parse() con el total de bloques descartados (bootstrap real dispara 78 de estos tras
+ * esta tarea, ver MediaQueryEvaluatorTest/BootstrapIngestionTest para el desglose exacto; antes de
+ * esta tarea eran 108, todos los no-print/all). @media anidado hereda la decisión del @media
+ * exterior: si el exterior no aplica, su cuerpo entero se descarta sin mirar dentro (ni siquiera
+ * para contar anidados por separado -- "1 bloque descartado", no "1 + los que tuviera dentro"); si
+ * el exterior SÍ aplica, cualquier @media anidado en su cuerpo se evalúa de forma independiente y
+ * recursiva (puede perfectamente ser `@media print { @media (hover: hover) { ... } }`, descartándose
+ * solo el anidado). "Aplican al mismo nivel de autor, orden preservado" se logra literalmente: el
+ * cuerpo de un bloque que aplica se PEGA de vuelta en el css, en el mismo sitio donde estaba el
+ * `@media print { ... }` -- así StylesheetParser::parse() ve un css COMPLETAMENTE PLANO (sin @media
  * supervivientes) en el mismo orden textual del fichero original, y el $order++ de siempre (ver
  * parse()) cae exactamente donde caería sin este paso.
  */
@@ -62,13 +72,84 @@ final class StylesheetParser
     ];
     private const array PAGE_MARGIN_LONGHANDS = ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'];
 
-    public function parse(string $css): ParseResult
+    /**
+     * M10-T2 (css-mediaqueries-4, reduced): default page width for a parse() call that doesn't
+     * thread one explicitly (mostly tests, plus UserAgentStylesheet::css() which has no @media at
+     * all) — A4 in CSS px, SAME literal/formula StyleResolver's own DEFAULT_PAGE_WIDTH_PX and
+     * Page\PaperSize::widthPx() use, duplicated here because Css cannot depend on Page (deptrac
+     * boundary, see that class's own docblock for the identical reasoning). Engine::render()
+     * threads the REAL configured paper width explicitly (see its own call site) — this default
+     * only matters for callers that don't.
+     */
+    private const float DEFAULT_PAGE_WIDTH_PX = 210.0 / 25.4 * 96.0;
+
+    private readonly MediaQueryEvaluator $mediaQueryEvaluator;
+
+    public function __construct()
+    {
+        $this->mediaQueryEvaluator = new MediaQueryEvaluator();
+    }
+
+    public function parse(string $css, float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX): ParseResult
     {
         $css = $this->stripComments($css);
-        // M9-T2: @media resuelto ANTES de @font-face/@page (ver docblock de clase) -- un bloque
-        // `@media print { @font-face { ... } }` (raro, pero legal) debe quedar aplanado a un
-        // `@font-face` de nivel superior para que extractAtRuleBlocks() lo vea a continuación.
-        [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css);
+        // M10 final-review Finding B (css-nesting-1 `&`, see resolveCssNesting()'s own docblock):
+        // runs FIRST, before @layer/@media/sabberworm ever see the text -- a `&`-nested rule can
+        // appear at ANY depth (Tailwind's real `odd:`/`even:` shape nests it inside `@layer
+        // utilities`, sometimes inside a `@media` too), and this pass is a pure, depth-agnostic
+        // textual strip (finds the `&...{...}` span wherever it is, removes exactly that span, in
+        // place) -- unlike resolveLayers()'s hoist-and-reorder, there is nothing here that could
+        // interact badly with @layer/@media resolution regardless of ordering, so running it first
+        // (right after comment stripping) is simplest.
+        [$css, $nestedSkippedCount] = $this->resolveCssNesting($css);
+        // M10 final-review Finding C (css-conditional-3 / css-cascade-5, see resolveLayers()'s own
+        // docblock for the full algorithm): @media now resolves BEFORE @layer -- swapped from this
+        // task's original "@layer first" ordering (see git history), which had a real bug: a
+        // `@media screen { @layer x { p{color:red} } }` let resolveLayers() (which HOISTS a
+        // layer's body out to a different position in the css) reach into an unresolved @media's
+        // body and hoist its content out UNCONDITIONALLY, before @media ever got to decide whether
+        // that content should exist at all -- the layer's rule ended up applying on EVERY medium
+        // (including print), plus a misleading "1 @media rule blocks skipped" warning (the block
+        // LOOKED empty by the time @media's resolver saw it, having already been hollowed out).
+        // @media-first fixes BOTH nesting directions: resolveMediaBlocks() never cares about its
+        // own surrounding depth (it only ever does precise in-place splicing, see its own
+        // docblock), so a `@layer x { @media print { ... } }` (media nested inside layer) still
+        // resolves correctly regardless of order; but a `@layer` nested inside an UNRESOLVED
+        // @media can only be handled safely by letting @media decide FIRST (discard the whole
+        // subtree if the medium doesn't apply, or splice the body back in place -- unwrapping it to
+        // top level -- if it does), so that resolveLayers() only ever sees a `@layer` that is
+        // either genuinely top-level to begin with, or has just been unwrapped to top level by an
+        // applying @media, in both cases now safe for its top-level-only scan (see
+        // resolveLayers()'s own docblock for that half of the fix).
+        [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css, $pageWidthPx);
+        [$css, $importantInLayer] = $this->resolveLayers($css);
+        // M9-T2: @media ya se resolvió ARRIBA (Finding C moved it before @layer -- see this
+        // method's own comment at that call site) -- @font-face/@page todavía necesitan quedar
+        // DESPUÉS de esa resolución (ver su razón original: un `@media print { @font-face {...} }`
+        // debe quedar aplanado a un `@font-face` de nivel superior antes de que
+        // extractAtRuleBlocks() lo vea), lo cual ya se cumple con el nuevo orden.
+        // M10-T3 (css-properties-values-api-1, out of scope): @property registers a custom
+        // property's syntax/inheritance/initial-value for typed-custom-property animation and
+        // validation -- none of which this static print engine implements (no animation, and a
+        // custom property's VALUE already flows through unchanged regardless of its declared
+        // syntax, see VarResolver). Extracted and dropped exactly like @font-face/@page (same
+        // extractAtRuleBlocks() brace-matcher), but with ONE aggregated warning (like @media's
+        // skip count) rather than one per rule -- a real Tailwind v4 build emits dozens of these
+        // (one per animatable custom property, e.g. every `--tw-rotate-x`/`--tw-gradient-from`),
+        // and they are all the same kind of gap, not 40 distinct ones worth reading individually.
+        [$css, $propertyBodies] = $this->extractAtRuleBlocks($css, 'property');
+        // M10-T6 (css-conditional-5, out of scope, container queries): found while auditing the
+        // milestone's own "excluded WITH warning" list -- unlike @property/@media/color-mix()/
+        // :has() (all confirmed to warn honestly), an unextracted @container was silently
+        // swallowing its OWN body AND every rule that came AFTER it in the same stylesheet
+        // (sabberworm's at-rule dispatcher doesn't recurse into it -- the same mishandling class
+        // @layer had pre-M10-T3, see resolveLayers()'s own docblock -- but nobody had extracted
+        // @container the way @property/@page/@font-face already are): zero rules, zero warnings,
+        // real silent document-wide data loss, not just "container queries aren't supported".
+        // Extracted with the SAME brace-matcher + one-aggregated-warning shape as @property right
+        // above (no evaluation of the container query itself -- a real container's inline size
+        // isn't knowable at this static, paginated-print stage the way @media's page width is).
+        [$css, $containerBodies] = $this->extractAtRuleBlocks($css, 'container');
         [$css, $fontFaceBodies] = $this->extractAtRuleBlocks($css, 'font-face');
         $fontFaceRules = [];
         $fontFaceWarnings = [];
@@ -97,6 +178,12 @@ final class StylesheetParser
         $selectorParser = new SelectorParser($selectorWarnings);
         $rules = [];
         $warnings = [...$fontFaceWarnings, ...$pageWarnings];
+        // M10 final-review Finding B: same "one aggregated warning" shape as every other extractor
+        // in this class -- see resolveCssNesting()'s own docblock for the exact bug this guards
+        // against (sabberworm silently swallowing the rule AFTER a `&`-nested one).
+        if ($nestedSkippedCount > 0) {
+            $warnings[] = "$nestedSkippedCount nested CSS rules skipped (CSS nesting is not supported)";
+        }
         // M9-T2: UN único warning agregado (nunca uno por bloque, ver docblock de clase) -- el
         // conteo ya está cerrado en $mediaSkippedCount desde el paso de resolución, arriba. Texto
         // fijo (brief M9-T2, RESTRICCIONES GLOBALES): "N @media rule blocks skipped
@@ -104,6 +191,28 @@ final class StylesheetParser
         // que el mensaje sea grep-eable con un patrón estable independientemente del conteo.
         if ($mediaSkippedCount > 0) {
             $warnings[] = "$mediaSkippedCount @media rule blocks skipped (screen/interactive-only media)";
+        }
+        // M10-T3: same "one aggregated warning" shape as @media's skip count above -- see parse()'s
+        // own docblock comment at the extraction call site.
+        if ($propertyBodies !== []) {
+            $propertySkippedCount = count($propertyBodies);
+            $warnings[] = "$propertySkippedCount @property rule blocks skipped (not supported)";
+        }
+        // M10-T6: same aggregated shape as @property's own warning immediately above.
+        if ($containerBodies !== []) {
+            $containerSkippedCount = count($containerBodies);
+            $warnings[] = "$containerSkippedCount @container rule blocks skipped (not supported)";
+        }
+        // M10-T3 (css-cascade-5 §4.4, reduced -- see resolveLayers()'s docblock): a real cross-
+        // layer !important INVERTS layer order (an !important in an earlier-declared layer beats
+        // one in a later layer); this engine does NOT implement that inversion -- !important is
+        // applied with its NORMAL (non-inverted) precedence regardless of which layer it came
+        // from, same as StyleResolver already does for every other important-tier declaration.
+        // ONE warning for the whole document (not one per !important-in-a-layer occurrence,
+        // deliberately noisier-averse like the two aggregated warnings above) -- adjudicated exact
+        // wording per the M10-T3 brief.
+        if ($importantInLayer) {
+            $warnings[] = 'layered !important uses simplified precedence (no cross-layer inversion, css-cascade-5 §4.4)';
         }
         $order = 0;
         foreach ($document->getAllDeclarationBlocks() as $block) {
@@ -251,6 +360,66 @@ final class StylesheetParser
     }
 
     /**
+     * M10 final-review Finding B (css-nesting-1 `&`): probed by hand against
+     * sabberworm/php-css-parser 8.9 -- `.a { &:hover { color: red } } .b { color: blue }
+     * .c { color: green } ` parses DIRECTLY (no extraction at all) to `.a {}` (its nested block
+     * silently swallowed, no warning) AND `.b` GONE too -- only `.c` survives. Real, silent,
+     * zero-warning data loss, not just "nesting unsupported" (losing .a's own content would be
+     * fine and expected; losing the UNRELATED next rule is not). This is exactly Tailwind v4's
+     * `odd:`/`even:` (and every other pseudo-class variant) compiled shape --
+     * `.odd\:bg-white { &:nth-child(odd) { background-color: ... } }` (see README's Tailwind
+     * section) -- so every nested-variant utility in a real v4 build risked eating whatever rule
+     * happened to follow it.
+     *
+     * Fix (minimum, per adjudication): a single global, offset-driven scan (same brace-matching
+     * pattern as every other extractor in this class) for the literal TEXT SHAPE of a nested `&`
+     * rule -- an `&` character, followed by selector text that cannot syntactically contain `{`,
+     * `}`, or `;` (a real CSS selector never does), followed by that rule's own opening `{` --
+     * then removes the WHOLE matched construct (from the `&` through its own matching `}`),
+     * replaced by a single space, same convention as extractAtRuleBlocks()/resolveMediaBlocks().
+     * Deliberately depth-AGNOSTIC (does not care where in the document the match sits, unlike
+     * resolveLayers()'s top-level-only scan) -- a `&`-nested rule can only ever appear ONE level
+     * inside SOME enclosing rule's body, whatever depth that outer rule itself sits at (top level,
+     * inside `@layer`, inside `@layer` + `@media`, ...), so anchoring the match on the `&` itself
+     * finds it correctly regardless. Runs BEFORE sabberworm ever sees the text (parse()'s very
+     * first resolution step, right after stripComments()), so the malformed-nesting bug above
+     * never has a chance to trigger.
+     *
+     * Why this can never repeat resolveLayers()'s Finding C mistake (reaching into an unresolved
+     * @media/@layer and losing conditional context): this method never MOVES text to a different
+     * position the way resolveLayers() hoists a layer's body -- it only ever DELETES the exact
+     * nested span it matched, leaving everything before and after it (however deeply nested that
+     * context is) byte-for-byte untouched. There is no "outer conditional" for a deletion to
+     * accidentally escape.
+     *
+     * Does NOT recurse into the just-removed nested body to find a FURTHER nested `&` inside it
+     * (double nesting, e.g. `&:hover { &.active { ... } }`) -- the removed text is gone, so a
+     * second `&` construct nested INSIDE it is (correctly) never counted separately; a SIBLING `&`
+     * block later in the SAME outer rule (`.x { &:hover {...} &:focus {...} }`) IS still found
+     * and counted on the next loop iteration (the scan resumes from $matchStart, i.e. right where
+     * the just-removed span used to start, so it naturally continues into whatever follows it).
+     *
+     * @return array{0: string, 1: int} [cssSinNestingAnidado, bloquesAnidadosDescartados]
+     */
+    private function resolveCssNesting(string $css): array
+    {
+        $skipped = 0;
+        $offset = 0;
+        while (preg_match('/&[^{};]*\{/', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
+            $matchStart = (int) $m[0][1];
+            $openBrace = $matchStart + strlen((string) $m[0][0]) - 1;
+            $closeBrace = $this->findMatchingBrace($css, $openBrace);
+            if ($closeBrace === null) {
+                break;
+            }
+            $skipped++;
+            $css = substr($css, 0, $matchStart) . ' ' . substr($css, $closeBrace + 1);
+            $offset = $matchStart;
+        }
+        return [$css, $skipped];
+    }
+
+    /**
      * M8-T7: generalización de la extracción de @page (brace-matching manual, ver docblock de
      * clase) a cualquier at-rule de nivel superior identificado por nombre — @font-face es el
      * segundo consumidor. Sustituye cada bloque encontrado por un espacio en el CSS que se le
@@ -308,7 +477,7 @@ final class StylesheetParser
      *
      * @return array{0: string, 1: int} [cssConMediaResuelto, bloquesDescartadosTotal]
      */
-    private function resolveMediaBlocks(string $css): array
+    private function resolveMediaBlocks(string $css, float $pageWidthPx): array
     {
         $skipped = 0;
         $offset = 0;
@@ -321,8 +490,8 @@ final class StylesheetParser
                 break;
             }
             $body = substr($css, $openBrace + 1, $closeBrace - $openBrace - 1);
-            if ($this->mediaQueryApplies($query)) {
-                [$resolvedBody, $nestedSkipped] = $this->resolveMediaBlocks($body);
+            if ($this->mediaQueryEvaluator->applies($query, $pageWidthPx)) {
+                [$resolvedBody, $nestedSkipped] = $this->resolveMediaBlocks($body, $pageWidthPx);
                 $skipped += $nestedSkipped;
                 $css = substr($css, 0, $matchStart) . $resolvedBody . substr($css, $closeBrace + 1);
             } else {
@@ -335,27 +504,135 @@ final class StylesheetParser
     }
 
     /**
-     * Evaluación MÍNIMA adjudicada (RESTRICCIONES GLOBALES M9-T2, ver docblock de clase): una media
-     * query list (css-mediaqueries-3, separada por comas -- cualquier query de la lista que aplique
-     * hace que toda la lista aplique, semántica OR) aplica si y solo si alguna de sus queries,
-     * normalizada (trim + minúsculas), es exactamente 'all' o 'print'. CUALQUIER feature-query entre
-     * paréntesis (min-width/max-width/hover/prefers-color-scheme/...), 'screen', o cualquier combinación de
-     * ambos (p.ej. "screen and (min-width: 768px)") no aplica -- no hay evaluación real de
-     * features (bootstrap.min.css real no las necesita para imprimirse correctamente: sus
-     * breakpoints responsive son, por definición, irrelevantes en un documento paginado de tamaño
-     * fijo). Explode(',', ...) es seguro aquí: ninguna media feature real usa una coma dentro de sus
-     * paréntesis (a diferencia de una lista de valores CSS normal), así que no hay riesgo de partir
-     * una query compuesta por la mitad.
+     * M10-T3 (css-cascade-5 §4.4, reduced -- "Tailwind solo necesita theme<base<components<
+     * utilities", per the brief's own RESTRICCIONES GLOBALES): Tailwind v4's CLI output wraps
+     * EVERYTHING (its custom-property theme, the preflight reset, and every utility class) in
+     * named `@layer` blocks, plus two BARE declaration statements up front with no body at all
+     * (`@layer properties;` then `@layer theme, base, components, utilities;`) that exist purely
+     * to PIN the cascade order of those five layer names before any of them is ever given a body
+     * -- css-cascade-5's actual rule: "the order of layers is the order in which the FIRST
+     * `@layer` (block OR bare statement) for that name appears anywhere in the stylesheet",
+     * completely independent of where each layer's declarations physically sit in the file
+     * afterwards.
+     *
+     * Design (brief's own words: "simplest correct = reorder the extracted blocks' rules into the
+     * output stream by layer rank, stable within layer"): a single top-level, offset-driven scan
+     * (same brace-matching machinery as resolveMediaBlocks()/extractAtRuleBlocks()) walks the css
+     * once, and for every `@layer` construct it finds:
+     *  - a BARE statement (`@layer a, b, c;`, no body) registers each comma-separated name in
+     *    $order (if not already present) and is removed from the css with no body to carry.
+     *  - a NAMED block (`@layer name { ... }`) registers `name` in $order (if new) and APPENDS its
+     *    body text to that name's bucket in $bodies -- "appends" because css-cascade-5 allows the
+     *    SAME layer name to reopen with more than one block; every occurrence contributes to the
+     *    SAME layer rank (the first one it ever saw), never a new one, so a later re-opening of an
+     *    EARLIER-ranked layer does not "bump" it -- see StylesheetParserTest's multi-block case.
+     *  - an ANONYMOUS block (`@layer { ... }`, no name) gets a synthetic, never-colliding key
+     *    (`"\0anon0"`, `"\0anon1"`, ...) registered at ITS OWN textual position -- "its own rank
+     *    slot" per the milestone interface note, since an anonymous layer can never be reopened by
+     *    name (nothing else can ever reference it) so every occurrence is necessarily distinct.
+     *
+     * After the scan, $css itself (with every @layer construct removed, replaced by a single
+     * space each) holds whatever text was NEVER inside any @layer at all -- concatenating the
+     * ordered per-layer buckets FIRST and this un-layered remainder LAST is the entire mechanism
+     * that makes "un-layered rules win at equal specificity" true: StylesheetParser::parse()'s own
+     * `$order++` counter (below, in the caller) then assigns the un-layered rules the HIGHEST
+     * $order values of the whole document, and StyleResolver already treats a higher $order as the
+     * tie-breaking winner at equal specificity (same mechanism that makes "later rule in the same
+     * file wins" true for ordinary un-layered CSS, completely unchanged by this task).
+     *
+     * Recursion note (documented divergence, brief-adjudicated "reduced"): this method does NOT
+     * recurse into an already-extracted layer body to resolve a NESTED `@layer` inside it --
+     * Tailwind v4's real generated output never nests one (verified against the vendored fixture,
+     * see tests/Fixtures/tailwind/tailwind-output.css), so this is a deliberate scope narrowing,
+     * not an oversight; a hand-authored stylesheet that nests `@layer` INSIDE another `@layer`
+     * block would have that inner construct pass through unresolved into whatever consumes the
+     * outer layer's body next (@property/@container/@font-face/@page extraction, then sabberworm
+     * directly -- @media already ran BEFORE this method, see parse()'s own ordering comment,
+     * M10 final-review Finding C) — likely misinterpreted, same "reduced, documented" spirit as
+     * every other explicitly-scoped-down at-rule in this class.
+     *
+     * M10 final-review Finding C (css-cascade-5 / css-conditional-3): the scan below used to match
+     * `@layer` at ANY brace depth, completely blind to whether it sat inside some OTHER, still-
+     * unresolved conditional construct -- `@media screen { @layer x { p{color:red} } }` let this
+     * method reach INTO the unresolved `@media screen` body and HOIST `p{color:red}` out to
+     * wherever layer "x"'s rank placed it, entirely divorced from the `screen` condition that
+     * should have gated it (making it apply on every medium, including print) -- see parse()'s own
+     * docblock for the full bug and why @media now resolves BEFORE this method runs. That ordering
+     * fix alone covers @media, but this method is ALSO reachable with a still-unresolved @container
+     * wrapped around a `@layer` (@container extraction runs AFTER this method, unchanged by the
+     * @media/@layer reordering -- @container is never evaluated at all, M10-T6) — same hoisting
+     * bug, different wrapper. Fix: `braceDepthAt()` computes how many un-matched `{` precede a
+     * candidate match; any match at depth > 0 is left COMPLETELY untouched (not extracted, not
+     * counted, not advanced past — the loop simply resumes scanning from just after it) instead of
+     * being extracted/hoisted, so a `@layer` genuinely nested inside ANY still-unresolved
+     * conditional construct (whatever it is) is safely ignored by this pass and handled by
+     * whatever construct wraps it instead (discarded whole, same as the pre-existing @container/
+     * @media "outer decision governs the nested subtree" rule already documented on those methods
+     * -- or, for @media specifically, already unwrapped to genuine top level by the time this
+     * method runs, in which case it's found normally at depth 0).
+     *
+     * !important note: this method ALSO detects (via a single case-insensitive substring scan per
+     * collected body -- declarations are still raw text here, sabberworm has not tokenized them
+     * yet) whether ANY declaration inside ANY named/anonymous layer body used `!important`, so the
+     * caller (parse()) can raise the ONE adjudicated warning about simplified (non-inverted)
+     * cross-layer !important precedence -- see that call site's own docblock for why the
+     * PRECEDENCE ITSELF is not touched here, only the DETECTION.
+     *
+     * @return array{0: string, 1: bool} [cssConLayersResueltos, huboImportantDentroDeUnLayer]
      */
-    private function mediaQueryApplies(string $query): bool
+    private function resolveLayers(string $css): array
     {
-        foreach (explode(',', $query) as $part) {
-            $normalized = strtolower(trim($part));
-            if ($normalized === 'all' || $normalized === 'print') {
-                return true;
+        /** @var list<string> $order */
+        $order = [];
+        /** @var array<string, string> $bodies */
+        $bodies = [];
+        $importantInLayer = false;
+        $anonCounter = 0;
+        $offset = 0;
+        while (preg_match('/@layer\b([^{;]*)([{;])/i', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
+            $matchStart = (int) $m[0][1];
+            // M10 final-review Finding C: a match nested inside some other still-unresolved
+            // construct (brace depth > 0) is left untouched -- see this method's own docblock.
+            if ($this->braceDepthAt($css, $matchStart) > 0) {
+                $offset = $matchStart + strlen((string) $m[0][0]);
+                continue;
             }
+            $namesPart = trim((string) $m[1][0]);
+            $terminator = $m[2][0];
+            if ($terminator === ';') {
+                $statementEnd = $matchStart + strlen((string) $m[0][0]);
+                foreach (explode(',', $namesPart) as $name) {
+                    $name = trim($name);
+                    if ($name !== '' && !in_array($name, $order, true)) {
+                        $order[] = $name;
+                    }
+                }
+                $css = substr($css, 0, $matchStart) . ' ' . substr($css, $statementEnd);
+                $offset = $matchStart;
+                continue;
+            }
+            $openBrace = $matchStart + strlen((string) $m[0][0]) - 1;
+            $closeBrace = $this->findMatchingBrace($css, $openBrace);
+            if ($closeBrace === null) {
+                break;
+            }
+            $body = substr($css, $openBrace + 1, $closeBrace - $openBrace - 1);
+            $key = $namesPart === '' ? "\0anon" . $anonCounter++ : $namesPart;
+            if (!in_array($key, $order, true)) {
+                $order[] = $key;
+            }
+            $bodies[$key] = ($bodies[$key] ?? '') . ' ' . $body;
+            if (!$importantInLayer && preg_match('/!\s*important/i', $body) === 1) {
+                $importantInLayer = true;
+            }
+            $css = substr($css, 0, $matchStart) . ' ' . substr($css, $closeBrace + 1);
+            $offset = $matchStart;
         }
-        return false;
+        $layered = '';
+        foreach ($order as $key) {
+            $layered .= ($bodies[$key] ?? '') . ' ';
+        }
+        return [$layered . $css, $importantInLayer];
     }
 
     /**
@@ -553,6 +830,30 @@ final class StylesheetParser
             }
         }
         return null;
+    }
+
+    /**
+     * M10 final-review Finding C: how many un-matched `{` precede $position in $text -- 0 means
+     * $position sits at the top level of the document (not inside ANY block, of any kind);
+     * anything > 0 means it's nested inside at least one still-open construct. Used by
+     * resolveLayers() to refuse to touch a `@layer` match that isn't genuinely top-level (see that
+     * method's own docblock for the hoisting bug this guards against). Same pragmatic, non-string-
+     * aware brace counting as findMatchingBrace() right above -- a `{`/`}` inside a quoted CSS
+     * string value would miscount, a limitation already shared by every other brace-matcher in
+     * this class (comments are stripped upstream by stripComments(), the one source of stray
+     * braces this class DOES account for).
+     */
+    private function braceDepthAt(string $text, int $position): int
+    {
+        $depth = 0;
+        for ($i = 0; $i < $position; $i++) {
+            if ($text[$i] === '{') {
+                $depth++;
+            } elseif ($text[$i] === '}') {
+                $depth--;
+            }
+        }
+        return $depth;
     }
 
     /**

@@ -36,6 +36,39 @@ it('folds physical units to px at parse time, same factors as CssLength', functi
     expect($expr?->pxOffset)->toBe(96.0 - 96.0 / 72.0);
 });
 
+// --- M10-T1 (css-values-4 §5.1.1): vw/vh join the folded vector as two more symbolic
+// components, same deferred treatment as % (resolved in ComputedStyle::compute() against the
+// page's own CSS-px size, never here). --------------------------------------------------------
+
+it('keeps vw/vh symbolic in the folded vector', function () {
+    $expr = new CalcParser()->parse('1.5vw');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, 0.0, 1.5, 0.0));
+
+    $expr2 = new CalcParser()->parse('100vh - 20px');
+    expect($expr2)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, -20.0, 0.0, 100.0));
+});
+
+it('hand-computes Bootstrap\'s calc(1.375rem + 1.5vw) on an A4 page (793.7007874015748px wide)', function () {
+    $expr = new CalcParser()->parse('1.375rem + 1.5vw');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 1.375, 0.0, 1.5, 0.0));
+
+    // remBase=16px -> 1.375rem = 22px; A4 width 793.7007874015748px -> 1.5vw = 11.905511811023623px
+    // -> 22 + 11.905511811023623 = 33.905511811023623px (rounds to the brief's hand-verified
+    // 33.91px).
+    $pageWidthPx = 210.0 / 25.4 * 96.0;
+    $folded = $expr->fold(16.0, 16.0, null, $pageWidthPx, 0.0);
+    expect($folded)->toBeFloat();
+    expect(round($folded, 2))->toBe(33.91);
+    expect($folded)->toBe(22.0 + 11.905511811023623);
+});
+
+it('combines vw and vh in the same expression, each folded against its own base', function () {
+    $expr = new CalcParser()->parse('50vw + 25vh');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, 0.0, 50.0, 25.0));
+    $folded = $expr->fold(16.0, 16.0, null, 800.0, 600.0);
+    expect($folded)->toBe(0.5 * 800.0 + 0.25 * 600.0);
+});
+
 it('divides a length by a plain number', function () {
     $expr = new CalcParser()->parse('20px / 4');
     expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, 5.0));
@@ -104,5 +137,44 @@ it('warns and returns null when a bare leading-decimal number is the whole expre
     $parser = new CalcParser();
     $expr = $parser->parse('.25');
     expect($expr)->toBeNull();
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+// --- M10-T5: parseNumberOrLength() -- the line-height-only entry point that accepts a
+// dimensionless calc() result (Tailwind v4's `--text-*--line-height` ratios), unlike parse()
+// above which always rejects a bare number. ------------------------------------------------------
+
+it('parseNumberOrLength() resolves Tailwind\'s calc(1.25 / .875) ratio to a bare-number multiplier', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('1.25 / .875');
+    // 1.25 / .875 = 1.4285714285714286 (hand-verified) -- exact float comparison, same convention
+    // as this file's own "hand-computes Bootstrap's calc()" test above.
+    expect($result)->toEqual(['number' => 1.25 / 0.875]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parseNumberOrLength() resolves calc(2 / 1.5) to 1.3333...', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('2 / 1.5');
+    expect($result)->toEqual(['number' => 2.0 / 1.5]);
+});
+
+it('parseNumberOrLength() still resolves a length/percentage calc() to the vector shape, unchanged', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('1em + 4px');
+    expect($result)->toEqual(['length' => CalcExpr::of(0.0, 1.0, 0.0, 4.0)]);
+});
+
+it('parseNumberOrLength() warns and returns null on the same failures parse() rejects (division by zero)', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('10px / 0');
+    expect($result)->toBeNull();
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parseNumberOrLength() warns and returns null on malformed syntax (unbalanced parens)', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('(2 + 3');
+    expect($result)->toBeNull();
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
