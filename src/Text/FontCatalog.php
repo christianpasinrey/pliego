@@ -23,7 +23,13 @@ namespace Pliego\Text;
  */
 final class FontCatalog
 {
-    /** @var array<string, array<int, array<string, string>>> family => weight => 'normal'|'italic' => ttfPath */
+    /**
+     * @var array<string, array<int, array<string, string>>> lowercased family => weight =>
+     *     'normal'|'italic' => ttfPath. Keys are normalized via normalizeFamily() at register()
+     *     time (the ONE canonical point, see that method's docblock) so a family is matched the
+     *     same way no matter which casing the CSS author used to declare it (@font-face) or
+     *     reference it (font-family) -- CSS font family names are case-insensitive end to end.
+     */
     private array $registrations = [];
 
     /** @var array<string, TtfFont> ttfPath => loaded font */
@@ -67,7 +73,7 @@ final class FontCatalog
 
     public function register(string $family, int $weight, bool $italic, string $ttfPath): void
     {
-        $this->registrations[$family][$weight][$this->styleKey($italic)] = $ttfPath;
+        $this->registrations[$this->normalizeFamily($family)][$weight][$this->styleKey($italic)] = $ttfPath;
     }
 
     /**
@@ -81,19 +87,15 @@ final class FontCatalog
      */
     public function hasFamily(string $family): bool
     {
-        foreach (array_keys($this->registrations) as $registered) {
-            if (strcasecmp($registered, $family) === 0) {
-                return true;
-            }
-        }
-        return false;
+        return isset($this->registrations[$this->normalizeFamily($family)]);
     }
 
     /** Fallback: exact -> (weight,normal) -> (400,style) -> (400,normal) -> same chain in family 'default'. */
     public function select(string $family, int $weight, bool $italic): FontFace
     {
-        $match = $this->resolve($family, $weight, $italic)
-            ?? ($family !== 'default' ? $this->resolve('default', $weight, $italic) : null);
+        $normalizedFamily = $this->normalizeFamily($family);
+        $match = $this->resolve($normalizedFamily, $weight, $italic)
+            ?? ($normalizedFamily !== 'default' ? $this->resolve('default', $weight, $italic) : null);
 
         if ($match === null) {
             throw new FontException(
@@ -129,7 +131,11 @@ final class FontCatalog
         return $this->select($family, (int) $weight, $style === 'italic');
     }
 
-    /** @return array{string, int, bool, string}|null */
+    /**
+     * @param string $family ALREADY normalized (lowercased) by the sole caller, select() — this
+     *     private method never touches $registrations with a raw, possibly author-cased key.
+     * @return array{string, int, bool, string}|null
+     */
     private function resolve(string $family, int $weight, bool $italic): ?array
     {
         $seen = [];
@@ -152,5 +158,17 @@ final class FontCatalog
     private function styleKey(bool $italic): string
     {
         return $italic ? 'italic' : 'normal';
+    }
+
+    /**
+     * THE canonical normalization point (fixes the silent-fallback defect where an @font-face
+     * family registered with author casing, e.g. 'MiSerif', would never match a font-family
+     * usage with different casing, e.g. 'miserif' -- CSS font family names are case-insensitive,
+     * per CSS Fonts §5.3.1, but register()/select() previously did an exact array-key lookup).
+     * mb_strtolower (not strtolower) so non-ASCII family names fold correctly too.
+     */
+    private function normalizeFamily(string $family): string
+    {
+        return mb_strtolower($family);
     }
 }

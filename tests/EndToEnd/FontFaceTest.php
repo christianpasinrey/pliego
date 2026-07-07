@@ -137,6 +137,35 @@ it('maps an unsupported numeric font-weight to the nearest of 400/700, with a wa
     expect($baseFonts)->toContain('DejaVuSerif-Bold');
 });
 
+// --- Case-insensitive family lookup end to end (reviewer-verified defect) ----------------------
+
+it('matches an @font-face family against a differently-cased font-family usage (reviewer repro)', function () {
+    $css = "@font-face { font-family: 'MiSerif'; src: url('DejaVuSerif.ttf') }\n"
+        . "p { font-family: 'miserif'; }";
+    [$pdf, $report] = fontFaceRenderToPdfString($css, '<body><p>Texto en miserif</p></body>');
+
+    expect($report->warnings)->toBe([]);
+    expect(fontFaceDistinctBaseFonts($pdf))->toContain('DejaVuSerif');
+});
+
+it('matches an @font-face family against a differently-cased font-family usage (reverse casing)', function () {
+    $css = "@font-face { font-family: 'miserif'; src: url('DejaVuSerif.ttf') }\n"
+        . "p { font-family: 'MiSerif'; }";
+    [$pdf, $report] = fontFaceRenderToPdfString($css, '<body><p>Texto en MiSerif</p></body>');
+
+    expect($report->warnings)->toBe([]);
+    expect(fontFaceDistinctBaseFonts($pdf))->toContain('DejaVuSerif');
+});
+
+it('matches a case-mismatched @font-face family inside a font-family fallback list', function () {
+    $css = "@font-face { font-family: 'MiSerif'; src: url('DejaVuSerif.ttf') }\n"
+        . "p { font-family: NoExiste, MISERIF, sans-serif; }";
+    [$pdf, $report] = fontFaceRenderToPdfString($css, '<body><p>Texto</p></body>');
+
+    expect($report->warnings)->toBe([]);
+    expect(fontFaceDistinctBaseFonts($pdf))->toContain('DejaVuSerif');
+});
+
 // --- Ghostscript smoke test: proves an @font-face-heavy PDF is well-formed enough to rasterize --
 
 function fontFaceFindGhostscriptBinary(): ?string

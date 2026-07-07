@@ -125,3 +125,27 @@ it('hasFamily() is case-insensitive and reflects only what was actually register
     $catalog->register('Arial', 400, false, fontCatalogFixturesDir() . '/DejaVuSans.ttf');
     expect($catalog->hasFamily('arial'))->toBeTrue();
 });
+
+// --- select()/register() case-insensitivity end to end (reviewer-verified defect) --------------
+
+it('selects a face registered under a differently-cased family name', function (): void {
+    $catalog = new FontCatalog();
+    $catalog->register('MiSerif', 400, false, fontCatalogFixturesDir() . '/DejaVuSerif.ttf');
+
+    $face = $catalog->select('miserif', 400, false);
+
+    expect($face->font->bytes())->toBe(
+        file_get_contents(fontCatalogFixturesDir() . '/DejaVuSerif.ttf'),
+    );
+});
+
+it('selects a face registered lowercase when asked with the original author casing', function (): void {
+    $catalog = new FontCatalog();
+    $catalog->register('miserif', 400, false, fontCatalogFixturesDir() . '/DejaVuSerif.ttf');
+
+    $face = $catalog->select('MiSerif', 400, false);
+
+    expect($face->font->bytes())->toBe(
+        file_get_contents(fontCatalogFixturesDir() . '/DejaVuSerif.ttf'),
+    );
+});
