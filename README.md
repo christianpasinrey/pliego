@@ -956,6 +956,152 @@ What it does **not** do:
   calling `->bootstrap()` renders byte-for-byte as before this feature
   existed.
 
+## Tailwind
+
+There is **no `Engine::tailwind()`/`Engine::tailwindPreflight()`** — unlike
+Bootstrap, Tailwind gets no preset API at all, a deliberate M10-T4
+adjudication (full reasoning in `.superpowers/sdd/m10-task-4-report.md`).
+The short version: Bootstrap ships one authoritative `bootstrap.min.css`
+that's the same for every project, so vendoring it once is genuinely
+useful. Tailwind v4 doesn't work that way — every real build is
+**per-project JIT output**, containing only the utility classes *your own*
+HTML actually uses. There is no single canonical "Tailwind CSS" file to
+vendor; a copy of "a" build would just be one arbitrary sample page's worth
+of classes, useless for anyone else's markup.
+
+### The workflow: bring your own build
+
+1. Write HTML with Tailwind utility classes, same as any Tailwind project.
+2. Generate the CSS locally with the standalone CLI, pointed at your HTML:
+   ```
+   npm install -D tailwindcss @tailwindcss/cli
+   npx @tailwindcss/cli -i input.css -o output.css --content "path/to/your/*.html"
+   ```
+   (`input.css` needs only `@import "tailwindcss";` — Tailwind v4's entry
+   point, replacing v3's `@tailwind base/components/utilities;`.)
+3. Pass the generated CSS straight into `->stylesheet()`, same as any other
+   hand-written or third-party sheet:
+   ```php
+   use Pliego\Engine;
+
+   $css = file_get_contents('output.css');
+   $report = Engine::make()->stylesheet($css)->render($html)->save('out.pdf');
+   ```
+
+pliego never shells out to the CLI itself and never vendors a copy of
+Tailwind's CSS — no new runtime dependency, and nothing that can drift out
+of sync with whatever Tailwind version your own build actually used.
+
+### What genuinely works
+
+M10-T3 ingested a **real, pinned Tailwind v4.3.2 CLI build**
+(`tests/Fixtures/tailwind/tailwind-output.css`, MIT — generated once
+against a representative utilities page and vendored as a golden fixture,
+never re-run) end to end: 191 rules, 104 warnings across 16 categories, a
+complete honest partition just like the Bootstrap audit.
+
+- Static utility classes: spacing (`p-*`/`m-*`/`gap-*`), flexbox (`flex`,
+  `flex-direction`, `flex-wrap`, `justify-*`, `items-*`), colors
+  (`bg-*`/`text-*`), typography (`text-*`/`font-*`/`tracking-*`/
+  `leading-*`), `rounded-*`, `shadow-*`, width/height.
+- `oklch()` colors — Tailwind v4's entire default palette is defined in
+  OKLCH, not sRGB hex; converted through the real css-color-4 matrix chain
+  (`Color::oklchToSrgb()`), hand-verified against the spec and
+  cross-checked with the `culori` npm library. **Not** the old Tailwind v3
+  hex values for the same class names (v4 recomputed its whole palette
+  directly in OKLCH for wider-gamut displays — only visually close to v3,
+  never byte-identical).
+- `@layer` (`theme`/`base`/`components`/`utilities`) — a real Tailwind v4
+  build wraps virtually everything in `@layer`; unwrapped here in cascade
+  rank order (css-cascade-5, reduced: no recursion into a nested `@layer`,
+  and layered `!important` doesn't invert cross-layer precedence per
+  §4.4 — one document-wide warning instead).
+- `:nth-child(odd)`/`:nth-child(even)` (Tailwind's own table-striping
+  idiom) and CSS custom properties/`calc()` (Tailwind's entire spacing
+  scale is `calc(var(--spacing) * N)`).
+
+### What doesn't, and why
+
+- **Variant classes never apply**: `hover:`, `sm:`, `md:`, `dark:`,
+  `odd:`, `even:`, … all fail to match. Tailwind escapes the colon in the
+  generated selector (`.hover\:bg-blue-600`), and this engine's
+  `SelectorParser` tokenizes class names with a plain CSS-ident regex that
+  doesn't accept a backslash escape — the whole compound selector fails to
+  parse (`invalid-selector`, one warning per variant class encountered).
+  Static (non-variant) utilities on the same element are unaffected.
+- **Fraction utilities fail the exact same way**: `w-1/2`, `h-1/2`, …
+  Tailwind escapes the `/` as `\/` in the class name for the identical
+  reason above — the same backslash-escape gap, not a fraction-math
+  problem.
+- **No grid support**: `display: grid`, `grid-template-columns`,
+  `grid-cols-*`, `col-span-*`, etc. all warn and are dropped — this engine
+  only implements block/inline/flex/table layout, no grid formatting
+  context (see [Roadmap](#roadmap)).
+- **The all-sides `border` shorthand doesn't apply**: Tailwind's plain
+  `.border`/`.border-{color}` utilities emit the all-sides `border-width`/
+  `border-style`/`border-color` shorthand properties, which this engine
+  doesn't recognize (`DeclarationParser::isBorderLonghand()` only matches
+  the 4-part **per-side** form, `border-{side}-{width,style,color}`) — a
+  pre-existing gap, not introduced by Tailwind ingestion.
+- **Pseudo-elements aren't matched**: `::before`, `::after`,
+  `::placeholder`, `::-webkit-*`, etc. — `SelectorParser` doesn't
+  implement pseudo-elements at all yet, so any rule keyed on one
+  (including most of Tailwind's own preflight reset, see below) falls
+  into `invalid-selector`.
+- `@property` rules (Tailwind emits dozens — one per animatable custom
+  property) are dropped with a single aggregated warning; animation/
+  transition support is out of scope for a paginated PDF regardless.
+
+None of this is silent — every gap above surfaces as a real entry in
+`RenderReport::$warnings` (the same list the playground's warnings panel
+renders), and the counts above come from ingesting the **entire** real
+build with zero exceptions carved out, not a cherry-picked sample.
+
+### Why no preflight preset
+
+The milestone plan considered a narrower preset — just Tailwind's reset
+(`@layer base`, the part of every build that normalizes `box-sizing`,
+zeroes margins, sets font stacks), extracted the way `Engine::bootstrap()`
+vendors the whole Bootstrap sheet. Adjudicated **against** it:
+
+- The one rule in the preflight with real, non-duplicate value — `*,
+  ::before, ::after { box-sizing: border-box; margin: 0; padding: 0 }` —
+  is one line a user can write by hand if they need it. Everything else
+  either duplicates pliego's own user-agent stylesheet
+  (`Style\UserAgentStylesheet` already gives spec-compliant Appendix-D
+  margins for headings/paragraphs/lists) or actively **conflicts** with
+  it: Tailwind's preflight zeroes `h1`-`h6` font-size/margin, assuming its
+  own typography utilities re-apply them — shipping that as a standalone
+  preset would silently strip pliego's sane heading defaults for anyone
+  who pastes it in without also writing utility classes, which is worse
+  than doing nothing.
+- Roughly half of preflight's own selectors target pseudo-elements this
+  engine doesn't support (`::after`, `::before`, `::backdrop`,
+  `::file-selector-button`, `::placeholder`, several `::-webkit-*`) — so
+  "extract it clean" isn't actually clean: a first-party preset built out
+  of rules that immediately warn `invalid-selector` would be a bad first
+  impression for something billed as an official asset.
+- Anyone following the bring-your-own-build workflow above already GETS
+  the preflight for free — it's embedded in `@layer base` of every real
+  Tailwind build, correctly version-matched to whatever Tailwind release
+  generated their own utilities. A vendored copy would be redundant at
+  best and version-drifted at worst, exactly the cost the milestone brief
+  itself flagged.
+
+### Playground
+
+The playground (`index.php`) has an **"Ejemplo Tailwind"** sample button,
+next to "Ejemplo" and "Ejemplo Bootstrap": a small invoice-style card and
+table styled entirely with Tailwind utility classes (`bg-blue-500`,
+`rounded-lg`, `shadow-md`, `flex`/`gap-4`, `text-*`/`font-bold`, …). Its
+CSS is a slim, hand-curated slice of the real vendored v4.3.2 build above
+— every selector/value copied verbatim and trimmed down to just the
+classes the sample HTML uses (the sample deliberately avoids the
+unsupported all-sides `border` shorthand, using `shadow-md`/background
+color for visual definition instead — see the code comment in `index.php`
+for the two specific gaps it works around). Nothing shells out to `npx`;
+it's a faithful excerpt of real Tailwind CLI output, not a live build.
+
 ## Oracle: Chrome as ground truth
 
 Warnings tell you what pliego *didn't understand*; they say nothing about
