@@ -221,3 +221,130 @@ it('warns and declares no override for rem in @page margin (no font context at p
     expect($result->pageRule?->margins)->toBe([]);
     expect($result->warnings)->not->toBeEmpty();
 });
+
+// --- M8-T7: @font-face (css-fonts-4 §4 reducido) ------------------------------------------
+
+use Pliego\Css\Value\FontFaceRule;
+
+it('parses a minimal @font-face into a FontFaceRule with default weight/style', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'MiSerif'; src: url('fonts/MiSerif.ttf') }");
+    expect($result->fontFaceRules)->toEqual([
+        new FontFaceRule('MiSerif', 'fonts/MiSerif.ttf', 400, false),
+    ]);
+    expect($result->warnings)->toBe([]);
+});
+
+it('strips double AND single quotes from font-family', function () {
+    $result = new StylesheetParser()->parse('@font-face { font-family: "Mi Serif"; src: url(fonts/x.ttf) }');
+    expect($result->fontFaceRules[0]->family)->toBe('Mi Serif');
+});
+
+it('ignores a format() hint alongside url() and still extracts the path', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('fonts/x.ttf') format('truetype') }");
+    expect($result->fontFaceRules[0]->srcPath)->toBe('fonts/x.ttf');
+});
+
+it('maps font-weight bold and normal keywords to 700/400', function () {
+    $bold = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.ttf'); font-weight: bold }");
+    $normal = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.ttf'); font-weight: normal }");
+    expect($bold->fontFaceRules[0]->weight)->toBe(700);
+    expect($normal->fontFaceRules[0]->weight)->toBe(400);
+});
+
+it('accepts a numeric font-weight outside 400/700 as-is (Engine maps it to the nearest slot later)', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.ttf'); font-weight: 500 }");
+    expect($result->fontFaceRules[0]->weight)->toBe(500);
+    expect($result->warnings)->toBe([]);
+});
+
+it('collapses a font-weight range to its first value, with a warning', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.ttf'); font-weight: 100 900 }");
+    expect($result->fontFaceRules[0]->weight)->toBe(100);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('parses font-style: italic', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.ttf'); font-style: italic }");
+    expect($result->fontFaceRules[0]->italic)->toBeTrue();
+});
+
+it('parses four separate @font-face rules for the same family into four FontFaceRule entries', function () {
+    $css = <<<'CSS'
+        @font-face { font-family: 'Acme'; src: url('acme-regular.ttf') }
+        @font-face { font-family: 'Acme'; src: url('acme-bold.ttf'); font-weight: bold }
+        @font-face { font-family: 'Acme'; src: url('acme-italic.ttf'); font-style: italic }
+        @font-face { font-family: 'Acme'; src: url('acme-bolditalic.ttf'); font-weight: bold; font-style: italic }
+        CSS;
+    $result = new StylesheetParser()->parse($css);
+    expect($result->fontFaceRules)->toHaveCount(4);
+    expect($result->fontFaceRules)->toEqual([
+        new FontFaceRule('Acme', 'acme-regular.ttf', 400, false),
+        new FontFaceRule('Acme', 'acme-bold.ttf', 700, false),
+        new FontFaceRule('Acme', 'acme-italic.ttf', 400, true),
+        new FontFaceRule('Acme', 'acme-bolditalic.ttf', 700, true),
+    ]);
+});
+
+it('falls back past a woff src to the next ttf src, with a warning', function () {
+    $result = new StylesheetParser()->parse(
+        "@font-face { font-family: 'X'; src: url('a.woff') format('woff'), url('a.ttf') format('truetype') }",
+    );
+    expect($result->fontFaceRules[0]->srcPath)->toBe('a.ttf');
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('warns and drops the rule when every src is unusable (woff-only)', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.woff') format('woff') }");
+    expect($result->fontFaceRules)->toBe([]);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('skips a remote http(s) src with a warning', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('https://example.com/a.ttf') }");
+    expect($result->fontFaceRules)->toBe([]);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('falls back past a remote src to a local ttf src', function () {
+    $result = new StylesheetParser()->parse(
+        "@font-face { font-family: 'X'; src: url('https://example.com/a.ttf'), url('local.ttf') }",
+    );
+    expect($result->fontFaceRules[0]->srcPath)->toBe('local.ttf');
+});
+
+it('skips local() with a warning (no system font access in M8)', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: local('Georgia') }");
+    expect($result->fontFaceRules)->toBe([]);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('drops the rule and warns when font-family is missing', function () {
+    $result = new StylesheetParser()->parse("@font-face { src: url('a.ttf') }");
+    expect($result->fontFaceRules)->toBe([]);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('drops the rule and warns when src is missing entirely', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X' }");
+    expect($result->fontFaceRules)->toBe([]);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('warns but keeps the rule when unicode-range is declared (whole font loads anyway)', function () {
+    $result = new StylesheetParser()->parse(
+        "@font-face { font-family: 'X'; src: url('a.ttf'); unicode-range: U+0-FF }",
+    );
+    expect($result->fontFaceRules)->toHaveCount(1);
+    expect($result->warnings)->not->toBeEmpty();
+});
+
+it('parses regular rules alongside an @font-face block', function () {
+    $result = new StylesheetParser()->parse("@font-face { font-family: 'X'; src: url('a.ttf') } p { color: red }");
+    expect($result->fontFaceRules)->toHaveCount(1);
+    expect($result->rules)->toHaveCount(1);
+});
+
+it('has an empty fontFaceRules list when there is no @font-face block', function () {
+    $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->fontFaceRules)->toBe([]);
+});

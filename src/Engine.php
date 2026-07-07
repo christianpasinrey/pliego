@@ -11,6 +11,7 @@ use Pliego\Css\Value\Length;
 use Pliego\Css\WarningCollector;
 use Pliego\Dom\HtmlParser;
 use Pliego\Image\ImageLoader;
+use Pliego\Image\ImagePathResolver;
 use Pliego\Layout\BlockFlowContext;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Layout\TextMeasurer;
@@ -27,6 +28,8 @@ use Pliego\Style\CssStyleSource;
 use Pliego\Style\FontStyle;
 use Pliego\Style\StyleResolver;
 use Pliego\Text\FontCatalog;
+use Pliego\Text\FontException;
+use Pliego\Text\TtfFont;
 
 final class Engine
 {
@@ -120,6 +123,37 @@ final class Engine
             foreach ($this->extraFonts as [$family, $weight, $style, $ttfPath]) {
                 $catalog->register($family, $weight, $style === FontStyle::Italic, $ttfPath);
             }
+            // M8-T7 (css-fonts-4 §4 reducido): @font-face rules parsed above by StylesheetParser
+            // -- registered into the SAME catalog, AFTER font()/fontFile() (so a stylesheet
+            // @font-face can override a programmatic font() registration for the same family/
+            // weight/style slot -- same "last wins" semantics FontCatalog::register() already has
+            // between any two calls). $fontFaceRule->srcPath is resolved against $this->basePath
+            // with the SAME convention as <img src> and background-image (Image\
+            // ImagePathResolver, M8-T6). A missing or unparseable (corrupt/truncated) font file
+            // is a WARNING, never fatal: the family/slot is simply left unregistered and
+            // Layout\Text\FontFamilyResolver's normal fallback chain (M7-T2) takes it from there
+            // at layout time. Deviation documented: this eagerly parses the TTF here just to
+            // validate it (TtfFont::fromFile() throws on a missing/malformed file), then
+            // FontCatalog parses it AGAIN lazily on first select() (its own fontCache is keyed by
+            // path and has no way to receive an already-parsed instance via register()) -- a
+            // double parse per REGISTERED @font-face family, not per glyph/page, so bounded and
+            // acceptable for M8 scope.
+            foreach ($parseResult->fontFaceRules as $fontFaceRule) {
+                $resolvedPath = ImagePathResolver::resolve($this->basePath, $fontFaceRule->srcPath);
+                try {
+                    TtfFont::fromFile($resolvedPath);
+                } catch (FontException $e) {
+                    $layoutWarnings->addWarning(
+                        "@font-face: could not load font for family '{$fontFaceRule->family}' ($resolvedPath): " . $e->getMessage(),
+                    );
+                    continue;
+                }
+                [$slotWeight, $weightWarning] = self::nearestFontFaceCatalogWeight($fontFaceRule->weight);
+                if ($weightWarning !== null) {
+                    $layoutWarnings->addWarning($weightWarning);
+                }
+                $catalog->register($fontFaceRule->family, $slotWeight, $fontFaceRule->italic, $resolvedPath);
+            }
             $measurer = new TextMeasurer();
 
             // M2-T6: @page margin (Css\PageRuleData, crudo) -> Page\PageRule; sus márgenes, si
@@ -211,5 +245,23 @@ final class Engine
             $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings(), ...$layoutWarnings->drain()];
             return new RenderReport($warnings, $pageCount);
         });
+    }
+
+    /**
+     * M8-T7: Text\FontCatalog only supports two weight slots per family/style (400 regular, 700
+     * bold — same two-weight model as its withDefaults() builtins, see FontCatalog's own
+     * docblock). Any @font-face font-weight other than exactly 400/700 (e.g. 500 for a "Medium"
+     * cut) is mapped to whichever of the two is numerically closer (500 -> 400, 600 -> 700, a tie
+     * at 550 -> 400), with a warning — never silently dropped, never a third slot invented.
+     *
+     * @return array{0: int, 1: ?string}
+     */
+    private static function nearestFontFaceCatalogWeight(int $weight): array
+    {
+        if ($weight === 400 || $weight === 700) {
+            return [$weight, null];
+        }
+        $nearest = abs($weight - 400) <= abs($weight - 700) ? 400 : 700;
+        return [$nearest, "@font-face font-weight $weight approximated to $nearest (only 400/700 are supported per family/style)"];
     }
 }
