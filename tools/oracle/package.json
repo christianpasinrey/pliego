@@ -1,0 +1,12 @@
+{
+  "name": "pliego-oracle",
+  "private": true,
+  "description": "M9-T5: dev-only Playwright/Chromium runner for pliego's visual-regression oracle. Never a runtime dependency of the pliego package itself -- see tools/oracle's own docs/CHANGELOG entry and the composer.json comment on why this lives outside composer.json entirely.",
+  "type": "module",
+  "scripts": {
+    "render": "node render-chrome.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}

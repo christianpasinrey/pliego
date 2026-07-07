@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans.ttf); font-weight: 400; font-style: normal; }
+  @font-face { font-family: 'DejaVu Sans'; src: url(../../../resources/fonts/DejaVuSans-Bold.ttf); font-weight: 700; font-style: normal; }
+  @page { margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body { width: 794px; font-family: 'DejaVu Sans', sans-serif; padding: 40px; box-sizing: border-box; color: #1a1a1a; }
+  h1 { font-size: 24px; font-weight: 700; line-height: 1.2; margin: 0 0 16px 0; }
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    background-color: #333333;
+    color: #ffffff;
+    text-align: left;
+    padding: 8px 10px;
+    border: 1px solid #333333;
+  }
+  thead th:nth-child(1) { width: 8%; }
+  thead th:nth-child(2) { width: 36%; }
+  thead th:nth-child(3) { width: 14%; }
+  thead th:nth-child(4) { width: 20%; }
+  thead th:nth-child(5) { width: 22%; }
+  tbody td { padding: 7px 10px; border: 1px solid #cccccc; }
+  tbody tr:nth-child(odd) { background-color: #f0f0f0; }
+  tbody tr:nth-child(even) { background-color: #ffffff; }
+  tfoot td { padding: 8px 10px; border: 1px solid #333333; font-weight: 700; background-color: #e0e0e0; }
+</style>
+</head>
+<body>
+  <h1>Oracle Fixture 02 &mdash; Striped Table</h1>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Widget A</td><td>3</td><td>10.00</td><td>30.00</td></tr>
+      <tr><td>2</td><td>Widget B</td><td>1</td><td>25.50</td><td>25.50</td></tr>
+      <tr><td>3</td><td>Widget C</td><td>7</td><td>4.20</td><td>29.40</td></tr>
+      <tr><td>4</td><td>Widget D</td><td>2</td><td>18.75</td><td>37.50</td></tr>
+      <tr><td>5</td><td>Widget E</td><td>5</td><td>6.00</td><td>30.00</td></tr>
+      <tr><td>6</td><td>Widget F</td><td>10</td><td>1.99</td><td>19.90</td></tr>
+      <tr><td>7</td><td>Widget G</td><td>4</td><td>12.30</td><td>49.20</td></tr>
+    </tbody>
+    <tfoot>
+      <tr><td colspan="4">Grand Total</td><td>221.50</td></tr>
+    </tfoot>
+  </table>
+</body>
+</html>
