@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M10 — pliego: Tailwind + fidelidad</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M10 «Tailwind + fidelidad»</h1>
+<p class="meta">2026-07-07 · Previos: M0-M9 ✅ (main, CI+Oracle verdes, 1337 tests; tabla de fidelidad 0.14-4.67%) · Ejecución: subagent-driven · Objetivo: cerrar las causas medidas por el oráculo y que Tailwind sea ciudadano de primera.</p>
+
+<div class="task">
+  <strong>Goal:</strong> (1) fidelidad guiada por datos: las causas del 4.67% de la página Bootstrap (vw en calc, media queries de ancho) y los diferidos acumulados; el oráculo re-calibrado debe MEJORAR y documentar la mejora; (2) <strong>Tailwind</strong>: su modelo JIT no publica un .css estático — el enfoque adjudicado es soportar el OUTPUT del build de Tailwind (CSS generado por el CLI standalone, vendorizado como fixture) con auditoría de warnings estilo M9-T2, más su preflight como preset ingerible si la auditoría lo justifica; (3) fixture 8 del oráculo (página Tailwind) calibrada.<br>
+  <strong>Riesgos:</strong> el CSS de Tailwind v4 usa features modernas (cascade layers @layer, color-mix(), oklch()) que pueden requerir manejo mínimo (layers → orden de aparición; oklch → conversión a sRGB — fórmula cerrada, hand-computable); media queries de ancho tocan el resolver de @media (T2 depende de la infra de M9).
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M9 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, sin deps runtime nuevas, trailer, TDD 4-gates, baselines tests-only, warning discipline).</li>
+  <li>Lecciones del ledger completas. 1337 tests + goldens + los 7 umbrales del oráculo intactos o MEJORADOS (jamás relajados sin causa documentada).</li>
+  <li>Tailwind CSS output: generar UNA VEZ con el CLI standalone (npx tailwindcss / binario standalone — LOCAL, comprobar disco primero) contra un HTML de utilidades representativas; vendorizar el output como fixture pinneada (tests/Fixtures/tailwind/, licencia MIT); NO integrar el CLI en el pipeline (el usuario trae su propio build).</li>
+  <li>Excluidos M10 con warning: container queries, :has(), oklab/lab/lch (oklch SÍ — Tailwind v4 lo usa por defecto), color-mix() (→ warning + fallback al primer color M10), @property, animaciones.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Css
+CssLength/CalcParser += vw/vh units → CalcExpr vector gana componentes vw/vh (como % — DIFERIDOS);
+  resolución en compute/paint contra el CONTENT BOX de página (width para vw, height para vh) — el
+  tamaño de página fluye: ComputedStyle::compute ya recibe rootFontSize; añadir pageContentWidth/Height
+  (threading mínimo — ¿StyleResolver construction? diseño en T1).
+PseudoClass += NthOfType (An+B reutilizado; matching cuenta hermanos del MISMO tagName).
+MediaQueryEvaluator: min-width/max-width/width contra pageContentWidthPx (CSS px);
+  combinadores 'and'; 'only' normalizado; print/all/screen como hoy.
+@layer (Tailwind v4): bloques @layer name {...} → desenvueltos EN ORDEN DE DECLARACIÓN de layers
+  (orden CSS real: layers en orden de primera declaración, sin-layer gana a con-layer — implementación
+  mínima honesta documentada; Tailwind solo necesita theme&lt;base&lt;components&lt;utilities).
+Color::fromCss += oklch(L C H [/ A]) → conversión OKLCH→OKLab→XYZ-D65→linear-sRGB→sRGB (fórmula
+  css-color-4, clamp al gamut, hand-computable contra la tabla del spec).
+
+// Pdf
+SMask dedup: firma incluye hash de clipOps (fix del latente M9).
+
+// Engine
+Engine::tailwindPreflight(): static — SOLO si T3 adjudica que aporta (el preflight es ~formas de reset);
+  si no, documentación del flujo "usa tu build de Tailwind con -&gt;stylesheet()".</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 fidelidad wave 1:<br/>vw/vh, nth-of-type,<br/>only, SMask firma"] --> T2["T2 media queries de ancho<br/>vs página + recalibración"]
+  T2 --> T3["T3 tragar Tailwind output:<br/>@layer, oklch, auditoría"]
+  T3 --> T4["T4 preset/flujo Tailwind<br/>(adjudicación T3)"]
+  T4 --> T5["T5 fixture 8 oráculo<br/>+ E2E Tailwind"]
+  T5 --> T6["T6 README + playground<br/>+ cierre"]
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M10-T1 — Fidelidad wave 1</h3>
+<p>(1) <strong>vw/vh</strong>: unidades en CssLength y CalcParser (componentes diferidos en el vector como %); resolución contra el content box de página en computed-value time — threading: StyleResolver/ComputedStyle ganan pageContentWidth/Height (de PaperSize + margins @page efectivos... los margins pueden venir de @page que aún no se resolvió al computar estilos — ADJUDICADO: vw/vh contra el PAGE BOX (paper size CSS px) menos margins DEFAULT del engine si no hay @page, documentando la divergencia menor; navegadores usan el viewport completo = paper en print, así que vw = paperWidthPx directamente es LO CORRECTO — usar paper, no content box; verificar contra Chrome con un probe del oráculo). calc(1.375rem + 1.5vw) de Bootstrap debe resolver exacto. (2) <strong>:nth-of-type/:nth-last-of-type</strong>: An+B existente + conteo de hermanos del mismo tag; .table-striped real raya (¡quitar el compat CSS de la fixture de componentes M9 y verificar!... el striping usa inset shadow — si sigue sin verse, documentar qué falta y dejar el compat). (3) 'only print'/'only all' normalización. (4) SMask dedup: clipOps hash en la firma. Tests: vw hand-computed (1.5vw en A4 794px → 11.91px), el calc de Bootstrap exacto, nth-of-type con hermanos mixtos, only, dos gradientes mismo rect distinto radius → 2 SMasks. Commit: <code>fix(css,pdf): viewport units, nth-of-type and fidelity wave one</code></p>
+</div>
+
+<div class="task">
+<h3>M10-T2 — Media queries de ancho + recalibración del oráculo</h3>
+<p>MediaQueryEvaluator (extraer de StylesheetParser la lógica actual): evalúa la query contra {medium: print, widthPx: paper width CSS px}: print/all → como hoy; (min-width: Npx/rem/em) / (max-width) / combinaciones con 'and' → comparación real (rem contra 16 default root); screen → skip; desconocidas → skip conservador con el warning agregado (categoría). Bootstrap en A4 (794px): min-width 576/768 APLICAN, 992/1200 no — como Chrome imprimiendo A4. RE-CALIBRAR el oráculo completo: fixture 07 debe MEJORAR (los headings ganan su media query de compensación... ¡verificar! el override es min-width:1200 — NO aplica en A4; pero otros breakpoints sí cambian cosas). Documentar cada delta de umbral con causa; NUNCA subir umbrales sin justificación escrita. Tests: evaluator unit (todas las formas), E2E breakpoint aplicando, oráculo 7/7. Commit: <code>feat(css): width media queries evaluated against page size</code></p>
+</div>
+
+<div class="task">
+<h3>M10-T3 — Tragar el output de Tailwind: @layer, oklch, auditoría</h3>
+<p>Generar la fixture: HTML representativo (tests/Fixtures/tailwind/utilities.html: spacing/flex/grid→warning/colores/tipografía/borders/shadows con utilidades comunes) + CLI standalone (buscar en disco primero; si no, descargar el binario standalone pinneado o npx — SOLO para generar, documentar versión) → tests/Fixtures/tailwind/tailwind-output.css vendorizado (licencia MIT preservada). Soporte mínimo para digerirlo: <strong>@layer</strong> (bloques nombrados desenvueltos en orden de declaración de layers; reglas sin layer después — semántica css-cascade-5 reducida documentada), <strong>oklch()</strong> (conversión spec css-color-4 completa con clamp — tests contra valores de la tabla del spec y contra los colores Tailwind conocidos: bg-blue-500 = oklch(.623 .214 259.815) → #3b82f6 hand-verificado), color-mix() → warning+primer color, @property → warning. Auditoría estilo M9-T2: golden de categorías, ingest sin excepciones, perf. Fixture de componentes Tailwind renderizada + Ghostscript. Commit: <code>feat(css): ingest tailwind build output with layers and oklch</code></p>
+</div>
+
+<div class="task">
+<h3>M10-T4 — Flujo Tailwind (adjudicación de T3)</h3>
+<p>Con los datos de T3: si el preflight (reset de Tailwind) aporta valor como preset → Engine::tailwindPreflight() con el preflight vendorizado (está EN el output del build — extraerlo limpio); si el 100% del valor está en "trae tu build", entonces NO añadir API: documentar el flujo en README (sección Tailwind: cómo generar el css con el CLI apuntando a tu HTML y pasarlo con ->stylesheet()) y el playground gana un sample Tailwind (con la fixture vendorizada como css del sample). La adjudicación se documenta con razones en el report y el README refleja la decisión. Tests según la rama elegida. Commit: <code>feat(engine): tailwind workflow</code> (o docs: si no hay API).</p>
+</div>
+
+<div class="task">
+<h3>M10-T5 — Fixture 8 del oráculo + E2E Tailwind</h3>
+<p>tools/oracle/fixtures/08-tailwind-page.html: página real con utilidades Tailwind (link al output vendorizado + @font-face DejaVu después, patrón fixture 07), CALIBRADA honesta (documentar % y causas del diff — grid es warning M10, flex sí). E2E TailwindPageTest: render vía stylesheet(output), warnings pinned del audit, bytes clave (bg-blue-500 #3b82f6, rounded-lg c ops, shadow), Ghostscript. Commit: <code>test: tailwind page e2e and oracle fixture</code></p>
+</div>
+
+<div class="task">
+<h3>M10-T6 — README, playground, cierre</h3>
+<p>README: sección M10 (viewport units, width media queries, Tailwind con su tabla de fidelidad actualizada de 8 fixtures, oklch/@layer, exclusiones grid/container-queries/:has con warnings), estado del proyecto. Playground: sample "Tailwind" junto a los existentes. Tabla de fidelidad final del milestone en el report Y README (las 8, con los deltas vs M9 comentados). Commit: <code>test: readme and playground for M10</code></p>
+</div>
+
+</body>
+</html>
