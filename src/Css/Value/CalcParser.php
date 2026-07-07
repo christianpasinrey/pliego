@@ -53,7 +53,7 @@ final class CalcParser
             $this->warn("calc() must resolve to a length or percentage, got a bare number: $expression");
             return null;
         }
-        return CalcExpr::of($node->percentFactor, $node->emFactor, $node->remFactor, $node->pxOffset);
+        return CalcExpr::of($node->percentFactor, $node->emFactor, $node->remFactor, $node->pxOffset, $node->vwFactor, $node->vhFactor);
     }
 
     /** @return list<string> */
@@ -108,7 +108,9 @@ final class CalcParser
             if (preg_match('/\G(?:\d+(?:\.\d+)?|\.\d+)/', $s, $m, 0, $i) === 1) {
                 $numStr = $m[0];
                 $i += strlen($numStr);
-                if (preg_match('/\G(px|rem|em|pt|cm|mm|in|%)/i', $s, $um, 0, $i) === 1) {
+                // M10-T1 (css-values-4 §5.1.1): vw/vh join the unit alternation — same treatment
+                // as % (kept symbolic here, resolved in ComputedStyle::compute(), see CalcExpr).
+                if (preg_match('/\G(px|rem|em|pt|cm|mm|in|vw|vh|%)/i', $s, $um, 0, $i) === 1) {
                     $unit = strtolower($um[0]);
                     $i += strlen($um[0]);
                     $tokens[] = CalcToken::dim((float) $numStr, $unit);
@@ -195,7 +197,14 @@ final class CalcParser
             }
             return $inner->isNumber
                 ? CalcNode::number(-$inner->number)
-                : CalcNode::dimension(-$inner->percentFactor, -$inner->emFactor, -$inner->remFactor, -$inner->pxOffset);
+                : CalcNode::dimension(
+                    -$inner->percentFactor,
+                    -$inner->emFactor,
+                    -$inner->remFactor,
+                    -$inner->pxOffset,
+                    -$inner->vwFactor,
+                    -$inner->vhFactor,
+                );
         }
         if ($op === '+') {
             $this->consumeOp();
@@ -242,6 +251,10 @@ final class CalcParser
                 'cm' => CalcNode::dimension(0.0, 0.0, 0.0, $value * CssLength::PX_PER_CM),
                 'mm' => CalcNode::dimension(0.0, 0.0, 0.0, $value * CssLength::PX_PER_MM),
                 'in' => CalcNode::dimension(0.0, 0.0, 0.0, $value * CssLength::PX_PER_IN),
+                // M10-T1 (css-values-4 §5.1.1): vw/vh — same symbolic slot as %/em/rem, own
+                // dedicated vwFactor/vhFactor component (see CalcNode/CalcExpr).
+                'vw' => CalcNode::dimension(0.0, 0.0, 0.0, 0.0, $value, 0.0),
+                'vh' => CalcNode::dimension(0.0, 0.0, 0.0, 0.0, 0.0, $value),
                 default => CalcNode::dimension(0.0, 0.0, 0.0, 0.0),
             };
         }
@@ -264,6 +277,8 @@ final class CalcParser
             $a->emFactor + $sign * $b->emFactor,
             $a->remFactor + $sign * $b->remFactor,
             $a->pxOffset + $sign * $b->pxOffset,
+            $a->vwFactor + $sign * $b->vwFactor,
+            $a->vhFactor + $sign * $b->vhFactor,
         );
     }
 
@@ -281,6 +296,8 @@ final class CalcParser
                     $b->emFactor * $a->number,
                     $b->remFactor * $a->number,
                     $b->pxOffset * $a->number,
+                    $b->vwFactor * $a->number,
+                    $b->vhFactor * $a->number,
                 );
             }
             if ($b->isNumber) {
@@ -289,6 +306,8 @@ final class CalcParser
                     $a->emFactor * $b->number,
                     $a->remFactor * $b->number,
                     $a->pxOffset * $b->number,
+                    $a->vwFactor * $b->number,
+                    $a->vhFactor * $b->number,
                 );
             }
             $this->warn('calc(): cannot multiply two lengths/percentages');
@@ -311,6 +330,8 @@ final class CalcParser
             $a->emFactor / $b->number,
             $a->remFactor / $b->number,
             $a->pxOffset / $b->number,
+            $a->vwFactor / $b->number,
+            $a->vhFactor / $b->number,
         );
     }
 }

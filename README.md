@@ -67,8 +67,10 @@ insensitive family lookup) — everything a Bootstrap-derived `.card`/`.btn`/
 `.badge`/`.display-*` document needs to look, not just lay out, like the
 real thing. M9 closes the loop opened by M6-M8's hand-picked "Bootstrap-
 flavored" CSS: it ingests the **real, unmodified, vendored upstream
-`bootstrap.min.css` (5.3.6)** end to end (895 warnings from parsing the
-232KB sheet alone, every one categorized and pinned as a golden — a
+`bootstrap.min.css` (5.3.6)** end to end (870 warnings from parsing the
+232KB sheet alone as of M10-T1 — 895 as of M9, before `vw`/`vh` and
+`:nth-of-type`/`:nth-last-of-type` gained real support, see below — every
+one categorized and pinned as a golden — a
 complete, honest partition, not a sample), exposes it as
 `Engine::bootstrap()` (a preset that stacks author-order before your own
 `->stylesheet()` calls, see [Presets](#presets)), adds the two PDF primitives
@@ -102,20 +104,23 @@ used, and adds the couple of PDF primitives that stylesheet actually needs.
   same-specificity overrides win by cascade order alone, no `!important`
   needed. Full detail, including what it deliberately does **not** do (no
   JS, no sheet rewriting), in [Presets](#presets).
-- **Honest capability audit**: parsing the vendored sheet alone produces 895
-  warnings, every one bucketed by a regex-per-category classifier and pinned
-  as a golden snapshot with a `'other'`-must-be-empty safety net (i.e. a
-  *complete* partition, not a sample) — `@media` blocks (skipped as a single
-  aggregate warning, not one per block), unknown/unsupported pseudo-classes,
-  unsupported properties/keywords/lengths/colors, invalid `calc()`
-  expressions (mostly Bootstrap's own `vw`-based responsive type scale — see
-  [Oracle](#oracle-chrome-as-ground-truth) for the visible consequence of
-  that one). Rendering an actual page pushes the count higher still (944 for
-  the M9-T2 component showcase, 1175 for the full page used as oracle
-  fixture 07) as more declarations get resolved against real elements
-  (unresolved `var()` chains, atomic flex fragments taller than a page,
-  …) — this is the *whole point*: pliego tells you exactly what it didn't
-  understand instead of silently dropping it.
+- **Honest capability audit**: parsing the vendored sheet alone produces 870
+  warnings (M10-T1; 895 as of M9 — `vw`/`vh` viewport units and
+  `:nth-of-type`/`:nth-last-of-type` gained real support in M10-T1,
+  css-values-4 §5.1.1 / Selectors-4 §14.4, removing 25 of the old 895:
+  9 "Unsupported length" + 15 "Invalid calc() expression" for `vw`/`vh`, plus
+  1 "Pseudo-class not supported yet: :nth-of-type"), every one bucketed by a
+  regex-per-category classifier and pinned as a golden snapshot with a
+  `'other'`-must-be-empty safety net (i.e. a *complete* partition, not a
+  sample) — `@media` blocks (skipped as a single aggregate warning, not one
+  per block), unknown/unsupported pseudo-classes, unsupported
+  properties/keywords/lengths/colors, invalid `calc()` expressions. Rendering
+  an actual page pushes the count higher still (919 for the M9-T2 component
+  showcase, 1150 for the full page used as oracle fixture 07) as more
+  declarations get resolved against real elements (unresolved `var()`
+  chains, atomic flex fragments taller than a page, …) — this is the *whole
+  point*: pliego tells you exactly what it didn't understand instead of
+  silently dropping it.
 - **`PatternType 1` tiling patterns** (ISO 32000-1 §8.7.3.3, `/PaintType 1`):
   `PdfWriter::registerTilingPattern()` registers a small tile as a pattern
   cell once; `PdfCanvas` then fills a border box with `/Pattern cs`/`/Pn
@@ -430,24 +435,30 @@ gradient-filled, shadowed `.card` still lays out through the exact same
     falls back to case-sensitive matching (one-time warning) — it is not
     actually honored.
   - **Pseudo-classes**: `:root`, `:first-child`, `:last-child`,
-    `:nth-child(An+B|odd|even)`, `:not(<single compound selector>)` (no
-    nesting, no comma-separated compounds inside `:not()`).
+    `:nth-child(An+B|odd|even)`, `:nth-of-type(An+B|odd|even)`,
+    `:nth-last-of-type(An+B|odd|even)` (M10-T1, Selectors-4 §14.4 — same
+    An+B machinery as `:nth-child`, counting position only among siblings
+    that share the element's own tag name), `:not(<single compound
+    selector>)` (no nesting, no comma-separated compounds inside `:not()`).
   - **Not supported, reported as a warning rather than silently ignored**:
     `:hover`/`:focus`/`:active`/`:visited`/`:link` (parsed for specificity,
     but permanently excluded from matching — dynamic states have no
     meaning in paged/print media, not a "not implemented yet" gap),
-    `:nth-of-type` and the rest of the `-of-type` family, and any unknown
-    pseudo-class. `::before`/`::after` and every other pseudo-*element*
-    aren't parsed at all (they need to generate boxes of their own — M7).
-- **Units** (css-values-3 §5-6): `em` (relative to the element's **own**
-  computed font-size — except in `font-size` itself, where css-values-3
-  §5.2 measures em/% against the **parent's** font-size to avoid a
-  self-referential circularity) and `rem` (always relative to the
-  **document root**'s computed font-size, however deeply nested the
+    `:first-of-type`/`:last-of-type`/`:only-of-type`/`:only-child`/`:empty`/
+    `:nth-last-child`, and any unknown pseudo-class. `::before`/`::after`
+    and every other pseudo-*element* aren't parsed at all (they need to
+    generate boxes of their own — M7).
+- **Units** (css-values-3 §5-6, css-values-4 §5.1.1): `em` (relative to the
+  element's **own** computed font-size — except in `font-size` itself,
+  where css-values-3 §5.2 measures em/% against the **parent's** font-size
+  to avoid a self-referential circularity) and `rem` (always relative to
+  the **document root**'s computed font-size, however deeply nested the
   element is — never the nearest ancestor). Physical units `pt`/`cm`/`mm`/
-  `in` fold to px at parse time (exact 96dpi factors). No viewport units
-  (`vh`/`vw`) — reported as an unsupported-unit warning like any other
-  unrecognized token.
+  `in` fold to px at parse time (exact 96dpi factors). `vw`/`vh` (M10-T1)
+  resolve against the **paper's own CSS-px size** (`Page\PaperSize`, e.g.
+  794×1123 for A4) — not a content box, and not a browser viewport (a
+  paginated engine has no such thing): the adjudicated equivalent, since a
+  browser's print viewport IS the full page.
 - **Custom properties and `calc()`** (css-variables-1, css-values-3 §8):
   `--name: value` declarations (inherited down the tree, resolved at
   compute time) and `var(--name, fallback)` with cycle detection (a cyclic
@@ -920,10 +931,10 @@ What it does **not** do:
   single paged medium, so screen-only `@media` rules are dropped and dynamic
   pseudo-classes are permanently excluded (see the M9 warning audit).
 - It doesn't rewrite or subset the vendored sheet — the file is the real,
-  unmodified upstream release; unsupported constructs (`:nth-of-type`, inset
-  `box-shadow`, `transform`, …) simply warn and get skipped, same as any CSS
-  you'd write by hand. `Engine::make()` (no preset) is completely unaffected —
-  never calling `->bootstrap()` renders byte-for-byte as before this feature
+  unmodified upstream release; unsupported constructs (inset `box-shadow`,
+  `transform`, …) simply warn and get skipped, same as any CSS you'd write
+  by hand. `Engine::make()` (no preset) is completely unaffected — never
+  calling `->bootstrap()` renders byte-for-byte as before this feature
   existed.
 
 ## Oracle: Chrome as ground truth
@@ -983,7 +994,7 @@ aspirational targets:
 | 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 1.471% | 2.0% | Minor cross-axis rounding in the flex subset |
 | 05 | Blockquote / monospace | `blockquote`, `pre`/`code`, `white-space: pre` | 0.144% | 1.0% | Near pixel-perfect — smallest, simplest fixture |
 | 06 | Gradients / shadows | Linear/radial `/Shading` gradients, `box-shadow` | 0.151% | 1.0% | Near pixel-perfect — native PDF shadings match Chrome's own gradient rendering closely |
-| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 4.704% | 5.5% | **The worst fixture, honestly.** Real Bootstrap's headings use a fluid, responsive type scale — `h1,.h1{font-size:calc(1.375rem + 1.5vw)}` (and h2-h6 likewise) with a fixed-size override inside a `@media (min-width: …)` block. `vw` has no meaning in a print engine (`calc()` with a viewport unit is rejected, warned, dropped) **and** the compensating `@media` override never applies either (all `@media` blocks are skipped for print) — so every heading falls back to the plain UA stylesheet's `h1{font-size:2em;font-weight:bold}`, visibly bigger/bolder than Bootstrap's intended size. That size difference at the top of the page then **compounds downward** (same cumulative-drift phenomenon documented on fixture 01, just much larger here) — nearly everything below the `<h1>` sits measurably lower in pliego's render than in Chrome's by the time you reach the footer. |
+| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 5.654% | 5.5% (stale, see below) | **Still the worst fixture, for a different reason now.** Pre-M10-T1, `vw` had no meaning in this engine — `h1,.h1{font-size:calc(1.375rem + 1.5vw)}` (and h2-h6 likewise) was rejected outright, so every heading fell back to the plain UA stylesheet's `h1{font-size:2em;font-weight:bold}` (diff was 4.665-4.704% then). M10-T1 (css-values-4 §5.1.1) resolves `vw`/`vh` against the paper's own CSS-px size, the SAME 794×1123 viewport `tools/oracle/render-chrome.mjs` already used for Chrome's screenshot — headings now use Bootstrap's real fluid size instead of the UA fallback, a genuine correctness fix. The measured diff went UP anyway (4.665% → 5.654%, now over the not-yet-recalibrated 5.5% threshold): a font-size change this early in a long, single-page document reflows every line below it, and pixel-diff metrics are sensitive to *any* cumulative vertical drift regardless of which rendering is more "correct" per-declaration. Threshold recalibration against this new, more-correct baseline is deliberately deferred (M10-T2) rather than done reflexively alongside the fix. |
 
 Fixture 07 is deliberately kept to content that still fits **one** page
 (`OracleFixturesSmokeTest.php` hard-requires every oracle fixture to render

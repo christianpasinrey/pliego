@@ -21,6 +21,12 @@ final readonly class CalcNode
         public float $emFactor,
         public float $remFactor,
         public float $pxOffset,
+        // M10-T1 (css-values-4 §5.1.1): vw/vh join the vector as two MORE symbolic components,
+        // trailing and optional (default 0.0) so every pre-existing 4-arg dimension() call site
+        // stays valid unchanged — only the tokenizer/parsePrimary()'s new 'vw'/'vh' arms actually
+        // pass a non-zero value here (see CalcParser).
+        public float $vwFactor = 0.0,
+        public float $vhFactor = 0.0,
     ) {}
 
     public static function number(float $value): self
@@ -28,8 +34,14 @@ final readonly class CalcNode
         return new self(true, $value, 0.0, 0.0, 0.0, 0.0);
     }
 
-    public static function dimension(float $percentFactor, float $emFactor, float $remFactor, float $pxOffset): self
-    {
-        return new self(false, 0.0, $percentFactor, $emFactor, $remFactor, $pxOffset);
+    public static function dimension(
+        float $percentFactor,
+        float $emFactor,
+        float $remFactor,
+        float $pxOffset,
+        float $vwFactor = 0.0,
+        float $vhFactor = 0.0,
+    ): self {
+        return new self(false, 0.0, $percentFactor, $emFactor, $remFactor, $pxOffset, $vwFactor, $vhFactor);
     }
 }

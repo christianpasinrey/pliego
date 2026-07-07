@@ -38,6 +38,11 @@ use Sabberworm\CSS\Parser as SabberwormParser;
  * Adjudicado (RESTRICCIONES GLOBALES M9-T2): evaluación de media query MÍNIMA, sin listas de
  * features reales -- 'print' y 'all' (case-insensitive, ignorando espacios) APLICAN sus reglas al
  * mismo nivel de autor que el resto de la hoja (orden de documento preservado, ver más abajo);
+ * M10-T1 (css-mediaqueries-3 §2.3): un prefijo 'only' (p.ej. 'only print'/'only all') se
+ * NORMALIZA fuera antes de esa comparación -- 'only' no aporta semántica de evaluación propia
+ * (solo existe para ocultar la query completa a UAs pre-css3), así que 'only print'/'only all'
+ * aplican exactamente igual que 'print'/'all' sin el prefijo, y 'only screen' sigue sin aplicar,
+ * igual que 'screen' a secas (ver mediaQueryApplies());
  * cualquier otra cosa (`screen`, cualquier feature-query entre paréntesis como
  * `(min-width: 768px)`, `(prefers-reduced-motion: reduce)`, `hover`, etc.) se DESCARTA en
  * silencio, sin logging individual -- solo UN warning agregado al final de parse() con el total de
@@ -351,6 +356,14 @@ final class StylesheetParser
     {
         foreach (explode(',', $query) as $part) {
             $normalized = strtolower(trim($part));
+            // M10-T1 (css-mediaqueries-3 §2.3, 'only' normalization): the 'only' prefix exists
+            // purely to hide a media-type-plus-feature query from pre-css3 UAs that would
+            // otherwise apply just the leading type and ignore the feature -- it carries no
+            // evaluation semantics of its own. 'only print'/'only all' apply exactly like
+            // 'print'/'all' without the prefix; 'only screen' still does NOT apply, exactly like
+            // bare 'screen' -- stripping the prefix before the two-value comparison below handles
+            // both cases uniformly, with no separate branch needed.
+            $normalized = preg_replace('/^only\s+/', '', $normalized) ?? $normalized;
             if ($normalized === 'all' || $normalized === 'print') {
                 return true;
             }

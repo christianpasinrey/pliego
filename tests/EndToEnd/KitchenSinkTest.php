@@ -18,10 +18,18 @@ const KITCHEN_SINK_CSS = <<<'CSS'
 .outer { background-color: #eee; padding: 20px }
 .inner { background-color: #ccc; padding: 10px }
 .hidden { display: none }
-.narrow { width: 50vh }
+.narrow { width: 50ch }
 p > span { color: red }
 p { writing-mode: vertical-rl; line-height: 1.5 }
 CSS;
+// NOTA M10-T1: `.narrow` usaba `width: 50vh` para demostrar warning discipline sobre una unidad
+// no soportada -- M10-T1 (css-values-4 §5.1.1) le da soporte real a vw/vh (Css\Value\CssLength/
+// CalcParser/Style\ComputedStyle, resueltas contra el PAPER box), así que "50vh" ya NO produce
+// warning ni descarta la declaración. Sustituido por "50ch" (character unit, css-values-3 §5.4 --
+// depende del ancho del glifo "0" de la fuente en uso, algo que este motor no rastrea) para
+// preservar el propósito original del test intacto: sigue siendo una unidad de longitud real,
+// sintácticamente válida, que este motor todavía descarta con warning, sin ningún efecto en la
+// aritmética de paginación verificada a mano más abajo.
 // NOTA M7-T6: `float` (usado aquí hasta M7-T5) ganó soporte real (Style\FloatSide,
 // DeclarationParser) — habría convertido los 140 <p> de este documento en floats reales,
 // cambiando por completo la geometría que este test verifica a mano más abajo. Sustituido por
@@ -44,7 +52,7 @@ CSS;
 //       PROPIO font-size, 32px) = .67×32 = 21.44px arriba Y abajo (no es el último hijo de
 //       .inner) -> 21.44 + 38.4 + 21.44 = 81.28px.
 //   .hidden: display:none -> 0px (fuera del árbol de caja por completo).
-//   .narrow: width:50vh se descarta (warning) -> width:auto normal, 1 línea a 19.2px, sin margin
+//   .narrow: width:50ch se descarta (warning) -> width:auto normal, 1 línea a 19.2px, sin margin
 //       propio -> 19.2px.
 //   139 <p> NO-últimos: margin-top UA 16px + línea (line-height:1.5×16=24px, gana al UA porque
 //       el autor lo declara) + margin-bottom UA 16px = 56px cada uno -> 139×56 = 7784px.
@@ -94,18 +102,18 @@ it('renders nested backgrounds, overflows to 8 pages, warns on exactly 2 unsuppo
     // Overflow a 8 páginas (subió de 3 a 4 en M1-T6, de 4 a 8 en M7-T2 — ver notas arriba).
     expect($report->pageCount)->toBe(8);
 
-    // Exactamente 2 declaraciones CSS no soportadas: writing-mode y width:vh. "p > span" parsea Y
+    // Exactamente 2 declaraciones CSS no soportadas: writing-mode y width:ch. "p > span" parsea Y
     // matchea de verdad desde M6-T2 (ya no genera warning), pero no hay ningún <span> en este
     // documento — no tiene ningún efecto observable aquí. line-height ya no genera warning: M1-T2
     // le da soporte (ver p { line-height: 1.5 } arriba). M2-T2: width SÍ admite % ahora
-    // (LengthPercentage); M6-T3 añade em/rem/pt/cm/mm/in (CssLength) — "vh" (viewport height) sigue
-    // fuera de alcance del motor (no hay noción de viewport en un motor de paginación), así que se
-    // usa aquí para seguir demostrando el warning discipline sobre unidades no soportadas sin
-    // afectar la aritmética de paginación de este test (declaración descartada igual que antes,
-    // sin efecto en el layout).
+    // (LengthPercentage); M6-T3 añade em/rem/pt/cm/mm/in (CssLength); M10-T1 añade vw/vh — "ch"
+    // (character unit, depende del ancho de glifo de la fuente) sigue fuera de alcance del motor,
+    // así que se usa aquí para seguir demostrando el warning discipline sobre unidades no
+    // soportadas sin afectar la aritmética de paginación de este test (declaración descartada
+    // igual que antes, sin efecto en el layout).
     expect($report->warnings)->toHaveCount(2);
     expect($report->warnings)->toContain('Unsupported property: writing-mode');
-    expect($report->warnings)->toContain('Unsupported length for width: 50vh');
+    expect($report->warnings)->toContain('Unsupported length for width: 50ch');
 
     // Fondos anidados: el gris claro de .outer y el gris oscuro de .inner aparecen.
     $outerFill = sprintf('%.3F %.3F %.3F rg', 0xee / 255, 0xee / 255, 0xee / 255);

@@ -36,6 +36,39 @@ it('folds physical units to px at parse time, same factors as CssLength', functi
     expect($expr?->pxOffset)->toBe(96.0 - 96.0 / 72.0);
 });
 
+// --- M10-T1 (css-values-4 §5.1.1): vw/vh join the folded vector as two more symbolic
+// components, same deferred treatment as % (resolved in ComputedStyle::compute() against the
+// page's own CSS-px size, never here). --------------------------------------------------------
+
+it('keeps vw/vh symbolic in the folded vector', function () {
+    $expr = new CalcParser()->parse('1.5vw');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, 0.0, 1.5, 0.0));
+
+    $expr2 = new CalcParser()->parse('100vh - 20px');
+    expect($expr2)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, -20.0, 0.0, 100.0));
+});
+
+it('hand-computes Bootstrap\'s calc(1.375rem + 1.5vw) on an A4 page (793.7007874015748px wide)', function () {
+    $expr = new CalcParser()->parse('1.375rem + 1.5vw');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 1.375, 0.0, 1.5, 0.0));
+
+    // remBase=16px -> 1.375rem = 22px; A4 width 793.7007874015748px -> 1.5vw = 11.905511811023623px
+    // -> 22 + 11.905511811023623 = 33.905511811023623px (rounds to the brief's hand-verified
+    // 33.91px).
+    $pageWidthPx = 210.0 / 25.4 * 96.0;
+    $folded = $expr->fold(16.0, 16.0, null, $pageWidthPx, 0.0);
+    expect($folded)->toBeFloat();
+    expect(round($folded, 2))->toBe(33.91);
+    expect($folded)->toBe(22.0 + 11.905511811023623);
+});
+
+it('combines vw and vh in the same expression, each folded against its own base', function () {
+    $expr = new CalcParser()->parse('50vw + 25vh');
+    expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, 0.0, 50.0, 25.0));
+    $folded = $expr->fold(16.0, 16.0, null, 800.0, 600.0);
+    expect($folded)->toBe(0.5 * 800.0 + 0.25 * 600.0);
+});
+
 it('divides a length by a plain number', function () {
     $expr = new CalcParser()->parse('20px / 4');
     expect($expr)->toEqual(CalcExpr::of(0.0, 0.0, 0.0, 5.0));

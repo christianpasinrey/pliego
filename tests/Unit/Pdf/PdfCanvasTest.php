@@ -711,6 +711,36 @@ it('dedups TWO paintGradient() calls sharing the same rect+alpha-Gradient into a
     expect(substr_count($pdf, " gs\n"))->toBe(2); // same /GSn activated before EACH call's own `sh`
 });
 
+// --- M10-T1 fix (latent since M9-T3): the mask dedup signature now includes a hash of $clipOps --
+// two elements sharing the same rect+alpha-Gradient but a DIFFERENT clip shape (border-radius vs.
+// none) must NOT share a single mask Form/ExtGState pair (see PdfCanvas::softMaskResourceName()'s
+// own docblock for the repro this closes).
+
+it('does NOT dedup two same-rect same-gradient boxes with DIFFERENT border-radius into the same SMask group (clipOps is now part of the signature)', function () {
+    $stops = [new GradientStop(new Color(255, 0, 0, 0.5), 0.0), new GradientStop(new Color(0, 0, 255), 100.0)];
+    $gradient = new Gradient(GradientKind::Linear, 90.0, $stops);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient, new BorderRadius(10.0, 10.0, 10.0, 10.0));
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient, null);
+    });
+    // Two DISTINCT mask Form/ExtGState pairs, one per clip shape -- before the fix, both calls
+    // hashed to the same maskSignature (border-radius was invisible to it) and shared ONE pair,
+    // silently painting one of the two boxes with the WRONG mask shape.
+    expect(substr_count($pdf, '/Type /ExtGState'))->toBe(2);
+    expect(substr_count($pdf, '/Group << /S /Transparency /CS /DeviceGray >>'))->toBe(2);
+});
+
+it('still dedups two same-rect same-gradient boxes with the SAME border-radius into ONE SMask group (no regression)', function () {
+    $stops = [new GradientStop(new Color(255, 0, 0, 0.5), 0.0), new GradientStop(new Color(0, 0, 255), 100.0)];
+    $gradient = new Gradient(GradientKind::Linear, 90.0, $stops);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient, new BorderRadius(10.0, 10.0, 10.0, 10.0));
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient, new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    });
+    expect(substr_count($pdf, '/Type /ExtGState'))->toBe(1);
+    expect(substr_count($pdf, '/Group << /S /Transparency /CS /DeviceGray >>'))->toBe(1);
+});
+
 it('restores the graphics state after an alpha gradient — a LATER opaque gradient carries no leftover /SMask (q/Q scoping)', function () {
     $alphaGradient = new Gradient(GradientKind::Linear, 90.0, [
         new GradientStop(new Color(255, 0, 0, 0.5), 0.0),

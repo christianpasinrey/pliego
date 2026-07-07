@@ -183,6 +183,18 @@ final class PdfCanvas implements Canvas
      * documentado en toda esta clase), pero el Form XObject de la máscara lo referencia por su
      * PROPIO nombre local fijo "ShMask" en su propio /Resources autocontenido (ver
      * PdfWriter::registerSoftMaskGroup()), independiente del nombre "ShN" que tenga en la página.
+     *
+     * M10-T1 fix (latente desde M9-T3): $maskSignature ANTES solo era $baseSignature . '|mask' --
+     * IGNORABA por completo $clipOps, la parte de $formOps que realmente varía con el border-radius
+     * ($formOps = "q\n" . $clipOps . "/ShMask sh\nQ\n", justo abajo). Dos elementos con el MISMO
+     * rect+Gradient pero DISTINTO border-radius (uno recto, otro redondeado) comparten $baseSignature
+     * (que solo depende de rect+Gradient, ver gradientSignature()) y por tanto, antes de este fix,
+     * el MISMO Form XObject de máscara -- uno de los dos pintaba con la forma de recorte EQUIVOCADA.
+     * $clipOps entra ahora en la firma vía un hash (md5(), suficiente para una clave de array --
+     * nunca se decodifica, mismo criterio "cadena plana" que gradientSignature() ya documenta): dos
+     * $clipOps distintos SIEMPRE producen firmas distintas, así que nunca comparten Form/ExtGState;
+     * $clipOps idénticos (mismo rect, mismo radius o ambos sin radius) siguen compartiendo uno, sin
+     * regresión de dedup para el caso común.
      */
     private function softMaskResourceName(Rect $rect, Gradient $gradient, string $clipOps): string
     {
@@ -195,7 +207,7 @@ final class PdfCanvas implements Canvas
         $bbox = sprintf('[%.2F %.2F %.2F %.2F]', $x, $y, $x + $rect->width * self::PX_TO_PT, $y + $rect->height * self::PX_TO_PT);
         $formOps = "q\n" . $clipOps . "/ShMask sh\nQ\n";
 
-        $maskSignature = $baseSignature . '|mask';
+        $maskSignature = $baseSignature . '|mask|' . md5($clipOps);
         return $this->writer->softMaskGroupResourceName($maskSignature, $bbox, $formOps, $grayObjectId);
     }
 

@@ -48,6 +48,20 @@ final readonly class ComputedStyle
         'tbody' => Display::TableRowGroup,
     ];
 
+    /**
+     * M10-T1 (css-values-4 §5.1.1, vw/vh in paged media -- ADJUDICATED against the PAPER box, not
+     * the content box, see LengthUnit's docblock): defaults for callers that don't thread a real
+     * page size (mostly synthetic ComputedStyle::compute() calls with no declarations at all --
+     * Box\BoxTreeBuilder's anonymous table row/cell wrappers -- where no vw/vh can possibly be
+     * present anyway) or unit tests exercising compute() directly against a bare 4-arg call.
+     * Style: [Css, Vendor] in deptrac.yaml -- this layer cannot import Page\PaperSize, so the A4
+     * formula is duplicated here VERBATIM (210mm/297mm at 96dpi) rather than referenced; the real
+     * pipeline (Style\StyleResolver, threaded from Engine::render() via $this->paper->widthPx()/
+     * heightPx()) always overrides these with the ACTUAL configured paper size.
+     */
+    private const float DEFAULT_PAGE_WIDTH_PX = 210.0 / 25.4 * 96.0;
+    private const float DEFAULT_PAGE_HEIGHT_PX = 297.0 / 25.4 * 96.0;
+
     public function __construct(
         public Display $display,
         public LengthPercentage $marginTop,
@@ -259,8 +273,13 @@ final readonly class ComputedStyle
      * del árbol a partir del font-size del documentElement, sin duplicar la lógica ni caer en
      * el bug de recalcular dos veces con un remBase distinto cada vez (ver StyleResolver).
      */
-    public static function resolveFontSizePx(mixed $fontSizeValue, float $parentFontSizePx, float $remBase): float
-    {
+    public static function resolveFontSizePx(
+        mixed $fontSizeValue,
+        float $parentFontSizePx,
+        float $remBase,
+        float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX,
+        float $pageHeightPx = self::DEFAULT_PAGE_HEIGHT_PX,
+    ): float {
         if ($fontSizeValue instanceof Length) {
             return $fontSizeValue->px;
         }
@@ -269,6 +288,10 @@ final readonly class ComputedStyle
                 LengthUnit::Percent => ($fontSizeValue->value / 100.0) * $parentFontSizePx,
                 LengthUnit::Em => $fontSizeValue->value * $parentFontSizePx,
                 LengthUnit::Rem => $fontSizeValue->value * $remBase,
+                // M10-T1: font-size:Xvw/Xvh -- against the page's own CSS-px size, same
+                // adjudication as any other vw/vh use (see LengthUnit's docblock).
+                LengthUnit::Vw => ($fontSizeValue->value / 100.0) * $pageWidthPx,
+                LengthUnit::Vh => ($fontSizeValue->value / 100.0) * $pageHeightPx,
                 default => $parentFontSizePx,
             };
         }
@@ -277,7 +300,7 @@ final readonly class ComputedStyle
         // como en width/margin/padding — así que $percentBase se pasa igual que $emBase
         // (foldCalcWithOwnBase asume ambos iguales, ver su docblock).
         if ($fontSizeValue instanceof CalcExpr) {
-            return self::foldCalcWithOwnBase($fontSizeValue, $parentFontSizePx, $remBase);
+            return self::foldCalcWithOwnBase($fontSizeValue, $parentFontSizePx, $remBase, $pageWidthPx, $pageHeightPx);
         }
         return $parentFontSizePx;
     }
@@ -289,10 +312,15 @@ final readonly class ComputedStyle
      * %, así que fold() SIEMPRE devuelve un float puro aquí (nunca un CalcValue diferido) — el
      * fallback a $ownBase solo satisface el tipo CalcValue|float de fold() ante PHPStan, nunca se
      * alcanza en la práctica.
+     *
+     * M10-T1: $pageWidthPx/$pageHeightPx simplemente se reenvían a CalcExpr::fold() — vw/vh dentro
+     * de un calc() de font-size/line-height se resuelven contra el PAPER box exactamente igual que
+     * fuera de un calc(), nunca contra $ownBase (a diferencia de %/em, que SÍ comparten base con
+     * font-size — vw/vh son un eje completamente distinto, el tamaño de página, no el tipográfico).
      */
-    private static function foldCalcWithOwnBase(CalcExpr $expr, float $ownBase, float $remBase): float
+    private static function foldCalcWithOwnBase(CalcExpr $expr, float $ownBase, float $remBase, float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX, float $pageHeightPx = self::DEFAULT_PAGE_HEIGHT_PX): float
     {
-        $folded = $expr->fold($ownBase, $remBase, $ownBase);
+        $folded = $expr->fold($ownBase, $remBase, $ownBase, $pageWidthPx, $pageHeightPx);
         return is_float($folded) ? $folded : $ownBase;
     }
 
@@ -386,6 +414,12 @@ final readonly class ComputedStyle
      * raíz de ESTE elemento): % en una propiedad que no la admite (height/gap/border-width/
      * border-spacing) y — en tareas futuras — signo inválido.
      *
+     * M10-T1 (css-values-4 §5.1.1): $pageWidthPx/$pageHeightPx thread through EXACTLY like
+     * $remBase (StyleResolver captures them once from Engine's configured Page\PaperSize and
+     * passes them to every compute() call for the whole tree) -- where any vw/vh symbolic
+     * CssLength/CalcExpr component finally dies, resolved against the PAPER box (adjudicated,
+     * see LengthUnit's docblock), never the content box.
+     *
      * @param array<string, mixed> $declarations
      * @param array<string, string> $customProperties
      */
@@ -396,6 +430,8 @@ final readonly class ComputedStyle
         float $remBase,
         array $customProperties = [],
         ?WarningCollector $warnings = null,
+        float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX,
+        float $pageHeightPx = self::DEFAULT_PAGE_HEIGHT_PX,
     ): self {
         $zero = LengthPercentage::zero();
         $tag = strtolower($tagName);
@@ -442,15 +478,19 @@ final readonly class ComputedStyle
         // CSS 2.2 §10.8.1: evita la circularidad "font-size relativo a sí mismo"); rem siempre
         // contra $remBase, igual que en cualquier otra propiedad.
         $fontSizeValue = $declarations['font-size'] ?? null;
-        $fontSizePx = self::resolveFontSizePx($fontSizeValue, $parent->fontSizePx, $remBase);
+        $fontSizePx = self::resolveFontSizePx($fontSizeValue, $parent->fontSizePx, $remBase, $pageWidthPx, $pageHeightPx);
 
         // Resolución genérica de CssLength simbólico para TODAS las demás propiedades (margin/
         // padding/width/height/row-gap/column-gap/border-width/border-spacing/flex-basis): em
         // contra el font-size PROPIO ($fontSizePx, ya resuelto arriba), rem contra $remBase. Px
         // (incluye pt/cm/mm/in, ya plegados en CssLength::fromCss) pasa el valor tal cual.
+        // M10-T1: vw/vh -- contra el PAPER box (pageWidthPx/pageHeightPx), la misma adjudicación
+        // que en cualquier otro punto de resolución de esta clase (ver LengthUnit).
         $resolveCssLength = static fn(CssLength $css): float => match ($css->unit) {
             LengthUnit::Em => $css->value * $fontSizePx,
             LengthUnit::Rem => $css->value * $remBase,
+            LengthUnit::Vw => ($css->value / 100.0) * $pageWidthPx,
+            LengthUnit::Vh => ($css->value / 100.0) * $pageHeightPx,
             default => $css->value,
         };
         // M6-T4 (css-values-3 §8): plegado de un CalcExpr en un contexto de longitud PURA (sin
@@ -468,8 +508,8 @@ final readonly class ComputedStyle
         // que `padding-left: -16px` a secas). $label son siempre nombres de propiedad reales
         // (height/row-gap/column-gap/border-$side-width/border-spacing, todas SIEMPRE no-negativas
         // en esta rama), así que el chequeo nunca es un falso "always true/false" para PHPStan.
-        $resolveCalcPure = static function (CalcExpr $expr, string $label, float $default) use ($fontSizePx, $remBase, $warnings): float {
-            $folded = $expr->fold($fontSizePx, $remBase, null);
+        $resolveCalcPure = static function (CalcExpr $expr, string $label, float $default) use ($fontSizePx, $remBase, $warnings, $pageWidthPx, $pageHeightPx): float {
+            $folded = $expr->fold($fontSizePx, $remBase, null, $pageWidthPx, $pageHeightPx);
             if ($folded instanceof CalcValue) {
                 $warnings?->addWarning("calc() with % not supported for $label (percentage discarded)");
                 return $default;
@@ -488,8 +528,8 @@ final readonly class ComputedStyle
         // conocerse hasta Layout (gap documentado, ver el reporte de M6-T4 §4), así que NO se
         // chequea aquí. margin-* nunca está en NON_NEGATIVE_PROPERTIES (los márgenes SÍ admiten
         // negativo, CSS 2.2 §8.3), así que este mismo código los deja pasar sin warning.
-        $resolveCalcLengthPercentage = static function (CalcExpr $expr, string $label) use ($fontSizePx, $remBase, $warnings): LengthPercentage {
-            $folded = $expr->fold($fontSizePx, $remBase, null);
+        $resolveCalcLengthPercentage = static function (CalcExpr $expr, string $label) use ($fontSizePx, $remBase, $warnings, $pageWidthPx, $pageHeightPx): LengthPercentage {
+            $folded = $expr->fold($fontSizePx, $remBase, null, $pageWidthPx, $pageHeightPx);
             if ($folded instanceof CalcValue) {
                 return LengthPercentage::calc($folded);
             }
@@ -626,11 +666,16 @@ final readonly class ComputedStyle
                     LengthUnit::Percent => ($lineHeightValue->value / 100.0) * $fontSizePx,
                     LengthUnit::Em => $lineHeightValue->value * $fontSizePx,
                     LengthUnit::Rem => $lineHeightValue->value * $remBase,
+                    // M10-T1: line-height:Xvw/Xvh -- against the page's own CSS-px size, NOT
+                    // $fontSizePx (vw/vh are a different axis entirely, see
+                    // foldCalcWithOwnBase()'s own M10-T1 note just below for the calc() case).
+                    LengthUnit::Vw => ($lineHeightValue->value / 100.0) * $pageWidthPx,
+                    LengthUnit::Vh => ($lineHeightValue->value / 100.0) * $pageHeightPx,
                     default => null,
                 },
                 // M6-T4: igual que font-size, % en line-height se resuelve YA (contra el propio
                 // font-size, no diferido a Layout) — comparte foldCalcWithOwnBase con font-size.
-                $lineHeightValue instanceof CalcExpr => self::foldCalcWithOwnBase($lineHeightValue, $fontSizePx, $remBase),
+                $lineHeightValue instanceof CalcExpr => self::foldCalcWithOwnBase($lineHeightValue, $fontSizePx, $remBase, $pageWidthPx, $pageHeightPx),
                 default => null,
             };
         }

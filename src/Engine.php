@@ -158,7 +158,11 @@ final class Engine
                     'style tags are ignored; pass CSS via stylesheet()',
                 );
             }
-            $styles = (new StyleResolver([new CssStyleSource($parseResult)], $layoutWarnings))->resolve($document);
+            // M10-T1 (css-values-4 §5.1.1): the paper's own CSS-px size (Page\PaperSize, same
+            // widthPx()/heightPx() the content-box math just below derives $contentWidth/Height
+            // from) threads into StyleResolver so vw/vh resolve against the PAPER box, per the
+            // adjudication documented on Css\Value\LengthUnit.
+            $styles = (new StyleResolver([new CssStyleSource($parseResult)], $layoutWarnings, $this->paper->widthPx(), $this->paper->heightPx()))->resolve($document);
             $imageLoader = new ImageLoader();
             $boxTree = (new BoxTreeBuilder($imageLoader, $layoutWarnings, $this->basePath))->build($document, $styles);
 

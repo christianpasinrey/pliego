@@ -426,6 +426,33 @@ it('is case-insensitive and whitespace-tolerant on the media type keyword', func
     expect($result->warnings)->toBe([]);
 });
 
+// --- M10-T1 (css-mediaqueries-3 §2.3): 'only' prefix normalization -----------------------------
+
+it('applies rules inside @media only print (the "only" prefix carries no evaluation semantics)', function () {
+    $result = new StylesheetParser()->parse('@media only print { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(new Color(255, 0, 0));
+    expect($result->warnings)->toBe([]);
+});
+
+it('applies rules inside @media only all', function () {
+    $result = new StylesheetParser()->parse('@media only all { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('is case-insensitive and whitespace-tolerant on the "only" prefix too', function () {
+    $result = new StylesheetParser()->parse('@media   ONLY   PRINT  { p { color: red } }');
+    expect($result->rules)->toHaveCount(1);
+    expect($result->warnings)->toBe([]);
+});
+
+it('still skips @media only screen -- "only" does not make an otherwise-excluded medium apply', function () {
+    $result = new StylesheetParser()->parse('@media only screen { p { color: red } }');
+    expect($result->rules)->toBe([]);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
 it('skips a @media (min-width: ...) block, with one aggregated warning', function () {
     $result = new StylesheetParser()->parse('@media (min-width: 768px) { p { color: red } }');
     expect($result->rules)->toBe([]);

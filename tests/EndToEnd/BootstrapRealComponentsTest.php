@@ -29,18 +29,27 @@ use Pliego\Engine;
  * accent is painted, in real Bootstrap 5.3, through `.table > :not(caption) > * > *`'s
  * `box-shadow: inset 0 0 0 9999px var(--bs-table-bg-state, var(--bs-table-bg-type,
  * var(--bs-table-accent-bg)))` (an inset-box-shadow-as-fill trick) combined with
- * `.table-striped > tbody > tr:nth-of-type(odd) > *` setting `--bs-table-bg-type`. THIS ENGINE
- * supports neither ingredient yet (inset box-shadow: dropped with a warning since M8, "no inset
- * support"; `:nth-of-type`: parses with a "Pseudo-class not supported yet" warning, matches
- * nothing) -- so real `.table-striped`, used exactly as upstream ships it, paints NO visible
- * stripe at all through this engine today (a genuine, honestly-audited capability gap, not a bug in
- * this task's code -- see the M9-T2 report). `components.html` uses `.table-striped` (so the real
- * class and its (currently inert) rules are still exercised and warn exactly as they would in any
- * consumer's document) PLUS one extra tiny author-level compat rule
- * (`.table-striped-compat tbody tr:nth-child(odd)`, appended as a SEPARATE ->stylesheet() call,
- * same public API any consumer would use to layer their own CSS after a preset) that reproduces the
- * visual with a selector this engine DOES support -- this is what makes the "striped rgba" spot
- * check below meaningful instead of silently vacuous.
+ * `.table-striped > tbody > tr:nth-of-type(odd) > *` setting `--bs-table-bg-type`.
+ *
+ * M10-T1 (Selectors-4 §14.4) gave `:nth-of-type`/`:nth-last-of-type` real support (An+B reused
+ * from `:nth-child`, counting only same-tagName siblings, see Css\PseudoClass::matchesNthOfType())
+ * -- `tr:nth-of-type(odd)` now genuinely MATCHES and sets `--bs-table-bg-type` for real, with zero
+ * warning. Verified by hand (see the task report): removing this file's compat CSS entirely and
+ * re-rendering still paints NO visible stripe, because the OTHER ingredient -- inset box-shadow --
+ * remains unsupported (dropped with a warning, "no inset support" since M8; the actual warning
+ * text observed here is "Unsupported box-shadow component \"initial\": inset 0 0 0 9999px
+ * initial", since `var(--bs-table-bg-state, var(--bs-table-bg-type, var(--bs-table-accent-bg)))`
+ * resolves to the literal keyword `initial` when none of the three custom properties are set,
+ * itself unsupported as a box-shadow component). So real `.table-striped`, used exactly as
+ * upstream ships it, STILL paints no visible stripe through this engine today -- a narrower,
+ * honestly re-audited capability gap (inset box-shadow ALONE, not "neither ingredient" anymore).
+ * `components.html` uses `.table-striped` (so the real class and its rules -- now partially live,
+ * `:nth-of-type` included -- are still exercised and warn exactly as they would in any consumer's
+ * document) PLUS one extra tiny author-level compat rule (`.table-striped-compat tbody
+ * tr:nth-child(odd)`, appended as a SEPARATE ->stylesheet() call, same public API any consumer
+ * would use to layer their own CSS after a preset) that reproduces the visual with a mechanism
+ * this engine DOES support (background-color, not inset box-shadow) -- this is what makes the
+ * "striped rgba" spot check below meaningful instead of silently vacuous.
  *
  * Helper functions prefixed `bootstrapRealComponents` (unique-per-file convention, see other
  * EndToEnd Bootstrap-* files' docblocks).
@@ -48,8 +57,9 @@ use Pliego\Engine;
 
 const BOOTSTRAP_REAL_COMPONENTS_HTML_PATH = __DIR__ . '/../Fixtures/bootstrap/components.html';
 
-// See the class docblock: real Bootstrap's own row-striping mechanism (inset box-shadow +
-// :nth-of-type) is not supported by this engine yet -- this is the documented compat shim.
+// See the class docblock: real Bootstrap's own row-striping mechanism needs BOTH :nth-of-type
+// (supported since M10-T1) AND inset box-shadow (still NOT supported) -- this is the documented
+// compat shim, still required.
 const BOOTSTRAP_REAL_COMPONENTS_STRIPE_COMPAT_CSS = '.table-striped-compat tbody tr:nth-child(odd) > * { background-color: rgba(0, 0, 0, 0.05); }';
 
 /** @return array{0: string, 1: \Pliego\RenderReport} */
@@ -93,16 +103,21 @@ it('renders the real Bootstrap components page as a single valid page, with the 
     expect($report->pageCount)->toBe(1);
 
     // Pinned exact total (deterministic, same vendored sheet + same fixture html + same compat
-    // shim every run): 895 from parsing the real sheet alone (see BootstrapIngestionTest's golden --
+    // shim every run): 870 from parsing the real sheet alone (see BootstrapIngestionTest's golden --
     // 902 pre-M9-T3, minus the 7 "Gradient color-stop alpha not supported" warnings, now GONE:
-    // rgba() gradient stops are supported via /SMask /Luminosity, see Pdf\PdfCanvas::paintGradient())
-    // plus 49 more that only surface once declarations are actually RESOLVED against real elements
-    // (unresolved var() chains on empty custom properties like `--bs-btn-font-family: ;`, a known
-    // IACVT gap already on record since M7; an `initial` keyword used as a box-shadow component,
-    // which is genuinely invalid CSS that real browsers also drop -- see the report for the full
-    // breakdown). A regression here (count changing) means either the vendored sheet changed or
-    // something in parse/style/layout started handling one of these constructs differently.
-    expect($report->warnings)->toHaveCount(944);
+    // rgba() gradient stops are supported via /SMask /Luminosity, see Pdf\PdfCanvas::paintGradient();
+    // 895 pre-M10-T1, minus 25 more now GONE: M10-T1 (css-values-4 §5.1.1) gives vw/vh real support
+    // -- 9 "Unsupported length for ...: NNvw/vh" and 15 "Invalid calc() expression" (a vw/vh unit
+    // inside calc() used to make the WHOLE expression unparseable) vanish, plus 1
+    // "Pseudo-class not supported yet: :nth-of-type" (Selectors-4 §14.4, now matches for real) --
+    // see the M10-T1 report for the full delta) plus 49 more that only surface once declarations
+    // are actually RESOLVED against real elements (unresolved var() chains on empty custom
+    // properties like `--bs-btn-font-family: ;`, a known IACVT gap already on record since M7; an
+    // `initial` keyword used as a box-shadow component, which is genuinely invalid CSS that real
+    // browsers also drop -- see the report for the full breakdown). A regression here (count
+    // changing) means either the vendored sheet changed or something in parse/style/layout started
+    // handling one of these constructs differently.
+    expect($report->warnings)->toHaveCount(919);
 });
 
 it('paints .btn-primary with real Bootstrap\'s own blue (#0d6efd), resolved through its full --bs-btn-bg/--bs-btn-color CSS-variable chain', function () {

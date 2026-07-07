@@ -413,7 +413,10 @@ final class DeclarationParser
         }
         return match ($css->unit) {
             LengthUnit::Px => Length::px($css->value),
-            LengthUnit::Em, LengthUnit::Rem => $css,
+            // M10-T1 (css-values-4 §5.1.1): vw/vh are <length>s, not <percentage>s -- they belong
+            // in a PURE length property exactly like em/rem, kept symbolic here for
+            // ComputedStyle::compute() to resolve against the page's own CSS-px size.
+            LengthUnit::Em, LengthUnit::Rem, LengthUnit::Vw, LengthUnit::Vh => $css,
             default => null,
         };
     }
@@ -437,7 +440,8 @@ final class DeclarationParser
         return match ($css->unit) {
             LengthUnit::Px => LengthPercentage::px($css->value),
             LengthUnit::Percent => LengthPercentage::percent($css->value),
-            LengthUnit::Em, LengthUnit::Rem => $css,
+            // M10-T1: vw/vh, same symbolic passthrough as em/rem (see parseLength() above).
+            LengthUnit::Em, LengthUnit::Rem, LengthUnit::Vw, LengthUnit::Vh => $css,
             default => null,
         };
     }

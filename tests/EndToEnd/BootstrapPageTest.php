@@ -18,7 +18,8 @@ use Pliego\Engine;
  *
  * tests/Fixtures/bootstrap/page.html carries the SAME documented `.table-striped-compat` shim as
  * components.html (see BootstrapRealComponentsTest's class docblock for why: real Bootstrap's own
- * striping mechanism, inset box-shadow + `:nth-of-type`, isn't supported yet).
+ * striping mechanism needs BOTH inset box-shadow (still unsupported) AND `:nth-of-type` (supported
+ * for real since M10-T1) -- the shim stays because of the FIRST gap alone now).
  *
  * Warning count: NOT the full audit (BootstrapIngestionTest.php owns the "parse the WHOLE sheet"
  * number, 895; BootstrapRealComponentsTest.php owns the components-page number, 944) -- a
@@ -152,11 +153,14 @@ it('produces a pinned, categorized warning count for this exact page (honest cap
     expect(array_sum($byCategory))->toBe(count($report->warnings));
 
     // Pinned exact total, observed from a real run against this exact fixture (not guessed) --
-    // see this file's class docblock for why it differs from BootstrapRealComponentsTest's 944:
+    // see this file's class docblock for why it differs from BootstrapRealComponentsTest's 919:
     // a bigger, more varied page (six card variants, five badge/button variants, four alert
     // variants, a navbar) resolves MANY more distinct declarations against real elements than the
-    // components showcase does, each capable of its own var()-resolution-time warning.
-    expect($report->warnings)->toHaveCount(1175);
+    // components showcase does, each capable of its own var()-resolution-time warning. (1175
+    // pre-M10-T1; -25 for the same reason as BootstrapIngestionTest's golden and
+    // BootstrapRealComponentsTest's 919 -- vw/vh support + real :nth-of-type matching, see M10-T1's
+    // report -- this page shares the vendored sheet's sheet-level parse warnings 1:1.)
+    expect($report->warnings)->toHaveCount(1150);
 
     // Spot categories: a handful of the categories this page is EXPECTED to exercise, pinned
     // individually so a change in exactly WHICH kind of warning fires is caught, not just a total

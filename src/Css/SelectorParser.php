@@ -23,13 +23,19 @@ final class SelectorParser
     private const string IDENT_RE = '/\G-?[A-Za-z_][A-Za-z0-9_-]*/';
     /** selectors-3 §6.6.1: pseudo-clases sin efecto en medios paginados (M6 exclusión permanente). */
     private const array DYNAMIC_PSEUDO_CLASSES = ['hover', 'focus', 'active', 'visited', 'link'];
-    /** Estructurales reconocidas por la gramática pero aún no implementadas (M6 exclusión, no M7). */
+    /**
+     * Estructurales reconocidas por la gramática pero aún no implementadas.
+     *
+     * M10-T1 (Selectors-4 §14.4): :nth-of-type/:nth-last-of-type SALEN de esta lista -- reutilizan
+     * el mismo An+B (PseudoClass::matchesAnB()) que :nth-child, contando solo los hermanos del
+     * MISMO tagName (ver PseudoClass::matchesNthOfType()). El resto sigue fuera de alcance.
+     */
     private const array UNSUPPORTED_PSEUDO_CLASSES = [
-        'nth-of-type', 'nth-last-of-type', 'nth-last-child',
+        'nth-last-child',
         'first-of-type', 'last-of-type', 'only-of-type', 'only-child', 'empty',
     ];
     /** Pseudo-clases funcionales (`:foo(...)`) que EXIGEN argumento. */
-    private const array FUNCTIONAL_PSEUDO_CLASSES = ['not', 'nth-child'];
+    private const array FUNCTIONAL_PSEUDO_CLASSES = ['not', 'nth-child', 'nth-of-type', 'nth-last-of-type'];
 
     /**
      * M7-T1 housekeeping (review finding: double warning emission): un ":not(compound)" inválido
@@ -328,19 +334,18 @@ final class SelectorParser
             }
             return new PseudoClass($name, $argument, $negatedSelector);
         }
-        if ($lowerName === 'nth-child') {
+        if ($lowerName === 'nth-child' || $lowerName === 'nth-of-type' || $lowerName === 'nth-last-of-type') {
             $anB = $this->parseAnB($argument);
             if ($anB === null) {
-                $this->warnings?->addWarning("Invalid :nth-child() argument: \"$argument\"");
+                $this->warnings?->addWarning("Invalid :$lowerName() argument: \"$argument\"");
                 return null;
             }
             [$a, $b] = $anB;
             return new PseudoClass($name, $argument, nthA: $a, nthB: $b);
         }
-        // Cualquier otra pseudo-clase funcional (p.ej. :nth-of-type(2), :lang(en)) cae en la misma
-        // clasificación (dinámica/no-soportada/desconocida) que las que no llevan argumento — el
-        // argumento se conserva en el objeto por si sirve de contexto en el warning, pero no se
-        // interpreta.
+        // Cualquier otra pseudo-clase funcional (p.ej. :lang(en)) cae en la misma clasificación
+        // (dinámica/no-soportada/desconocida) que las que no llevan argumento — el argumento se
+        // conserva en el objeto por si sirve de contexto en el warning, pero no se interpreta.
         return $this->buildSimplePseudoClass($name, $lowerName, $argument);
     }
 

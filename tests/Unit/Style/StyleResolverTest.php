@@ -598,6 +598,41 @@ it('folds physical units (in/pt/cm) to their exact px factor at parse time, visi
     expect($map->get($c)->width?->value)->toBe(96.0 / 2.54);
 });
 
+// --- M10-T1 (css-values-4 §5.1.1): vw/vh resolve against the PAPER box's own CSS-px size
+// (adjudicated -- see Css\Value\LengthUnit's docblock), threaded from StyleResolver's own
+// pageWidthPx/pageHeightPx (default A4 when not overridden, same formula as Page\PaperSize::A4).
+
+it('resolves vw against the default A4 page width (50vw -> half of 793.7007874015748px)', function () {
+    [$doc, $map] = resolveDoc('p { width: 50vw }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->width?->value)->toBe((210.0 / 25.4 * 96.0) / 2.0);
+});
+
+it('resolves vh against the default A4 page height (1.5vh of 1122.5196850393701px, hand-verified to 16.84px)', function () {
+    [$doc, $map] = resolveDoc('p { padding-top: 1.5vh }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect(round($map->get($p)->paddingTop->value, 2))->toBe(16.84);
+});
+
+it('resolves an explicitly threaded page size (StyleResolver constructor), not just the A4 default', function () {
+    $doc = \Dom\HTMLDocument::createFromString('<body><p>x</p></body>', LIBXML_NOERROR);
+    $parseResult = new StylesheetParser()->parse('p { width: 50vw; height: 20vh }');
+    $map = new StyleResolver([new CssStyleSource($parseResult)], null, 800.0, 600.0)->resolve($doc);
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->width?->value)->toBe(400.0);
+    expect($map->get($p)->height?->px)->toBe(120.0);
+});
+
+it('resolves Bootstrap\'s calc(1.375rem + 1.5vw) end to end through StyleResolver (33.905511811023623px on default A4)', function () {
+    [$doc, $map] = resolveDoc('p { padding-left: calc(1.375rem + 1.5vw) }', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->paddingLeft->value)->toBe(22.0 + 11.905511811023623);
+});
+
 it('mixes em/rem/px/% in the margin shorthand ("1em 2rem 10px 5%")', function () {
     [$doc, $map] = resolveDoc(
         'html { font-size: 20px } p { font-size: 10px; margin: 1em 2rem 10px 5% }',

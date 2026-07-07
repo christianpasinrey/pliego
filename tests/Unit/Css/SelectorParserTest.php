@@ -438,13 +438,71 @@ it('never matches :focus/:active/:visited/:link either', function () {
         expect($complex->matches(el($doc, 'a')))->toBeFalse();
     }
 });
-it('never matches :nth-of-type and warns "not supported yet"', function () {
+// --- M10-T1 (Selectors-4 §14.4): :nth-of-type/:nth-last-of-type — same An+B machinery as
+// :nth-child, but counting position only among siblings that share the SAME tagName. --------
+
+it('matches :nth-of-type(odd) counting only same-tag siblings, ignoring interleaved other tags', function () {
+    $html = '<div><h2>heading</h2><p>1</p><span>x</span><p>2</p><p>3</p><p>4</p></div>';
+    $doc = \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+    $paragraphs = $doc->querySelectorAll('p');
+    $odd = new SelectorParser()->parse('p:nth-of-type(odd)');
+    assert($odd !== null);
+    // <p> siblings are 1st/2nd/3rd/4th OF THEIR OWN TYPE despite the <h2>/<span> interleaved --
+    // odd (1,3) match, even (2,4) don't.
+    expect(array_map(fn($el) => $odd->matches($el), iterator_to_array($paragraphs)))
+        ->toBe([true, false, true, false]);
+});
+
+it('matches :nth-of-type(2) as the SECOND same-tag sibling, not the second child overall', function () {
+    $html = '<div><span>a</span><p>1</p><p>2</p></div>';
+    $doc = \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+    $paragraphs = $doc->querySelectorAll('p');
+    $second = new SelectorParser()->parse('p:nth-of-type(2)');
+    assert($second !== null);
+    expect($second->matches($paragraphs[0]))->toBeFalse();
+    expect($second->matches($paragraphs[1]))->toBeTrue();
+});
+
+it('matches :nth-last-of-type(1) as the LAST same-tag sibling, counting from the end', function () {
+    $html = '<div><p>1</p><span>x</span><p>2</p><p>3</p></div>';
+    $doc = \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+    $paragraphs = $doc->querySelectorAll('p');
+    $last = new SelectorParser()->parse('p:nth-last-of-type(1)');
+    assert($last !== null);
+    expect(array_map(fn($el) => $last->matches($el), iterator_to_array($paragraphs)))
+        ->toBe([false, false, true]);
+});
+
+it('emits no warning at all for a valid :nth-of-type()/:nth-last-of-type() (fully supported now)', function () {
     $warnings = new WarningCollector();
     $complex = new SelectorParser($warnings)->parse('p:nth-of-type(1)');
     assert($complex !== null);
     $doc = \Dom\HTMLDocument::createFromString('<p>x</p>', LIBXML_NOERROR);
-    expect($complex->matches(el($doc, 'p')))->toBeFalse();
-    expect($warnings->drain())->toContain('Pseudo-class not supported yet: :nth-of-type');
+    expect($complex->matches(el($doc, 'p')))->toBeTrue();
+    expect($warnings->drain())->toBe([]);
+
+    $warnings2 = new WarningCollector();
+    $complex2 = new SelectorParser($warnings2)->parse('p:nth-last-of-type(1)');
+    assert($complex2 !== null);
+    expect($complex2->matches(el($doc, 'p')))->toBeTrue();
+    expect($warnings2->drain())->toBe([]);
+});
+
+it('rejects an invalid :nth-of-type()/:nth-last-of-type() argument with a warning', function () {
+    $warnings = new WarningCollector();
+    $result = new SelectorParser($warnings)->parse('p:nth-of-type(foo)');
+    expect($result)->toBeNull();
+    expect($warnings->drain())->toContain('Invalid :nth-of-type() argument: "foo"');
+
+    $warnings2 = new WarningCollector();
+    $result2 = new SelectorParser($warnings2)->parse('p:nth-last-of-type(foo)');
+    expect($result2)->toBeNull();
+    expect($warnings2->drain())->toContain('Invalid :nth-last-of-type() argument: "foo"');
+});
+
+it('still rejects a bare :nth-of-type without an argument (functional pseudo-class, argument required)', function () {
+    $result = new SelectorParser()->parse('p:nth-of-type');
+    expect($result)->toBeNull();
 });
 it('never matches an unknown pseudo-class and warns', function () {
     $warnings = new WarningCollector();
