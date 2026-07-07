@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Pliego\Css\StylesheetParser;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
 use Pliego\Css\Value\GradientKind;
@@ -1231,4 +1232,76 @@ it('lets background-image: none reset a less-specific cascaded gradient from bac
     assert($div !== null);
     $style = $map->get($div);
     expect($style->backgroundGradient)->toBeNull();
+});
+
+// --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow computed style ---------------------------
+
+it('computes a box-shadow with an explicit color, no inherit from the parent', function () {
+    [$doc, $map] = resolveDoc(
+        'div { box-shadow: 4px 6px 8px rgba(0,0,0,0.5) }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->boxShadow)->toEqual(new BoxShadow(4.0, 6.0, 8.0, new Color(0, 0, 0, 0.5)));
+});
+
+it('resolves box-shadow without a declared color to currentColor (the element\'s own computed color)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { color: #123456; box-shadow: 2px 2px }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->boxShadow)->toEqual(new BoxShadow(2.0, 2.0, 0.0, new Color(0x12, 0x34, 0x56)));
+});
+
+it('does not inherit box-shadow down the tree (initial value: none)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { box-shadow: 2px 2px red }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->boxShadow)->toBeNull();
+});
+
+it('lets a more-specific rule reset a less-specific cascaded box-shadow (box-shadow: none)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { box-shadow: 2px 2px red; } .box.override { box-shadow: none; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->boxShadow)->toBeNull();
+});
+
+it('resolves em-based box-shadow offsets against the element\'s own font-size', function () {
+    [$doc, $map] = resolveDoc(
+        'div { font-size: 20px; box-shadow: 0.5em 1em red }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->boxShadow)->toEqual(new BoxShadow(10.0, 20.0, 0.0, new Color(255, 0, 0)));
+});
+
+it('surfaces a warning and drops the whole box-shadow when inset is declared, end to end', function () {
+    [$doc, $map, $warnings] = resolveDocWithWarnings('div { box-shadow: inset 2px 2px red }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->boxShadow)->toBeNull();
+    expect($warnings)->not->toBeEmpty();
+});
+
+it('resolves border-{side}-style: dashed/dotted through the real cascade, and keeps the declared width (not zeroed like None)', function () {
+    [$doc, $map] = resolveDoc('div { border: 3px dashed #ff0000 }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->borderTop->style)->toBe(BorderStyle::Dashed);
+    expect($style->borderTop->widthPx)->toBe(3.0);
 });

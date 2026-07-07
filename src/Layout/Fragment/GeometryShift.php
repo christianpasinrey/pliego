@@ -48,6 +48,7 @@ final class GeometryShift
             $fragment->clipsChildren,
             $fragment->borderRadius,
             $fragment->backgroundGradient,
+            $fragment->boxShadow,
         );
     }
 
@@ -108,6 +109,7 @@ final class GeometryShift
             $fragment->clipsChildren,
             $fragment->borderRadius,
             $fragment->backgroundGradient,
+            $fragment->boxShadow,
         );
     }
 

@@ -797,6 +797,19 @@ final class InlineFlowContext
             $isLastSlice ? $rawRadius->br : 0.0,
             $isFirstSlice ? $rawRadius->bl : 0.0,
         );
+        // M8-T4 (brief: "InlineBoxFragment: NO shadow M8 (declarado en inline -> warning,
+        // documentado)") -- InlineBoxFragment no tiene un campo $boxShadow (a diferencia de
+        // BoxFragment, ver su docblock): un box-shadow declarado en un elemento inline real
+        // (p.ej. un <span>) simplemente se descarta, con un aviso UNA sola vez por render
+        // (addWarningOnce -- una caja inline partida en N slices por box-decoration-break:slice
+        // reconstruye el MISMO $style, y por tanto dispararía este chequeo N veces sin la
+        // deduplicación).
+        if ($style->boxShadow !== null) {
+            $this->warnings?->addWarningOnce(
+                'box-shadow-on-inline',
+                'box-shadow not supported on inline elements (M8): declaration ignored',
+            );
+        }
         return new InlineBoxFragment(
             new Rect($minX, $rectY, $maxX - $minX, $rectHeight),
             $style->backgroundColor,
@@ -829,6 +842,7 @@ final class InlineFlowContext
                 $fragment->clipsChildren,
                 $fragment->borderRadius,
                 $fragment->backgroundGradient,
+                $fragment->boxShadow,
             );
         }
         if ($fragment instanceof TextFragment) {

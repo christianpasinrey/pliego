@@ -106,8 +106,12 @@ final readonly class Paginator
         // solo) también necesita una hoja paintable; sin esta rama, esa caja se perdería en
         // silencio (ni fondo ni gradiente pintados) exactamente como le pasaba a un borde-sin-fondo
         // antes de T5.
-        if ($box->background !== null || $box->borders->isVisible() || $box->backgroundGradient !== null) {
-            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity, borderRadius: $box->borderRadius, backgroundGradient: $box->backgroundGradient);
+        // M8-T4: $boxShadow SE UNE a la condición -- una caja con SOLO box-shadow (sin
+        // background/borde/gradiente propios, p.ej. una tarjeta cuyo único CSS de caja es
+        // `box-shadow: ...`) también necesita una hoja paintable, mismo motivo que
+        // $backgroundGradient (M8-T3, ver su docblock) y el borde-sin-fondo de T5.
+        if ($box->background !== null || $box->borders->isVisible() || $box->backgroundGradient !== null || $box->boxShadow !== null) {
+            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity, borderRadius: $box->borderRadius, backgroundGradient: $box->backgroundGradient, boxShadow: $box->boxShadow);
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -148,6 +152,7 @@ final readonly class Paginator
                 $leaf->clipsChildren,
                 $leaf->borderRadius,
                 $leaf->backgroundGradient,
+                $leaf->boxShadow,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se

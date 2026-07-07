@@ -597,3 +597,83 @@ it('renders an alpha color-stop OPAQUE in the Function (r/g/b only, no alpha cha
     expect($pdf)->toContain('/C0 [1.000 0.000 0.000] /C1 [0.000 0.000 1.000] /N 1');
     expect($pdf)->not->toContain('/ca');
 });
+
+// --- M8-T4 (css-backgrounds-3 §4.3, ISO 32000-1 §8.4.3.6): dashed/dotted border stroking ---------
+
+it('strokeRect emits a dash array in pt, a plain re path, and S (not f) — hand-computed for a 2px-wide dashed border', function () {
+    // dashed pattern per Painter::dashPatternFor(): [3w w] in PX -- for w=2px, [6, 2]px -> pt via
+    // ×0.75 -> [4.50, 1.50]. Phase is always 0.
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeRect(new Rect(1.0, 1.0, 98.0, 48.0), 2.0, new Color(0, 0, 0), [6.0, 2.0], false);
+    });
+    expect($pdf)->toContain('[4.50 1.50] 0 d');
+    expect($pdf)->toContain(sprintf('%.2F w', 2.0 * 0.75));
+    expect($pdf)->toContain(' re S');
+    expect($pdf)->not->toContain(' re f');
+    expect($pdf)->not->toContain('1 J');
+});
+
+it('strokeRect with a dotted pattern emits [0 2w] pt and a round line cap (1 J)', function () {
+    // dotted per Painter::dashPatternFor(): [0, 2w]px -- for w=2px, [0, 4]px -> pt [0.00, 3.00].
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeRect(new Rect(1.0, 1.0, 98.0, 48.0), 2.0, new Color(0, 0, 0), [0.0, 4.0], true);
+    });
+    expect($pdf)->toContain('[0.00 3.00] 0 d');
+    expect($pdf)->toContain('1 J');
+});
+
+it('strokeRect wraps w/d/J in its own q/Q scope so a LATER solid strokeLine() is byte-identical to a lone call (no leaked dash/cap state)', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeRect(new Rect(0.0, 0.0, 50.0, 50.0), 2.0, new Color(0, 0, 0), [6.0, 2.0], false);
+        $canvas->strokeLine(0.0, 60.0, 50.0, 60.0, 1.0, new Color(0, 0, 0));
+    });
+    // The dashed strokeRect() closes its own scope with "Q\n" immediately followed by the plain
+    // solid strokeLine() op -- exactly the same bytes that op would produce completely on its own
+    // (see the byte-identical-when-no-dash test below), proving no `d`/`J` leaked past the `Q`.
+    $expectedY = (PaperSize::A4->heightPx() - 60.0) * 0.75;
+    expect($pdf)->toContain(sprintf(
+        "Q\n0.000 0.000 0.000 RG\n%.2F w\n%.2F %.2F m %.2F %.2F l S\n",
+        1.0 * 0.75,
+        0.00,
+        $expectedY,
+        37.50,
+        $expectedY,
+    ));
+});
+
+it('strokeRoundedRect traces the SAME Bézier path as fillRoundedRect but with S instead of f, plus dash bytes', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeRoundedRect(new Rect(1.0, 1.0, 98.0, 48.0), new BorderRadius(9.0, 9.0, 9.0, 9.0), 2.0, new Color(0, 0, 0), [6.0, 2.0], false);
+    });
+    expect(substr_count($pdf, " c\n"))->toBe(4);
+    expect($pdf)->toContain('[4.50 1.50] 0 d');
+    expect($pdf)->toContain("h\nS\n");
+    expect($pdf)->not->toContain('h\nf\n');
+});
+
+it('strokeLine with an empty dash pattern (default) is BYTE-IDENTICAL to before this task (no q/Q, no d/J)', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeLine(10.0, 20.0, 60.0, 20.0, 0.8, new Color(0, 0, 0));
+    });
+    $expectedY = (PaperSize::A4->heightPx() - 20.0) * 0.75;
+    expect($pdf)->toContain(sprintf(
+        "0.000 0.000 0.000 RG\n%.2F w\n%.2F %.2F m %.2F %.2F l S\n",
+        0.8 * 0.75,
+        7.50,
+        $expectedY,
+        45.00,
+        $expectedY,
+    ));
+    expect($pdf)->not->toContain(' d\n');
+    expect($pdf)->not->toContain('1 J');
+});
+
+it('strokeLine with a dash pattern wraps w/d in its own q/Q scope and emits the round cap when asked', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->strokeLine(0.0, 0.0, 40.0, 0.0, 2.0, new Color(0, 0, 0), [0.0, 4.0], true);
+    });
+    expect($pdf)->toContain("q\n");
+    expect($pdf)->toContain('[0.00 3.00] 0 d');
+    expect($pdf)->toContain('1 J');
+    expect($pdf)->toContain("l S\nQ\n");
+});

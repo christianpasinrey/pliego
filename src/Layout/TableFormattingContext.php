@@ -237,6 +237,7 @@ final readonly class TableFormattingContext
             opacity: $style->opacity,
             borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
             backgroundGradient: $style->backgroundGradient,
+            boxShadow: $style->boxShadow,
         );
     }
 
@@ -448,6 +449,7 @@ final readonly class TableFormattingContext
             atomic: true,
             opacity: $row->style->opacity,
             backgroundGradient: $row->style->backgroundGradient,
+            boxShadow: $row->style->boxShadow,
         );
 
         return [$rowFragment, $rowTop + $rowHeight];
@@ -487,6 +489,7 @@ final readonly class TableFormattingContext
             $stretched->clipsChildren,
             $stretched->borderRadius,
             $stretched->backgroundGradient,
+            $stretched->boxShadow,
         );
     }
 
@@ -515,6 +518,7 @@ final readonly class TableFormattingContext
             $fragment->clipsChildren,
             $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
             $fragment->backgroundGradient,
+            $fragment->boxShadow,
         );
     }
 

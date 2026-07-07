@@ -230,6 +230,11 @@ final class DeclarationParser
         if ($property === 'background-image') {
             return $this->parseBackgroundImageValue($value);
         }
+        // M8-T4 (css-backgrounds-3 §6 reducido): box-shadow -- ver parseBoxShadowValue() para la
+        // gramática soportada (sin inset/spread/multi-shadow reales, ver su docblock).
+        if ($property === 'box-shadow') {
+            return $this->parseBoxShadowValue($value);
+        }
         if ($this->isBorderLonghand($property, 'width')) {
             return $this->parseBorderWidth($property, $value);
         }
@@ -558,7 +563,7 @@ final class DeclarationParser
     {
         $style = $this->borderStyleFromToken($value);
         if ($style === null) {
-            return $this->warn("Unsupported border style for $property: $value (only solid|none supported in M2)");
+            return $this->warn("Unsupported border style for $property: $value (only solid|none|dashed|dotted supported)");
         }
         return [$property => $style];
     }
@@ -577,6 +582,11 @@ final class DeclarationParser
         return match (strtolower($token)) {
             'solid' => BorderStyle::Solid,
             'none' => BorderStyle::None,
+            // M8-T4 (css-backgrounds-3 §4.3): double/groove/ridge/inset/outset siguen fuera de
+            // alcance -- caen al `null` genérico (warning "only solid|none|dashed|dotted
+            // supported"), igual que antes de esta tarea.
+            'dashed' => BorderStyle::Dashed,
+            'dotted' => BorderStyle::Dotted,
             default => null,
         };
     }
@@ -797,6 +807,93 @@ final class DeclarationParser
             return $this->warn("Unsupported background-image (url() images land in a later milestone): $value");
         }
         return $this->warn("Unsupported background-image: $value");
+    }
+
+    /**
+     * M8-T4 (css-backgrounds-3 §6 reducido): `box-shadow: none | <shadow>#` -- SOLO UNA sombra
+     * (comma-multiple -> primera capa + warning, mismo criterio "primera capa + warning" que
+     * firstBackgroundLayer(); no se reutiliza ese método porque su mensaje/vocabulario es de
+     * "background", no de "box-shadow"). Dentro de esa primera sombra:
+     *   - `inset` -> warning + declaración ENTERA descartada (sin sombra M8, ver RESTRICCIONES
+     *     GLOBALES/brief de esta tarea: "sin inset M8 -> warning").
+     *   - 2 longitudes -> offset-x/offset-y (blur=0 implícito).
+     *   - 3 longitudes -> + blur-radius (debe ser >= 0, igual criterio de signo que border-width).
+     *   - 4 longitudes -> + spread -- warning ("no soportado, ignorado") pero la sombra SÍ se
+     *     construye con las 3 primeras (adjudicación del brief: "spread -> warning + ignorada",
+     *     a diferencia de inset que tira la declaración entera).
+     *   - <1 o >4 longitudes -> warning + declaración descartada.
+     *   - color OPCIONAL, en cualquier posición entre las longitudes (igual que
+     *     expandBorderShorthand()) -- ausente, el raw value lleva el sentinel
+     *     Color::currentColor() (resuelto contra el color computado propio en
+     *     ComputedStyle::compute(), igual patrón que border-*-color/background-color).
+     *
+     * El raw value bajo la clave 'box-shadow' NO es todavía el VO final Css\Value\BoxShadow (ese
+     * exige floats YA resueltos em/rem/calc()-aware, solo posible una vez conocido el font-size
+     * propio del elemento) -- es un array asociativo con las 3 longitudes SIN resolver
+     * (Length|CssLength|CalcExpr, igual tipo que cualquier otra longitud de este parser) + el
+     * Color (concreto o el sentinel currentColor), que ComputedStyle::compute() ensambla en el VO
+     * final exactamente como ya hace con border-*-width/color.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBoxShadowValue(string $value): array
+    {
+        $layers = self::splitTopLevelCommas(trim($value));
+        if (count($layers) > 1) {
+            $this->warnings[] = "Multiple box-shadows not supported (using the first only): $value";
+        }
+        $first = trim($layers[0] ?? '');
+        if ($first === '' || strtolower($first) === 'none') {
+            // 'none' es un reset EXPLÍCITO (igual criterio que background-image: none) -- se
+            // devuelve la clave con valor `null`, no un array vacío, para que SÍ gane el cascade
+            // sobre un box-shadow menos específico ya puesto por una regla anterior.
+            return ['box-shadow' => null];
+        }
+        $tokens = self::splitTopLevel($first);
+        if ($tokens === []) {
+            return $this->warn("Unsupported box-shadow: $value");
+        }
+        $inset = false;
+        $color = null;
+        /** @var list<Length|CssLength|CalcExpr> $lengths */
+        $lengths = [];
+        foreach ($tokens as $token) {
+            if (strtolower($token) === 'inset') {
+                $inset = true;
+                continue;
+            }
+            $tokenColor = Color::fromCss($token);
+            if ($tokenColor !== null) {
+                if ($color !== null) {
+                    return $this->warn("Duplicate box-shadow color component: $value");
+                }
+                $color = $tokenColor;
+                continue;
+            }
+            $tokenLength = $this->parseLength($token);
+            if ($tokenLength === null) {
+                return $this->warn("Unsupported box-shadow component \"$token\": $value");
+            }
+            $lengths[] = $tokenLength;
+        }
+        if ($inset) {
+            return $this->warn("Unsupported box-shadow (inset not supported in M8): $value");
+        }
+        if (count($lengths) < 2 || count($lengths) > 4) {
+            return $this->warn("Unsupported box-shadow (needs offset-x/offset-y, optionally blur-radius/spread): $value");
+        }
+        if (isset($lengths[2]) && self::rawValueOf($lengths[2]) < 0.0) {
+            return $this->warn("Negative blur radius not allowed for box-shadow: $value");
+        }
+        if (isset($lengths[3])) {
+            $this->warnings[] = "box-shadow spread not supported (ignored): $value";
+        }
+        return ['box-shadow' => [
+            'offsetX' => $lengths[0],
+            'offsetY' => $lengths[1],
+            'blur' => $lengths[2] ?? Length::px(0.0),
+            'color' => $color ?? Color::currentColor(),
+        ]];
     }
 
     /**

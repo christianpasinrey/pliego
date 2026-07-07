@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
 use Pliego\Css\Value\GradientKind;
@@ -50,10 +51,60 @@ final class RecordingCanvas implements Canvas
         $this->calls[] = "text({$text->text})";
     }
 
-    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void
+    /** @param list<float> $dashPattern */
+    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color, array $dashPattern = [], bool $roundCap = false): void
     {
         $alphaSuffix = $color->alpha !== null ? sprintf(',a=%.2F', $color->alpha) : '';
-        $this->calls[] = sprintf('line(%.2F,%.2F,%.2F,%.2F,%.2F%s)', $x1, $y1, $x2, $y2, $widthPx, $alphaSuffix);
+        // M8-T4: sufijo ",dash=[..],cap=round" SOLO cuando hay patrón/cap -- así el formato de
+        // llamada NO cambia para ningún test anterior a esta tarea (todos pintan líneas sólidas,
+        // dashPattern===[] && !roundCap).
+        $dashSuffix = $dashPattern !== [] ? ',dash=[' . implode(',', array_map(fn(float $v): string => sprintf('%.2F', $v), $dashPattern)) . ']' : '';
+        $capSuffix = $roundCap ? ',cap=round' : '';
+        $this->calls[] = sprintf('line(%.2F,%.2F,%.2F,%.2F,%.2F%s%s%s)', $x1, $y1, $x2, $y2, $widthPx, $alphaSuffix, $dashSuffix, $capSuffix);
+    }
+
+    /** @param list<float> $dashPattern */
+    public function strokeRect(Rect $rect, float $widthPx, Color $color, array $dashPattern, bool $roundCap): void
+    {
+        $alphaSuffix = $color->alpha !== null ? sprintf(',a=%.2F', $color->alpha) : '';
+        $this->calls[] = sprintf(
+            'strokeRect(%.2F,%.2F,%.2F,%.2F,w=%.2F,#%02x%02x%02x,dash=[%s],cap=%s%s)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $widthPx,
+            $color->r,
+            $color->g,
+            $color->b,
+            implode(',', array_map(fn(float $v): string => sprintf('%.2F', $v), $dashPattern)),
+            $roundCap ? 'round' : 'butt',
+            $alphaSuffix,
+        );
+    }
+
+    /** @param list<float> $dashPattern */
+    public function strokeRoundedRect(Rect $rect, BorderRadius $radius, float $widthPx, Color $color, array $dashPattern, bool $roundCap): void
+    {
+        $alphaSuffix = $color->alpha !== null ? sprintf(',a=%.2F', $color->alpha) : '';
+        $this->calls[] = sprintf(
+            'strokeRoundedRect(%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F,w=%.2F,#%02x%02x%02x,dash=[%s],cap=%s%s)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $radius->tl,
+            $radius->tr,
+            $radius->br,
+            $radius->bl,
+            $widthPx,
+            $color->r,
+            $color->g,
+            $color->b,
+            implode(',', array_map(fn(float $v): string => sprintf('%.2F', $v), $dashPattern)),
+            $roundCap ? 'round' : 'butt',
+            $alphaSuffix,
+        );
     }
 
     public function drawImage(Rect $rect, string $imageKey, float $opacity = 1.0): void
@@ -73,8 +124,13 @@ final class RecordingCanvas implements Canvas
 
     public function fillRoundedRect(Rect $rect, BorderRadius $radius, Color $color): void
     {
+        // M8-T4: sufijo ",a=N.NN" SOLO cuando alpha no es null -- mismo criterio que fillRect(),
+        // añadido aditivamente para poder verificar el alpha/4 de cada capa de box-shadow
+        // redondeada (ningún test preexistente a esta tarea pasaba un color con alpha aquí, así
+        // que ninguna aserción existente cambia).
+        $alphaSuffix = $color->alpha !== null ? sprintf(',a=%.2F', $color->alpha) : '';
         $this->calls[] = sprintf(
-            'roundedRect(%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F,#%02x%02x%02x)',
+            'roundedRect(%.2F,%.2F,%.2F,%.2F,r=%.2F/%.2F/%.2F/%.2F,#%02x%02x%02x%s)',
             $rect->x,
             $rect->y,
             $rect->width,
@@ -86,6 +142,7 @@ final class RecordingCanvas implements Canvas
             $color->r,
             $color->g,
             $color->b,
+            $alphaSuffix,
         );
     }
 
@@ -841,4 +898,203 @@ it('paints an InlineBoxFragment gradient using its OWN (per-slice) rect as the g
     new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['gradient(10.00,10.00,40.00,20.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)']);
+});
+
+// --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow painting --------------------------------
+
+it('paints a blur=0 box-shadow as ONE offset rect, BEFORE the background', function () {
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(5.0, 5.0, 0.0, new Color(0, 0, 0));
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none(), boxShadow: $shadow);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(5.00,5.00,100.00,50.00,#000000)', // shadow: rect offset by (5,5), same size, opaque
+        'rect(0.00,0.00,100.00,50.00,#ff0000)', // element's own background, painted on top
+    ]);
+});
+
+it('paints a blur=0 box-shadow with no background at all (shadow-only card)', function () {
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(4.0, 4.0, 0.0, new Color(0, 0, 0, 0.3));
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), boxShadow: $shadow);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['rect(4.00,4.00,100.00,50.00,#000000,a=0.30)']);
+});
+
+it('multiplies the shadow color alpha by the BoxFragment opacity', function () {
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(2.0, 2.0, 0.0, new Color(0, 0, 0));
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), opacity: 0.5, boxShadow: $shadow);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['rect(2.00,2.00,100.00,50.00,#000000,a=0.50)']);
+});
+
+it('paints a blur=0 box-shadow rounded when the fragment has border-radius (follows the SAME radius)', function () {
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(3.0, 3.0, 0.0, new Color(0, 0, 0));
+    $box = new BoxFragment(
+        new Rect(0, 0, 100, 50),
+        new Color(255, 255, 255),
+        [],
+        BorderSet::none(),
+        borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0),
+        boxShadow: $shadow,
+    );
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'roundedRect(3.00,3.00,100.00,50.00,r=10.00/10.00/10.00/10.00,#000000)',
+        'roundedRect(0.00,0.00,100.00,50.00,r=10.00/10.00/10.00/10.00,#ffffff)',
+    ]);
+});
+
+it('approximates a blur>0 box-shadow as 4 concentric layers, each 1/4 alpha, hand-computed (blur=6, no radius, no offset)', function () {
+    // step = blur/3 = 2.0 -- layer deltas -3,-1,+1,+3 (layer 0 inset by blur/2=3, layer 3
+    // expanded by blur/2=3, "total spread = blur" per the brief's adjudicated geometry, see
+    // Painter::paintBoxShadow()). Base radius is ZERO here: a NEGATIVE delta clamps to 0 (still a
+    // sharp rect, fillRect()), a POSITIVE delta produces radius=delta itself (0+delta, clamped at
+    // 0 as floor) -- the outward-expanding layers naturally pick up soft rounded corners even on a
+    // perfectly square box, an emergent (and visually sensible: blur softens edges) side effect of
+    // "radius + delta" applied to a zero base radius.
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(0.0, 0.0, 6.0, new Color(0, 0, 0));
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), boxShadow: $shadow);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(3.00,3.00,94.00,44.00,#000000,a=0.25)',           // layer 0: delta=-3 (inset), sharp
+        'rect(1.00,1.00,98.00,48.00,#000000,a=0.25)',           // layer 1: delta=-1 (inset), sharp
+        'roundedRect(-1.00,-1.00,102.00,52.00,r=1.00/1.00/1.00/1.00,#000000,a=0.25)', // layer 2: delta=+1
+        'roundedRect(-3.00,-3.00,106.00,56.00,r=3.00/3.00/3.00/3.00,#000000,a=0.25)', // layer 3: delta=+3 (=blur/2)
+    ]);
+});
+
+it('offsets every blur>0 layer by (offsetX, offsetY) before expanding/insetting', function () {
+    $canvas = new RecordingCanvas();
+    $shadow = new BoxShadow(10.0, 20.0, 6.0, new Color(255, 0, 0));
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), boxShadow: $shadow);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    // Base shadow rect (before blur layers): (10,20,100,50) -- same insets/expansions as the
+    // no-offset test above, just translated.
+    expect($canvas->calls)->toBe([
+        'rect(13.00,23.00,94.00,44.00,#ff0000,a=0.25)',
+        'rect(11.00,21.00,98.00,48.00,#ff0000,a=0.25)',
+        'roundedRect(9.00,19.00,102.00,52.00,r=1.00/1.00/1.00/1.00,#ff0000,a=0.25)',
+        'roundedRect(7.00,17.00,106.00,56.00,r=3.00/3.00/3.00/3.00,#ff0000,a=0.25)',
+    ]);
+});
+
+it('paints nothing for box-shadow when null (default), byte-identical to before this task', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
+});
+
+// --- M8-T4: dashed/dotted border painting -------------------------------------------------------
+
+it('paints a UNIFORM dashed border (no radius) as ONE strokeRect() call along the centerline, inset by width/2', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Dashed, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    // centerline: inset by widthPx/2=1 on all sides -- (1,1,98,48). dash pattern [3w w] = [6,2].
+    expect($canvas->calls)->toBe([
+        'strokeRect(1.00,1.00,98.00,48.00,w=2.00,#000000,dash=[6.00,2.00],cap=butt)',
+    ]);
+});
+
+it('paints a UNIFORM dotted border as ONE strokeRect() with the [0 2w] pattern and a round cap', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Dotted, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'strokeRect(1.00,1.00,98.00,48.00,w=2.00,#000000,dash=[0.00,4.00],cap=round)',
+    ]);
+});
+
+it('paints a UNIFORM dashed border WITH border-radius as strokeRoundedRect(), centerline rect + radius reduced by width/2', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(4.0, BorderStyle::Dashed, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    // centerline: inset by 4/2=2; radius reduced by the same 2 -> 10-2=8.
+    expect($canvas->calls)->toBe([
+        'strokeRoundedRect(2.00,2.00,96.00,46.00,r=8.00/8.00/8.00/8.00,w=4.00,#000000,dash=[12.00,4.00],cap=butt)',
+    ]);
+});
+
+it('folds the BoxFragment opacity into the dashed border Color BEFORE calling strokeRect (0.5 opacity halves alpha to 0.50)', function () {
+    $canvas = new RecordingCanvas();
+    $side = new BorderSide(2.0, BorderStyle::Dashed, new Color(0, 0, 0));
+    $borders = new BorderSet($side, $side, $side, $side);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, opacity: 0.5);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toHaveCount(1);
+    expect($canvas->calls[0])->toBe('strokeRect(1.00,1.00,98.00,48.00,w=2.00,#000000,dash=[6.00,2.00],cap=butt,a=0.50)');
+});
+
+it('per-side heterogeneous dashed border: each Dashed/Dotted side strokes an independent centerline segment; Solid sides still fillRect the band', function () {
+    $canvas = new RecordingCanvas();
+    $top = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
+    $right = new BorderSide(2.0, BorderStyle::Dashed, new Color(0, 128, 0));
+    $bottom = new BorderSide(2.0, BorderStyle::Dotted, new Color(0, 0, 255));
+    $left = new BorderSide(0.0, BorderStyle::None, null);
+    $borders = new BorderSet($top, $right, $bottom, $left);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders);
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    // top: Solid -> full band fillRect (0,0,100,2). right: Dashed, width 2, band x=98..100,
+    // y=2..48 (middleHeight=50-topW(2)-bottomW(2)=46) -> vertical centerline at x=99, from y=2 to
+    // y=48, dash [6,2]. bottom: Dotted, width 2, band y=48..50, full width -> horizontal
+    // centerline at y=49, dash [0,4], round cap. left: None -> nothing.
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,2.00,#000000)',
+        'line(99.00,2.00,99.00,48.00,2.00,dash=[6.00,2.00])',
+        'line(0.00,49.00,100.00,49.00,2.00,dash=[0.00,4.00],cap=round)',
+    ]);
+});
+
+it('per-side heterogeneous with radius falls back to flat painting + the mixed-border warning, same as Solid heterogeneous', function () {
+    $canvas = new RecordingCanvas();
+    $top = new BorderSide(2.0, BorderStyle::Dashed, new Color(0, 0, 0));
+    $right = new BorderSide(4.0, BorderStyle::Dashed, new Color(0, 0, 0));
+    $borders = new BorderSet($top, $right, $top, $top);
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    $page = new Page(1, [$box]);
+    $warnings = new WarningCollector();
+    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'line(0.00,1.00,100.00,1.00,2.00,dash=[6.00,2.00])',
+        'line(98.00,2.00,98.00,48.00,4.00,dash=[12.00,4.00])',
+        'line(0.00,49.00,100.00,49.00,2.00,dash=[6.00,2.00])',
+        'line(1.00,2.00,1.00,48.00,2.00,dash=[6.00,2.00])',
+    ]);
+    expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
 });

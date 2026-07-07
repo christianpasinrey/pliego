@@ -174,10 +174,26 @@ final class BoxTreeBuilder
         if ($style->backgroundColor !== null) {
             return true;
         }
+        // M8-T4: `!== None` en vez de `=== Solid` -- un <span> con border: 2px dashed/dotted
+        // también necesita el camino InlineBoxStart/InlineBoxEnd (sin esto, el fast path de M7-T4
+        // se lo tragaría entero, dejando ese borde invisible: Dashed/Dotted no existían todavía
+        // cuando este chequeo se escribió). No-op observacional para M2-M7 (Solid/None eran los
+        // únicos dos valores posibles).
         foreach ([$style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft] as $side) {
-            if ($side->style === BorderStyle::Solid && $side->widthPx > 0.0) {
+            if ($side->style !== BorderStyle::None && $side->widthPx > 0.0) {
                 return true;
             }
+        }
+        // M8-T4 (brief: "InlineBoxFragment: NO shadow M8 -- declarado en inline -> warning,
+        // documentado"): un box-shadow declarado en un <span> SIN ningún otro CSS de caja visible
+        // debe seguir tomando el camino InlineBoxStart/InlineBoxEnd -- de lo contrario el fast
+        // path de arriba se lo tragaría entero y el warning de
+        // InlineFlowContext::buildInlineBoxFragment() (el único sitio que lo emite) nunca llegaría
+        // a dispararse, dejando el box-shadow "silenciosamente" descartado sin aviso (viola "todo
+        // lo excluido avisa"). El propio box-shadow nunca se pinta de todas formas (M8), así que
+        // forzar el camino solo sirve para llegar hasta ese warning.
+        if ($style->boxShadow !== null) {
+            return true;
         }
         $nonZero = static fn(LengthPercentage $lp): bool => $lp->calc !== null || $lp->value !== 0.0;
         return $nonZero($style->paddingLeft) || $nonZero($style->paddingRight)

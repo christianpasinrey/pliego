@@ -177,7 +177,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $lineCross = $declaredContentHeight ?? 0.0;
             $height = $lineCross + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
             $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
-            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient);
+            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow);
         }
 
         if ($style->flexDirection === FlexDirection::Column) {
@@ -240,7 +240,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
         $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow);
     }
 
     /**
@@ -477,6 +477,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->clipsChildren,
             $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
             $fragment->backgroundGradient,
+            $fragment->boxShadow,
         );
     }
 
@@ -1006,7 +1007,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
         $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow);
     }
 
     /**

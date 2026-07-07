@@ -411,22 +411,99 @@ final class PdfCanvas implements Canvas
         $this->emitWithAlpha($color->alpha, $body);
     }
 
-    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color): void
+    /**
+     * M8-T4: += $dashPattern/$roundCap (ambos opcionales, default "línea sólida") -- ver el
+     * docblock del contrato en Paint\Canvas. Cuando ambos están en su default ([]/false, el caso
+     * PREEXISTENTE del subrayado de texto), $needsScope es false y el cuerpo emitido es BYTE A
+     * BYTE idéntico al de antes de esta tarea (mismo `%s\n%.2F w\n%.2F %.2F m %.2F %.2F l S\n`,
+     * sin ningún `q`/`Q` extra). Con dash/cap, TODO el estado de trazo (w/d/J) se envuelve en su
+     * propio `q ... Q` -- sin esto, un `d`/`J` fijado aquí sería PERSISTENTE en el graphics state
+     * de la página (ISO 32000-1 §8.4: igual que `rg`/`RG`, sobrevive hasta el próximo cambio) y
+     * podría filtrarse a un strokeLine() posterior en la MISMA página (p.ej. un subrayado de texto
+     * pintado después de un borde dashed) que nunca pidió dash/cap propio.
+     *
+     * @param list<float> $dashPattern
+     */
+    public function strokeLine(float $x1, float $y1, float $x2, float $y2, float $widthPx, Color $color, array $dashPattern = [], bool $roundCap = false): void
     {
         $px1 = ($x1 + $this->offsetX) * self::PX_TO_PT;
         $py1 = ($this->paper->heightPx() - ($y1 + $this->offsetY)) * self::PX_TO_PT;
         $px2 = ($x2 + $this->offsetX) * self::PX_TO_PT;
         $py2 = ($this->paper->heightPx() - ($y2 + $this->offsetY)) * self::PX_TO_PT;
-        $body = sprintf(
-            "%s\n%.2F w\n%.2F %.2F m %.2F %.2F l S\n",
+        $needsScope = $dashPattern !== [] || $roundCap;
+        $body = ($needsScope ? "q\n" : '') . sprintf(
+            "%s\n%.2F w\n",
             $this->rgStroke($color),
             $widthPx * self::PX_TO_PT,
-            $px1,
-            $py1,
-            $px2,
-            $py2,
         );
+        if ($needsScope) {
+            $body .= $this->dashOp($dashPattern) . ($roundCap ? "1 J\n" : '');
+        }
+        $body .= sprintf("%.2F %.2F m %.2F %.2F l S\n", $px1, $py1, $px2, $py2);
+        $body .= $needsScope ? "Q\n" : '';
         $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
+     * M8-T4 (css-backgrounds-3 §4.3, ISO 32000-1 §8.4.3.6): borde UNIFORME dashed/dotted SIN
+     * border-radius -- traza (`S`) $rect (YA la línea CENTRAL del borde, ver el docblock del
+     * contrato) como un `re` puro con `w`/`d`/`J` propios, envuelto en su propio `q`/`Q` (mismo
+     * motivo que strokeLine(): sin esto, el `d`/`J` fijado aquí se filtraría a cualquier op
+     * posterior en la misma página).
+     *
+     * @param list<float> $dashPattern
+     */
+    public function strokeRect(Rect $rect, float $widthPx, Color $color, array $dashPattern, bool $roundCap): void
+    {
+        $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+        $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+        $body = "q\n" . $this->rgStroke($color) . "\n"
+            . sprintf("%.2F w\n", $widthPx * self::PX_TO_PT)
+            . $this->dashOp($dashPattern)
+            . ($roundCap ? "1 J\n" : '')
+            . sprintf("%.2F %.2F %.2F %.2F re S\n", $x, $y, $rect->width * self::PX_TO_PT, $rect->height * self::PX_TO_PT)
+            . "Q\n";
+        $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
+     * M8-T4: variante de strokeRect() para un borde UNIFORME dashed/dotted CON border-radius --
+     * mismo path Bézier de roundedRectPathOps() que fillRoundedRect(), trazado (`S`) en vez de
+     * relleno (`f`), con el mismo envoltorio `q`/`Q` de w/d/J que strokeRect()/strokeLine().
+     *
+     * @param list<float> $dashPattern
+     */
+    public function strokeRoundedRect(Rect $rect, BorderRadius $radius, float $widthPx, Color $color, array $dashPattern, bool $roundCap): void
+    {
+        $body = "q\n" . $this->rgStroke($color) . "\n"
+            . sprintf("%.2F w\n", $widthPx * self::PX_TO_PT)
+            . $this->dashOp($dashPattern)
+            . ($roundCap ? "1 J\n" : '')
+            . $this->roundedRectPathOps($rect, $radius) . "S\n"
+            . "Q\n";
+        $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
+     * ISO 32000-1 §8.4.3.6: `[dashArray] dashPhase d` -- $dashPatternPx (longitudes on/off en px
+     * CSS, ver Paint\Painter::dashPatternFor()) se convierte a pt con la MISMA escala PX_TO_PT que
+     * cualquier otra longitud de esta clase; la fase siempre es 0 (adjudicación M8: ningún estilo
+     * soportado necesita desplazar la fase del patrón). Array vacío -> cadena vacía (ningún
+     * operador `d` emitido, línea/path sólido -- el llamador solo invoca este helper cuando
+     * $needsScope ya es true, pero se deja defensivo para cualquier otro uso futuro).
+     *
+     * @param list<float> $dashPatternPx
+     */
+    private function dashOp(array $dashPatternPx): string
+    {
+        if ($dashPatternPx === []) {
+            return '';
+        }
+        $parts = array_map(
+            static fn(float $v): string => sprintf('%.2F', $v * self::PX_TO_PT),
+            $dashPatternPx,
+        );
+        return '[' . implode(' ', $parts) . "] 0 d\n";
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pliego\Layout\Fragment;
 
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
 use Pliego\Layout\Geometry\Rect;
@@ -70,6 +71,14 @@ final readonly class BoxFragment implements Fragment
         public bool $clipsChildren = false,
         public BorderRadius $borderRadius = new BorderRadius(),
         public ?Gradient $backgroundGradient = null,
+        // M8-T4 (css-backgrounds-3 §6 reducido): VO YA resuelto a px -- ver el docblock de
+        // Css\Value\BoxShadow para el porqué de que no exista una contraparte "Layout\Fragment\
+        // BoxShadow" aparte (a diferencia de BorderRadius, que SÍ necesita una resolución en dos
+        // fases). Default null para que los ~40 construction sites preexistentes sigan
+        // compilando sin tocarlos: sin sombra declarada, comportamiento de pintado byte-idéntico
+        // a antes de esta tarea. InlineBoxFragment NO tiene este campo (M8: box-shadow declarado
+        // en una caja inline real -> warning, ver InlineFlowContext::buildInlineBoxFragment()).
+        public ?BoxShadow $boxShadow = null,
     ) {}
 
     public function rect(): Rect

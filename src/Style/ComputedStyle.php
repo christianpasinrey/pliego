@@ -8,6 +8,7 @@ use Pliego\Css\DeclarationParser;
 use Pliego\Css\Value\BorderRadius;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\CalcValue;
 use Pliego\Css\Value\Color;
@@ -204,6 +205,13 @@ final readonly class ComputedStyle
         // huecos de un gradiente con alpha, aunque M8 no soporta alpha en stops todavía -- ver
         // Paint\Painter::paintBackground()).
         public ?Gradient $backgroundGradient = null,
+        // M8-T4 (css-backgrounds-3 §6 reducido): NO hereda -- initial value real es "none" (sin
+        // sombra) siempre que no haya declaración propia, nunca $parent->boxShadow (mismo patrón
+        // que $backgroundGradient/$borderRadius justo arriba: cada elemento pinta la SUYA propia).
+        // A diferencia de $borderRadius (que guarda LengthPercentage sin resolver, % diferido a
+        // Layout), este VO YA llega con offsetX/offsetY/blurRadius resueltos a PX -- ver el
+        // docblock de Css\Value\BoxShadow para el porqué (ninguno de los 3 admite % en CSS real).
+        public ?BoxShadow $boxShadow = null,
     ) {}
 
     /**
@@ -580,8 +588,16 @@ final readonly class ComputedStyle
             // computed value of the border width is 0" — el ancho USADO se calcula aquí, en
             // origen, para que ningún consumidor (BlockFlowContext, Painter) pueda leer
             // ->widthPx sin pasar por esta regla.
+            // M8-T4 (css-backgrounds-3 §4.3): Dashed/Dotted RESERVAN el mismo ancho que Solid --
+            // solo BorderStyle::None colapsa el ancho USADO a 0 (CSS 2.2 §8.5.3: "if the value of
+            // border-style is none... the computed value of the border width is 0"; ese texto
+            // nunca mencionó "solid", así que dashed/dotted (M8) también aplican la fórmula
+            // normal de abajo, igual que Solid ya hacía). Antes de esta tarea, dashed/dotted
+            // jamás llegaban aquí (DeclarationParser los rechazaba con warning), así que este
+            // cambio de `!== Solid` a `=== None` es observacionalmente un no-op para todo el
+            // comportamiento M2-M7 (Solid/None eran los únicos dos valores posibles).
             $widthPx = match (true) {
-                $resolvedStyle !== BorderStyle::Solid => 0.0,
+                $resolvedStyle === BorderStyle::None => 0.0,
                 $width instanceof Length => $width->px,
                 $width instanceof CssLength => $resolveCssLength($width),
                 $width instanceof CalcExpr => $resolveCalcPure($width, "border-$side-width", 0.0),
@@ -779,6 +795,40 @@ final readonly class ComputedStyle
         $backgroundGradientValue = $declarations['background-gradient'] ?? null;
         $backgroundGradient = $backgroundGradientValue instanceof Gradient ? $backgroundGradientValue : null;
 
+        // M8-T4 (css-backgrounds-3 §6 reducido): NO hereda (ver docblock del constructor) --
+        // initial "none" (null) siempre que no haya declaración propia, nunca $parent->boxShadow.
+        // DeclarationParser::parseBoxShadowValue() deja el raw en $declarations['box-shadow'] como
+        // un array ['offsetX'=>.., 'offsetY'=>.., 'blur'=>.., 'color'=>Color] (Length|CssLength|
+        // CalcExpr para las 3 longitudes, igual tipo que cualquier otra longitud de este método) --
+        // se resuelve aquí con LOS MISMOS closures $resolveCssLength/$resolveCalcPure que border-*-
+        // width, offsetX/offsetY con signo (box-shadow admite desplazamientos negativos, a
+        // diferencia de border-width) y blur re-clampado a >=0 defensivamente (ya validado no-
+        // negativo en el parser para el caso literal; un calc(1em) que resolviera negativo aquí es
+        // el mismo gap documentado que el resto del motor tiene para calc()+unidad simbólica, ver
+        // NON_NEGATIVE_PROPERTIES). El color, si no se declaró, llega como el sentinel
+        // Color::currentColor() (ver parseBoxShadowValue()) -- se resuelve exactamente igual que
+        // border-*-color/background-color, contra el $color YA computado de ESTE elemento.
+        $boxShadowValue = $declarations['box-shadow'] ?? null;
+        $boxShadow = null;
+        if (is_array($boxShadowValue)) {
+            $resolveShadowLength = static function (mixed $v) use ($resolveCssLength, $resolveCalcPure): float {
+                return match (true) {
+                    $v instanceof Length => $v->px,
+                    $v instanceof CssLength => $resolveCssLength($v),
+                    $v instanceof CalcExpr => $resolveCalcPure($v, 'box-shadow', 0.0),
+                    default => 0.0,
+                };
+            };
+            $shadowColorRaw = $boxShadowValue['color'] ?? null;
+            $shadowColor = $resolveCurrentColor($shadowColorRaw instanceof Color ? $shadowColorRaw : null) ?? $color;
+            $boxShadow = new BoxShadow(
+                $resolveShadowLength($boxShadowValue['offsetX']),
+                $resolveShadowLength($boxShadowValue['offsetY']),
+                max(0.0, $resolveShadowLength($boxShadowValue['blur'])),
+                $shadowColor,
+            );
+        }
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -837,6 +887,7 @@ final readonly class ComputedStyle
             $opacity,
             $customProperties,
             $backgroundGradient,
+            $boxShadow,
         );
     }
 }

@@ -252,11 +252,15 @@ it('rejects negative border-{side}-width with a warning', function () {
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
 
-it('parses border-{side}-style solid/none and warns on unsupported styles', function () {
+it('parses border-{side}-style solid/none/dashed/dotted and warns on unsupported styles', function () {
     $parser = new DeclarationParser();
     expect($parser->parse('border-top-style', 'solid'))->toBe(['border-top-style' => BorderStyle::Solid]);
     expect($parser->parse('border-top-style', 'none'))->toBe(['border-top-style' => BorderStyle::None]);
-    $result = $parser->parse('border-top-style', 'dashed');
+    // M8-T4 (css-backgrounds-3 §4.3): dashed/dotted dejan de estar en la lista de "no soportado"
+    // (antes de esta tarea, 'dashed' era justo el ejemplo usado para el caso de warning de abajo).
+    expect($parser->parse('border-top-style', 'dashed'))->toBe(['border-top-style' => BorderStyle::Dashed]);
+    expect($parser->parse('border-top-style', 'dotted'))->toBe(['border-top-style' => BorderStyle::Dotted]);
+    $result = $parser->parse('border-top-style', 'double');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
@@ -309,10 +313,23 @@ it('allows each border shorthand component to be omitted', function () {
 });
 
 it('warns on an unrecognized border shorthand component', function () {
+    // M8-T4: 'dotted' dejó de ser un ejemplo válido de estilo NO reconocido (ahora es un
+    // BorderStyle real) -- 'double' sigue fuera de alcance.
     $parser = new DeclarationParser();
-    $result = $parser->parse('border', '1px dotted #ccc');
+    $result = $parser->parse('border', '1px double #ccc');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('expands the border shorthand with dashed/dotted styles (M8-T4)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('border', '2px dashed #ccc'))->toEqual([
+        'border-top-width' => Length::px(2.0), 'border-top-style' => BorderStyle::Dashed, 'border-top-color' => new Color(204, 204, 204),
+        'border-right-width' => Length::px(2.0), 'border-right-style' => BorderStyle::Dashed, 'border-right-color' => new Color(204, 204, 204),
+        'border-bottom-width' => Length::px(2.0), 'border-bottom-style' => BorderStyle::Dashed, 'border-bottom-color' => new Color(204, 204, 204),
+        'border-left-width' => Length::px(2.0), 'border-left-style' => BorderStyle::Dashed, 'border-left-color' => new Color(204, 204, 204),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
 });
 
 // --- M2-T3: box-sizing -------------------------------------------------------------------
@@ -1102,6 +1119,36 @@ function gradientFrom(array $result): Gradient
     return $gradient;
 }
 
+/**
+ * Same narrowing idiom as gradientFrom() (see its docblock) for the raw ['offsetX'=>..,
+ * 'offsetY'=>.., 'blur'=>.., 'color'=>Color] shape DeclarationParser::parseBoxShadowValue() puts
+ * under 'box-shadow' (see its docblock — NOT yet the final Css\Value\BoxShadow VO, ComputedStyle
+ * resolves that).
+ *
+ * @param array<string, mixed> $result
+ * @return array{offsetX: Length|CssLength|CalcExpr, offsetY: Length|CssLength|CalcExpr, blur: Length|CssLength|CalcExpr, color: Color}
+ */
+function boxShadowRaw(array $result): array
+{
+    $raw = $result['box-shadow'] ?? null;
+    if (!is_array($raw)) {
+        throw new \RuntimeException('Expected a raw box-shadow array under "box-shadow"');
+    }
+    $offsetX = $raw['offsetX'] ?? null;
+    $offsetY = $raw['offsetY'] ?? null;
+    $blur = $raw['blur'] ?? null;
+    $color = $raw['color'] ?? null;
+    if (
+        !($offsetX instanceof Length || $offsetX instanceof CssLength || $offsetX instanceof CalcExpr)
+        || !($offsetY instanceof Length || $offsetY instanceof CssLength || $offsetY instanceof CalcExpr)
+        || !($blur instanceof Length || $blur instanceof CssLength || $blur instanceof CalcExpr)
+        || !$color instanceof Color
+    ) {
+        throw new \RuntimeException('Malformed raw box-shadow array');
+    }
+    return ['offsetX' => $offsetX, 'offsetY' => $offsetY, 'blur' => $blur, 'color' => $color];
+}
+
 it('parses a numeric-angle linear-gradient() with 2 explicit color stops, zero warnings', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('background-image', 'linear-gradient(45deg, red, blue)');
@@ -1356,5 +1403,92 @@ it('still parses radial-gradient(red, blue) (color first, no prefix at all) with
         new GradientStop(new Color(255, 0, 0), 0.0),
         new GradientStop(new Color(0, 0, 255), 100.0),
     ]));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow ------------------------------------------
+
+it('parses a 2-length box-shadow (offset-x/offset-y only, blur defaults to 0px) with an explicit color', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '4px 6px red');
+    expect($result)->toHaveKey('box-shadow');
+    $raw = boxShadowRaw($result);
+    expect($raw['offsetX'])->toEqual(Length::px(4.0));
+    expect($raw['offsetY'])->toEqual(Length::px(6.0));
+    expect($raw['blur'])->toEqual(Length::px(0.0));
+    expect($raw['color'])->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses a 3-length box-shadow (offset-x/offset-y/blur-radius)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 4px 8px #000000');
+    $raw = boxShadowRaw($result);
+    expect($raw['offsetX'])->toEqual(Length::px(2.0));
+    expect($raw['offsetY'])->toEqual(Length::px(4.0));
+    expect($raw['blur'])->toEqual(Length::px(8.0));
+    expect($raw['color'])->toEqual(new Color(0, 0, 0));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('defaults box-shadow color to the currentColor sentinel when no color is declared', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '4px 6px');
+    $raw = boxShadowRaw($result);
+    expect($raw['color']->isCurrentColor)->toBeTrue();
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts offset-x/offset-y before OR after the color, in any order', function () {
+    $parser = new DeclarationParser();
+    $a = $parser->parse('box-shadow', 'red 4px 6px');
+    $b = $parser->parse('box-shadow', '4px 6px red');
+    expect($a)->toEqual($b);
+});
+
+it('warns and DROPS the whole box-shadow when a 4th length (spread) is present, but still emits the shadow with the first 3 (M8: spread ignored)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 4px 8px 3px red');
+    $raw = boxShadowRaw($result);
+    expect($raw['offsetX'])->toEqual(Length::px(2.0));
+    expect($raw['offsetY'])->toEqual(Length::px(4.0));
+    expect($raw['blur'])->toEqual(Length::px(8.0));
+    expect($raw['color'])->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toBe(['box-shadow spread not supported (ignored): 2px 4px 8px 3px red']);
+});
+
+it('warns and DROPS the entire box-shadow declaration when inset is present (M8: no inset support)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', 'inset 2px 4px red');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns and drops box-shadow with fewer than 2 lengths', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '4px red');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('warns and drops box-shadow with a negative blur radius', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 4px -8px red');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('uses only the first shadow of a comma-separated multi-shadow list, with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', '2px 2px red, 4px 4px blue');
+    $raw = boxShadowRaw($result);
+    expect($raw['color'])->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toBe(['Multiple box-shadows not supported (using the first only): 2px 2px red, 4px 4px blue']);
+});
+
+it('treats box-shadow: none as an explicit reset (null value, no warning)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('box-shadow', 'none');
+    expect($result)->toBe(['box-shadow' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });

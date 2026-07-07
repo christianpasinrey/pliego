@@ -6,6 +6,7 @@ namespace Pliego\Paint;
 
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
+use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
 use Pliego\Css\WarningCollector;
@@ -57,6 +58,13 @@ final readonly class Painter
     private function paintFragment(Fragment $fragment, Canvas $canvas): void
     {
         if ($fragment instanceof BoxFragment) {
+            // M8-T4 (css-backgrounds-3 §6 reducido): box-shadow se pinta ANTES que el fondo
+            // propio del elemento (css-backgrounds-3 §painting order: box-shadow queda DEBAJO de
+            // background/borde/contenido) -- InlineBoxFragment no tiene este campo (ver su
+            // docblock: box-shadow declarado en una caja inline real avisa y se descarta, ver
+            // InlineFlowContext::buildInlineBoxFragment()), así que esta llamada solo existe en
+            // esta rama.
+            $this->paintBoxShadow($fragment->rect, $fragment->boxShadow, $fragment->opacity, $fragment->borderRadius, $canvas);
             // M6-T5: opacity PROPIA de este BoxFragment multiplica el alpha de su fondo (Color::
             // withOpacity() — no-op si opacity es 1.0, ver su docblock) — los HIJOS (pintados más
             // abajo, vía recursión) NO reciben esta opacity (divergencia M6 documentada, ver
@@ -159,6 +167,71 @@ final readonly class Painter
     }
 
     /**
+     * M8-T4 (css-backgrounds-3 §6, reducido): box-shadow SIN inset (M8: rechazado ya en
+     * DeclarationParser, ver su docblock) -- offsetX/offsetY desplazan el rect de sombra; blur=0
+     * pinta UN rect/rect-redondeado (fillRect()/fillRoundedRect(), mismo criterio de radio que
+     * paintBackground()) del color de la sombra; blur>0 aproxima el desenfoque con 4 capas
+     * concéntricas.
+     *
+     * APROXIMACIÓN RUIDOSAMENTE DOCUMENTADA (NO es un blur Gaussiano real, ISO 32000-1 no define
+     * ningún operador de desenfoque nativo y este motor no rasteriza off-screen): 4 rects/
+     * rects-redondeados concéntricos, cada uno con 1/4 del alpha efectivo de la sombra, centrados
+     * en el borde ORIGINAL de la sombra (blur "a caballo" del borde, mismo lenguaje que el spec
+     * usa para describir el blur real) -- layer 0 (más pequeño) insetado blur/2, layer 3 (más
+     * grande) expandido blur/2, los 2 intermedios repartidos EQUIDISTANTES entre ambos extremos
+     * (paso = blur/3, NO blur/4 pese a que "cada capa se expande blur/4" pueda leerse en la
+     * documentación de más alto nivel de este milestone -- blur/3 es la única división que hace
+     * que layer 0/layer 3 caigan EXACTAMENTE en ±blur/2, los dos valores ancla que sí son
+     * hand-verificables byte a byte). La superposición de las 4 capas (todas semitransparentes,
+     * pintadas de la más pequeña a la más grande) acumula alpha visualmente hacia el centro del
+     * blur SIN que este código calcule ningún alpha compuesto por-píxel -- es un efecto emergente
+     * de apilar varios rects translúcidos, aceptable visualmente para los blurs pequeños (<=10px)
+     * de los fixtures de este motor, pero NO intercambiable por un blur real si algún día se migra
+     * a un renderer con soporte de máscaras blandas (M9+, si acaso).
+     */
+    private function paintBoxShadow(Rect $rect, ?BoxShadow $shadow, float $opacity, BorderRadius $radius, Canvas $canvas): void
+    {
+        if ($shadow === null) {
+            return;
+        }
+        $baseRect = new Rect($rect->x + $shadow->offsetX, $rect->y + $shadow->offsetY, $rect->width, $rect->height);
+        $color = $shadow->color->withOpacity($opacity);
+        if ($shadow->blurRadius <= 0.0) {
+            $this->fillShadowRect($baseRect, $radius, $color, $canvas);
+            return;
+        }
+        $quarterAlpha = new Color($color->r, $color->g, $color->b, ($color->alpha ?? 1.0) / 4.0, $color->isCurrentColor);
+        $step = $shadow->blurRadius / 3.0;
+        for ($i = 0; $i < 4; $i++) {
+            $delta = -$shadow->blurRadius / 2.0 + $i * $step;
+            $layerRect = new Rect(
+                $baseRect->x - $delta,
+                $baseRect->y - $delta,
+                max(0.0, $baseRect->width + 2.0 * $delta),
+                max(0.0, $baseRect->height + 2.0 * $delta),
+            );
+            $layerRadius = new BorderRadius(
+                max(0.0, $radius->tl + $delta),
+                max(0.0, $radius->tr + $delta),
+                max(0.0, $radius->br + $delta),
+                max(0.0, $radius->bl + $delta),
+            );
+            $this->fillShadowRect($layerRect, $layerRadius, $quarterAlpha, $canvas);
+        }
+    }
+
+    /** fillRect()/fillRoundedRect() según $radius -- mismo criterio que paintBackground(), usado
+     *  tanto por paintBoxShadow() (blur=0 o cada capa de blur>0) para evitar duplicar el `if`. */
+    private function fillShadowRect(Rect $rect, BorderRadius $radius, Color $color, Canvas $canvas): void
+    {
+        if ($radius->isZero()) {
+            $canvas->fillRect($rect, $color);
+        } else {
+            $canvas->fillRoundedRect($rect, $radius, $color);
+        }
+    }
+
+    /**
      * M8-T2: fondo de una caja (BoxFragment o InlineBoxFragment) — fillRect() cuando $radius es
      * cero (byte-idéntico a antes de esta tarea), fillRoundedRect() en caso contrario (path
      * Bézier, ver Pdf\PdfCanvas::roundedRectPathOps()).
@@ -231,24 +304,51 @@ final readonly class Painter
      * docblock) pero no es un BoxFragment, así que ambos llamadores (paintFragment() para cada
      * uno) pasan sus propios campos homónimos en vez de compartir un tipo común.
      */
+    /**
+     * M8-T4 (css-backgrounds-3 §4.3): la uniformidad (ver bordersUniform()) se comprueba SIEMPRE
+     * ahora que hay ESTILOS que pueden querer un ÚNICO path continuo incluso con $radius cero
+     * (dashed/dotted uniforme, ver paintUniformDashedBorder() -- el patrón de guiones debe
+     * "envolver" continuamente las 4 esquinas, algo que 4 líneas independientes por lado no
+     * consiguen, incluso en un rect recto). Antes de esta tarea, $radius->isZero() cortaba a
+     * paintBordersFlat() ANTES de calcular $uniform en absoluto -- eso sigue siendo el resultado
+     * final para Solid (ver la rama de abajo), así que ningún borde Solid preexistente cambia de
+     * bytes: la única rama NUEVA de este método es la de Dashed/Dotted.
+     */
     private function paintBorders(Rect $rect, BorderSet $borders, float $opacity, BorderRadius $radius, Canvas $canvas): void
     {
-        if ($radius->isZero() || !$borders->isVisible()) {
-            $this->paintBordersFlat($rect, $borders, $opacity, $canvas);
+        if (!$borders->isVisible()) {
             return;
         }
         $uniform = $this->bordersUniform($borders, $radius);
         if ($uniform === null) {
-            $this->warnings?->addWarningOnce(
-                'mixed-border-widths-with-radius',
-                'mixed border widths with border-radius approximated',
-            );
+            // El warning de "mixed... approximated" solo tiene sentido cuando HAY un radio que
+            // aproximar (la heterogeneidad en sí siempre se pinta EXACTA vía paintBordersFlat(),
+            // radio o no) -- mismo gating que antes de esta tarea (cuando $radius->isZero() ya
+            // cortaba antes de llegar aquí, este warning nunca podía dispararse para radio cero).
+            if (!$radius->isZero()) {
+                $this->warnings?->addWarningOnce(
+                    'mixed-border-widths-with-radius',
+                    'mixed border widths with border-radius approximated',
+                );
+            }
             $this->paintBordersFlat($rect, $borders, $opacity, $canvas);
             return;
         }
         if ($uniform->color === null) {
             // BorderSide::$color es ?Color por tipo, aunque ComputedStyle nunca produce null
             // (T3: currentColor eager) -- guardia defensiva, mismo criterio que paintBorderSide().
+            return;
+        }
+        if ($uniform->style !== BorderStyle::Solid) {
+            // Dashed/Dotted uniforme (radio cero o no) -- SIEMPRE un único path trazado, ver
+            // paintUniformDashedBorder().
+            $this->paintUniformDashedBorder($rect, $uniform, $radius, $opacity, $canvas);
+            return;
+        }
+        if ($radius->isZero()) {
+            // Solid uniforme SIN radio: 4 rects rectos, byte-idéntico al comportamiento pre-M8-T4
+            // (antes de esta tarea, este caso ni siquiera llegaba a calcular $uniform).
+            $this->paintBordersFlat($rect, $borders, $opacity, $canvas);
             return;
         }
         // M8-T2 review Finding 1: offset POR LADO (un lado None -- suprimido por slice --
@@ -273,6 +373,60 @@ final readonly class Painter
             max(0.0, $radius->bl - $bw),
         );
         $canvas->fillRoundedRectRing($rect, $radius, $inner, $innerRadius, $uniform->color->withOpacity($opacity));
+    }
+
+    /**
+     * M8-T4 (css-backgrounds-3 §4.3, ISO 32000-1 §8.4.3.6): borde UNIFORME dashed/dotted -- UN
+     * único path trazado (`S`) a lo largo de la línea CENTRAL del borde (el border-box insetado
+     * $bw/2 en cada lado -- css-backgrounds-3 no especifica el centrado exacto del trazo de un
+     * borde dashed/dotted; "centrado sobre el border-box declarado" es la interpretación
+     * adjudicada M8, igual convención "el trazo cubre el mismo ancho visual que el borde solid
+     * equivalente" que motiva el `w`=$bw pasado a Canvas). $radius, si no es cero, se reduce por
+     * la MISMA mitad de ancho (mismo criterio de reclamp que el resto de este motor, clamp a 0
+     * como mínimo) antes de trazar el path Bézier -- sin border-radius, un simple `re` trazado
+     * (strokeRect()) basta.
+     */
+    private function paintUniformDashedBorder(Rect $rect, BorderSide $uniform, BorderRadius $radius, float $opacity, Canvas $canvas): void
+    {
+        $bw = $uniform->widthPx;
+        $color = $uniform->color;
+        if ($color === null || $bw <= 0.0) {
+            return;
+        }
+        $centerRect = new Rect($rect->x + $bw / 2.0, $rect->y + $bw / 2.0, max(0.0, $rect->width - $bw), max(0.0, $rect->height - $bw));
+        $dash = $this->dashPatternFor($uniform->style, $bw);
+        $roundCap = $uniform->style === BorderStyle::Dotted;
+        $paintColor = $color->withOpacity($opacity);
+        if ($radius->isZero()) {
+            $canvas->strokeRect($centerRect, $bw, $paintColor, $dash, $roundCap);
+            return;
+        }
+        $centerRadius = new BorderRadius(
+            max(0.0, $radius->tl - $bw / 2.0),
+            max(0.0, $radius->tr - $bw / 2.0),
+            max(0.0, $radius->br - $bw / 2.0),
+            max(0.0, $radius->bl - $bw / 2.0),
+        );
+        $canvas->strokeRoundedRect($centerRect, $centerRadius, $bw, $paintColor, $dash, $roundCap);
+    }
+
+    /**
+     * ISO 32000-1 §8.4.3.6: patrón de guiones en PX (Canvas los convierte a pt, ver PdfCanvas::
+     * dashOp()) para $style/$widthPx -- dashed: `[3w w]` (guion de 3× el ancho del borde, hueco de
+     * 1×); dotted: `[0 2w]` (guion de longitud CERO -- necesita $roundCap para dibujarse como un
+     * punto circular en vez de desaparecer, ver Paint\Canvas::strokeLine()) con hueco de 2×.
+     * Solid/None devuelven [] (sin patrón -- este método nunca se invoca para ellos en la
+     * práctica, guardia defensiva).
+     *
+     * @return list<float>
+     */
+    private function dashPatternFor(BorderStyle $style, float $widthPx): array
+    {
+        return match ($style) {
+            BorderStyle::Dashed => [3.0 * $widthPx, $widthPx],
+            BorderStyle::Dotted => [0.0, 2.0 * $widthPx],
+            default => [],
+        };
     }
 
     /**
@@ -341,52 +495,87 @@ final readonly class Painter
         return $first;
     }
 
-    /** El pintado de 4 rects rectos de siempre (pre-M8-T2) -- usado tanto para $radius cero como
-     * para la aproximación de anchos/colores mixtos con radio (ver paintBorders()). */
+    /**
+     * El pintado de 4 bandas de siempre (pre-M8-T2) -- usado tanto para $radius cero como para la
+     * aproximación de anchos/colores/estilos mixtos con radio (ver paintBorders()).
+     *
+     * M8-T4: cada banda ahora lleva también su orientación (true = horizontal -- top/bottom, false
+     * = vertical -- left/right) -- paintBorderSide() la necesita para trazar la línea CENTRAL de
+     * un lado Dashed/Dotted heterogéneo (un lado Solid sigue ignorándola, fillRect() de la banda
+     * entera sin cambios).
+     */
     private function paintBordersFlat(Rect $rect, BorderSet $borders, float $opacity, Canvas $canvas): void
     {
         // Solo el ancho de los lados VISIBLES reserva espacio para el rect vertical entre ellos
         // (un lado con style None no ocupa hueco, igual que en el modelo de caja CSS 2.2 §8.5.3:
-        // "if border-style is none... the computed value of the border width is 0").
+        // "if border-style is none... the computed value of the border width is 0" -- Dashed/
+        // Dotted SÍ reservan, igual que Solid, ver effectiveWidth()).
         $topW = $this->effectiveWidth($borders->top);
         $bottomW = $this->effectiveWidth($borders->bottom);
         $middleHeight = $rect->height - $topW - $bottomW;
 
-        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW), $opacity);
+        $this->paintBorderSide($borders->top, $canvas, new Rect($rect->x, $rect->y, $rect->width, $topW), $opacity, true);
         $this->paintBorderSide(
             $borders->right,
             $canvas,
             new Rect($rect->right() - $borders->right->widthPx, $rect->y + $topW, $borders->right->widthPx, $middleHeight),
             $opacity,
+            false,
         );
         $this->paintBorderSide(
             $borders->bottom,
             $canvas,
             new Rect($rect->x, $rect->bottom() - $bottomW, $rect->width, $bottomW),
             $opacity,
+            true,
         );
         $this->paintBorderSide(
             $borders->left,
             $canvas,
             new Rect($rect->x, $rect->y + $topW, $borders->left->widthPx, $middleHeight),
             $opacity,
+            false,
         );
     }
 
     /**
      * BorderSide::$color es ?Color por tipo, aunque ComputedStyle nunca produce null (T3:
      * currentColor eager) — guardia defensiva, nunca debería activarse desde el pipeline real.
+     *
+     * M8-T4: Solid sigue pintando la BANDA entera vía fillRect() (comportamiento byte-idéntico a
+     * antes de esta tarea); Dashed/Dotted (heterogéneo -- si fuera uniforme, paintBorders() ya
+     * habría desviado a paintUniformDashedBorder() antes de llegar aquí) traza la línea CENTRAL de
+     * $band como un segmento independiente (Canvas::strokeLine(), con el dash pattern/cap propios
+     * de este lado -- "esquinas entre lados de distinto color: segmentos rectos M8, sin
+     * negociación de miter", ver el brief de esta tarea) -- $horizontal decide si esa línea corre
+     * a lo largo del ancho de la banda (top/bottom) o de su alto (left/right).
      */
-    private function paintBorderSide(BorderSide $side, Canvas $canvas, Rect $rect, float $opacity): void
+    private function paintBorderSide(BorderSide $side, Canvas $canvas, Rect $band, float $opacity, bool $horizontal): void
     {
-        if ($side->style !== BorderStyle::Solid || $side->widthPx <= 0.0 || $side->color === null) {
+        if ($side->style === BorderStyle::None || $side->widthPx <= 0.0 || $side->color === null) {
             return;
         }
-        $canvas->fillRect($rect, $side->color->withOpacity($opacity));
+        $color = $side->color->withOpacity($opacity);
+        if ($side->style === BorderStyle::Solid) {
+            $canvas->fillRect($band, $color);
+            return;
+        }
+        $dash = $this->dashPatternFor($side->style, $side->widthPx);
+        $roundCap = $side->style === BorderStyle::Dotted;
+        if ($horizontal) {
+            $y = $band->y + $band->height / 2.0;
+            $canvas->strokeLine($band->x, $y, $band->x + $band->width, $y, $side->widthPx, $color, $dash, $roundCap);
+        } else {
+            $x = $band->x + $band->width / 2.0;
+            $canvas->strokeLine($x, $band->y, $x, $band->y + $band->height, $side->widthPx, $color, $dash, $roundCap);
+        }
     }
 
+    /** M8-T4: `!== None` en vez de `=== Solid` -- Dashed/Dotted RESERVAN el mismo espacio que
+     *  Solid en la geometría de banda de arriba (mismo criterio que ComputedStyle::compute(),
+     *  ver su docblock); no-op observacional para M2-M7. */
     private function effectiveWidth(BorderSide $side): float
     {
-        return $side->style === BorderStyle::Solid ? $side->widthPx : 0.0;
+        return $side->style !== BorderStyle::None ? $side->widthPx : 0.0;
     }
 }
