@@ -921,7 +921,13 @@ parameters:
 		-
 			message: '#^Cannot access property \$backgroundColor on mixed\.$#'
 			identifier: property.nonObject
-			count: 1
+			count: 4
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$backgroundGradient on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1203,13 +1209,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 131
+			count: 134
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 117
+			count: 120
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

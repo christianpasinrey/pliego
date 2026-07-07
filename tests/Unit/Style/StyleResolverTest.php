@@ -5,6 +5,9 @@ declare(strict_types=1);
 use Pliego\Css\StylesheetParser;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Style\AlignItems;
 use Pliego\Style\CssStyleSource;
@@ -1153,4 +1156,55 @@ it('coerces overflow: scroll/auto to hidden end to end, with a warning surfaced 
     assert($div !== null);
     expect($map->get($div)->overflow)->toBe('hidden');
     expect($warnings)->not->toBeEmpty();
+});
+
+// --- code review Finding 1 (css-backgrounds-3 §5): the `background` SHORTHAND must reset every
+// sub-property it covers, not just the one it declares a value for -- a cascaded gradient (or
+// color) from a LESS-specific rule must NOT survive a more-specific `background: <color>` (or
+// `background: <gradient>`) declaration on the same element. This is a cascade-MERGE bug, not a
+// single-declaration parsing bug: DeclarationParser::parse() only ever sees ONE declaration at a
+// time, so the repro needs two real cascading rules resolved through StyleResolver, exactly like
+// the brief's exact repro (`.box{background:linear-gradient(red,blue)} .box.override{background:
+// yellow}`).
+
+it('lets a more-specific "background:<color>" reset a less-specific cascaded gradient (Finding 1 exact repro)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background: yellow; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundGradient)->toBeNull();
+    expect($style->backgroundColor)->toEqual(new Color(255, 255, 0));
+});
+
+it('lets a more-specific "background:<gradient>" reset a less-specific cascaded color (Finding 1, reverse order)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: yellow; } .box.override { background: linear-gradient(red, blue); }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundColor)->toBeNull();
+    expect($style->backgroundGradient)->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+it('does NOT let the background-color LONGHAND reset a cascaded gradient (only the shorthand resets)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background: linear-gradient(red, blue); } .box.override { background-color: yellow; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundColor)->toEqual(new Color(255, 255, 0));
+    expect($style->backgroundGradient)->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
 });

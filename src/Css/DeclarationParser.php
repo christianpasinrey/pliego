@@ -747,14 +747,31 @@ final class DeclarationParser
         $trimmed = $this->firstBackgroundLayer($value);
         if ($this->isGradientFunction($trimmed)) {
             $gradient = $this->parseGradientFunction($trimmed);
-            return $gradient === null ? [] : ['background-gradient' => $gradient];
+            if ($gradient === null) {
+                return [];
+            }
+            // code review Finding 1 (css-backgrounds-3 §5): `background` is a SHORTHAND -- every
+            // use of it resets ALL the sub-properties it covers, not just the one it declares a
+            // value for (CSS 2.2 §12.5.3). This reduced grammar never carries a color AND a
+            // gradient in the SAME shorthand value (see this method's docblock above), so a
+            // gradient value always resets background-color to its initial 'transparent' --
+            // represented here as an explicit `null` (not simply omitting the key), which is what
+            // lets it win over a background-color a LESS-specific cascaded rule already set for
+            // the same element (StyleResolver::matchedDeclarationsAndCustomProperties() merges
+            // rule declarations key-by-key, in cascade order -- omitting the key here would let
+            // that earlier value silently survive; `$declarations[$k] ?? null` in
+            // ComputedStyle::compute() treats an explicit null exactly like "never declared").
+            return ['background-gradient' => $gradient, 'background-color' => null];
         }
         if (stripos($trimmed, 'url(') === 0) {
             return $this->warn("Unsupported background (url() images land in a later milestone): $value");
         }
         $color = Color::fromCss($trimmed);
         if ($color !== null) {
-            return ['background-color' => $color];
+            // code review Finding 1 (symmetric case): a color value resets background-gradient to
+            // its initial 'none' the same way -- see the docblock above for why an explicit null
+            // (not an omitted key) is required for the reset to actually win the cascade merge.
+            return ['background-color' => $color, 'background-gradient' => null];
         }
         return $this->warn("Unsupported background shorthand: $value");
     }
@@ -896,7 +913,36 @@ final class DeclarationParser
         // posición reducidas de este milestone) es casi siempre un stop -- pero un token compuesto
         // como "red 10%" tampoco es una forma; basta comprobar si CONTIENE alguna de las 3 keywords
         // reservadas (nunca aparecen en un nombre de color ni en una función rgb()/hsl()).
-        return str_contains($token, 'circle') || str_contains($token, 'ellipse') || str_starts_with($token, 'at ');
+        if (str_contains($token, 'circle') || str_contains($token, 'ellipse') || str_starts_with($token, 'at ')) {
+            return true;
+        }
+        // code review Finding 2 (css-images-3 §3.1): las 3 formas anteriores no cubrían el resto
+        // de la gramática real de tamaño/extensión de radial-gradient() -- las 4 extent keywords
+        // (closest-side/closest-corner/farthest-side/farthest-corner), un tamaño explícito de UNA
+        // longitud (`radial-gradient(50px, ...)`, radio circular) o de DOS longitudes/porcentajes
+        // (`radial-gradient(50% 50%, ...)`, ejes de una elipse) -- ninguna de las 3 formas es un
+        // color-stop válido, pero antes de este fix se colaban como el primer argumento de
+        // parseGradientStops(), que Color::fromCss() rechazaba, tirando el gradiente ENTERO con un
+        // warning de "stop color" engañoso en vez de degradar por el fallback circle-at-center de
+        // más abajo (mismo mecanismo que 'ellipse'/'at'). Sin colisión posible con los 148 nombres
+        // de color (Color::KEYWORDS): ninguno contiene un guion, y ninguno parsea como CssLength
+        // (exige un dígito inicial) -- un stop real como "red"/"red 10%" falla el chequeo de
+        // CssLength::fromCss() en su primer token y esta función sigue devolviendo `false` para él,
+        // exactamente como antes (ver "parses a bare radial-gradient(red, blue)... zero warnings").
+        $lower = strtolower(trim($token));
+        if (in_array($lower, ['closest-side', 'closest-corner', 'farthest-side', 'farthest-corner'], true)) {
+            return true;
+        }
+        $sizeParts = self::splitTopLevel($lower);
+        if ($sizeParts === [] || count($sizeParts) > 2) {
+            return false;
+        }
+        foreach ($sizeParts as $sizePart) {
+            if (CssLength::fromCss($sizePart) === null) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

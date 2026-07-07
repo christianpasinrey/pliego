@@ -95,6 +95,68 @@ it('warns and falls back to circle-at-center for an unsupported radial-gradient(
     expect($pdf)->toContain('/ShadingType 3');
 });
 
+// --- code review Finding 1 (css-backgrounds-3 §5, shorthand reset semantics): `background` is a
+// SHORTHAND -- a more-specific `background:<color>` (or `background:<gradient>`) declaration must
+// reset the OTHER sub-property, not just add its own on top of whatever a less-specific rule
+// already cascaded in. Before the fix, BOTH painted (the gradient's own /sh op on top of the
+// override color's rect) -- the exact repro from the code review finding.
+
+it('paints ONLY the override color, no gradient /sh op, when a more-specific rule overrides "background" with a plain color (Finding 1 exact repro)', function () {
+    $css = '.box { width: 100px; height: 50px; background: linear-gradient(red, blue); }
+        .box.override { background: yellow; }';
+    $html = '<body><div class="box override">x</div></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toBe([]);
+    expect($pdf)->not->toContain('/ShadingType');
+    expect($pdf)->not->toContain('/Sh1 sh');
+    // yellow = rgb(255,255,0) -> 1.000 1.000 0.000 rg.
+    expect($pdf)->toContain('1.000 1.000 0.000 rg');
+});
+
+it('paints ONLY the override gradient, no leftover color rect, when a more-specific rule overrides "background" with a gradient (Finding 1, reverse order)', function () {
+    $css = '.box { width: 100px; height: 50px; background: yellow; }
+        .box.override { background: linear-gradient(red, blue); }';
+    $html = '<body><div class="box override">x</div></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toBe([]);
+    expect($pdf)->toContain('/ShadingType 2');
+    expect($pdf)->not->toContain('1.000 1.000 0.000 rg');
+});
+
+// --- code review Finding 2 (css-images-3 §3.1): radial-gradient() size/extent prefixes (extent
+// keywords, a bare length, a percentage pair) must degrade to circle-at-center + a warning, not
+// silently drop the whole declaration (the pre-fix behavior: the prefix was misread as an invalid
+// color-stop, Color::fromCss() rejected it, and the gradient vanished with a misleading warning).
+
+it('degrades radial-gradient(closest-side, ...) to circle-at-center with a warning, instead of dropping it, end to end', function () {
+    $css = '.box { width: 100px; height: 50px; background: radial-gradient(closest-side, red, blue); }';
+    $html = '<body><div class="box">x</div></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toHaveCount(1);
+    expect($pdf)->toContain('/ShadingType 3');
+});
+
+it('degrades radial-gradient(50px, ...) (bare length size) to circle-at-center with a warning, instead of dropping it, end to end', function () {
+    $css = '.box { width: 100px; height: 50px; background: radial-gradient(50px, red, blue); }';
+    $html = '<body><div class="box">x</div></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toHaveCount(1);
+    expect($pdf)->toContain('/ShadingType 3');
+});
+
+it('degrades radial-gradient(50% 50%, ...) (percentage-pair size) to circle-at-center with a warning, instead of dropping it, end to end', function () {
+    $css = '.box { width: 100px; height: 50px; background: radial-gradient(50% 50%, red, blue); }';
+    $html = '<body><div class="box">x</div></body>';
+    [$pdf, $report] = gradientRenderToPdfString($css, $html);
+
+    expect($report->warnings)->toHaveCount(1);
+    expect($pdf)->toContain('/ShadingType 3');
+});
+
 // --- Ghostscript smoke test: proves the shading dict is well-formed enough for a real PDF
 // consumer to rasterize without error (not just "our own byte assertions agree with themselves").
 

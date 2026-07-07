@@ -1225,7 +1225,13 @@ it('detects a gradient inside the "background" shorthand', function () {
 it('detects a plain color inside the "background" shorthand (gradient/color/image detection)', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('background', '#ff0000');
-    expect($result)->toEqual(['background-color' => new Color(255, 0, 0)]);
+    // Finding 1 fix (css-backgrounds-3 §5, shorthand reset semantics): the color branch of the
+    // `background` shorthand now ALSO emits an explicit 'background-gradient' => null -- a
+    // shorthand resets EVERY sub-property it covers, not just the one it declares a value for.
+    // A null here (vs. simply omitting the key) is what lets a cascaded gradient from a
+    // LESS-specific rule get overridden -- see the dedicated "resets" block below and the
+    // cascade-level repro in StyleResolverTest.php.
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
@@ -1258,7 +1264,8 @@ it('uses only the first layer of a multi-layer background-image, with a warning'
 it('uses only the first layer of a multi-layer "background" shorthand, with a warning', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('background', '#ff0000, linear-gradient(red, blue)');
-    expect($result)->toEqual(['background-color' => new Color(255, 0, 0)]);
+    // See the Finding 1 fix note above: the color branch always resets background-gradient.
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null]);
     expect($parser->drainWarnings())->toHaveCount(1);
 });
 
@@ -1266,5 +1273,88 @@ it('does NOT confuse a single gradient function\'s own internal commas with mult
     $parser = new DeclarationParser();
     $result = $parser->parse('background-image', 'linear-gradient(red, lime, blue)');
     expect(gradientFrom($result)->stops)->toHaveCount(3);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- code review Finding 1 fix (css-backgrounds-3 §5, shorthand reset semantics): `background`
+// is a SHORTHAND -- CSS 2.2 §12.5.3 (and css-backgrounds-3 §5 for the modern grammar): a
+// shorthand sets EVERY sub-property it covers on EVERY use, resetting the ones it doesn't
+// mention to their initial value. Before this fix, the color branch of parseBackgroundShorthand()
+// returned ONLY ['background-color' => ...] (no 'background-gradient' key at all) -- a cascaded
+// gradient from a LESS-specific rule for the same element survived untouched (both painted). The
+// fix: every branch of the shorthand ALSO emits an explicit reset (`null`) for the OTHER
+// sub-property -- see StyleResolverTest.php for the cascade-level (two-rule) repro that this unit
+// test can't exercise on its own (DeclarationParser::parse() never sees more than one
+// declaration at a time; the actual bug lived in how StyleResolver MERGES declarations across
+// rules, not in parse() itself).
+
+it('the "background" shorthand color branch explicitly resets background-gradient to null', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'yellow');
+    expect($result)->toHaveKey('background-gradient');
+    expect($result['background-gradient'])->toBeNull();
+    expect($result['background-color'])->toEqual(new Color(255, 255, 0));
+});
+
+it('the "background" shorthand gradient branch explicitly resets background-color to null (initial/transparent)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'linear-gradient(red, blue)');
+    expect($result)->toHaveKey('background-color');
+    expect($result['background-color'])->toBeNull();
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+// --- code review Finding 2 fix (css-images-3 §3.1): looksLikeRadialPrefix() only recognized
+// 'circle'/'ellipse'/a leading 'at ' as shape/position geometry -- extent keywords
+// (closest-side/closest-corner/farthest-side/farthest-corner), a bare size length
+// (`radial-gradient(50px, ...)`), and an explicit size pair (`radial-gradient(50% 50%, ...)`)
+// were NOT recognized, so the first argument was treated as an (invalid) color-stop instead --
+// Color::fromCss() rejects it, parseGradientStops() returns null, and the WHOLE gradient is
+// dropped with a misleading "unsupported gradient stop color" warning instead of degrading via
+// the existing circle-at-center fallback. None of the 3 new prefixes can ever collide with a
+// real color-stop: no named color contains a hyphen, and no named color parses as a CssLength
+// (which requires a leading digit) -- `radial-gradient(red, blue)` (color-first) keeps producing
+// zero warnings (already covered above, "parses a bare radial-gradient(...)").
+
+it('degrades a radial-gradient() with an extent-keyword prefix (closest-side) to circle-at-center, with ONE warning (not dropped)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(closest-side, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('degrades a radial-gradient() with a bare length size prefix (50px) to circle-at-center, with ONE warning (not dropped)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(50px, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('degrades a radial-gradient() with a percentage-pair size prefix (50% 50%) to circle-at-center, with ONE warning (not dropped)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(50% 50%, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('still parses radial-gradient(red, blue) (color first, no prefix at all) with zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
     expect($parser->drainWarnings())->toBeEmpty();
 });
