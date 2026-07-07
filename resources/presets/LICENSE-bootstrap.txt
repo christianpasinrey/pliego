@@ -12,6 +12,14 @@ Version pin: 5.3.6 (a 5.3.x patch release; M9-T2 only required "5.3.x, pinned ex
 documented" -- this is the concrete version vendored, not 5.3.3 as the milestone brief's
 illustrative example said, since 5.3.6 is what was already genuinely present on disk).
 
+M9-T4: relocated from tests/Fixtures/bootstrap/ (a test-only fixture path) to
+resources/presets/ (a runtime package asset, same convention as resources/fonts/'s
+DejaVu + LICENSE-DejaVu.txt) -- Engine::bootstrap() reads bootstrap.min.css from here
+directly, so it ships with the package instead of only existing under tests/. The E2E
+tests that used to read the fixture copy now point at this same file (no more duplicate
+232KB vendored twice in the repo); tests/Fixtures/bootstrap/ keeps only components.html
+(the E2E's own sample markup, not a Bootstrap-owned asset).
+
 ------------------------------------------------------------------------------------------
 
 The MIT License (MIT)

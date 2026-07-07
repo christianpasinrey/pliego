@@ -794,6 +794,62 @@ weights/styles of `default`, or other font families entirely) — only faces
 actually referenced by matched CSS get embedded. Instead of `->save($path)`,
 `RenderResult::toStream($resource)` writes to any open stream resource.
 
+## Presets
+
+`Engine::bootstrap()` is an alternative entry point to `Engine::make()` that
+ships with a vendored copy of real Bootstrap 5.3.6 (`bootstrap.min.css`, MIT —
+see `resources/presets/LICENSE-bootstrap.txt`), so a document can use
+`.btn`/`.card`/`.badge`/`.table`/etc. without pasting Bootstrap's CSS into
+your own stylesheet first:
+
+```php
+use Pliego\Engine;
+
+$html = <<<'HTML'
+<body>
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Invoice #1042</h5>
+      <p class="card-text">Rendered with the Bootstrap preset.</p>
+      <a href="#" class="btn btn-primary">Pay now</a>
+    </div>
+  </div>
+</body>
+HTML;
+
+$report = Engine::bootstrap()
+    ->stylesheet('.btn-primary { background-color: purple }') // your own override
+    ->render($html)
+    ->save('invoice.pdf');
+```
+
+What it does:
+
+- Queues the vendored sheet as the **first** author-origin stylesheet, before
+  every `->stylesheet()` call that follows — a same-specificity rule of yours
+  (`.btn-primary { background-color: purple }` above) wins purely by cascade
+  order, no `!important` or extra specificity needed. This holds regardless
+  of how many `->stylesheet()` calls you chain, or in what order they run.
+- Also queues a small **print addendum** (`resources/presets/bootstrap-print.css`)
+  right after it: real Bootstrap ships no `@page` rule at all (it's a
+  screen-first sheet), so this addendum sets `@page { margin: 15mm }` —
+  sane page margins out of the box instead of pliego's generic 48px default.
+  A `@page` rule in your own `->stylesheet()` call completely replaces it
+  (CSS's "last `@page` rule wins", not merged margin-by-margin).
+
+What it does **not** do:
+
+- It doesn't add Bootstrap's JS (no interactivity exists in a PDF) or any
+  `:hover`/`:focus`/responsive breakpoint behavior — this engine targets a
+  single paged medium, so screen-only `@media` rules are dropped and dynamic
+  pseudo-classes are permanently excluded (see the M9 warning audit).
+- It doesn't rewrite or subset the vendored sheet — the file is the real,
+  unmodified upstream release; unsupported constructs (`:nth-of-type`, inset
+  `box-shadow`, `transform`, …) simply warn and get skipped, same as any CSS
+  you'd write by hand. `Engine::make()` (no preset) is completely unaffected —
+  never calling `->bootstrap()` renders byte-for-byte as before this feature
+  existed.
+
 ## Playground
 
 `index.php` doubles as a runnable playground: a two-pane web UI (CodeMirror

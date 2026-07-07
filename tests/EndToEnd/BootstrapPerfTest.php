@@ -26,7 +26,11 @@ use Pliego\Engine;
  * -- documented here as a deliberate non-change, not an oversight).
  */
 
-const BOOTSTRAP_PERF_CSS_PATH = __DIR__ . '/../Fixtures/bootstrap/bootstrap.min.css';
+// M9-T4: relocated from tests/Fixtures/bootstrap/ to resources/presets/ (now Engine::bootstrap()'s
+// own runtime asset, see that method's docblock) -- this perf test still drives it through a
+// plain ->stylesheet(file_get_contents(...)) call (not ->bootstrap()) since it's timing raw
+// parse+layout+paint throughput on the sheet's content, independent of the preset API surface.
+const BOOTSTRAP_PERF_CSS_PATH = __DIR__ . '/../../resources/presets/bootstrap.min.css';
 
 /** @return array{0: float, 1: \Pliego\RenderReport} elapsed seconds + report */
 function bootstrapPerfRenderOnce(string $css, string $html): array

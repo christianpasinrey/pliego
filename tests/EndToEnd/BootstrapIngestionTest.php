@@ -9,8 +9,10 @@ use Pliego\Css\StylesheetParser;
  * M9-T2: the closing E2E for "does pliego actually swallow the REAL bootstrap.min.css". Two
  * separate concerns, deliberately split into their own `it()`s:
  *
- *  1. Ingestion: parse the ENTIRE vendored sheet (tests/Fixtures/bootstrap/bootstrap.min.css, MIT,
- *     v5.3.6 -- see LICENSE-bootstrap.txt alongside it for provenance) end to end through
+ *  1. Ingestion: parse the ENTIRE vendored sheet (resources/presets/bootstrap.min.css, MIT,
+ *     v5.3.6 -- see LICENSE-bootstrap.txt alongside it for provenance; M9-T4 relocated it here
+ *     from tests/Fixtures/bootstrap/ so it also doubles as Engine::bootstrap()'s runtime asset,
+ *     see that method's docblock) end to end through
  *     StylesheetParser -- no exception, bounded time (a real timeout/hang would mean some
  *     brace-matcher or regex went quadratic on ~230KB of real-world minified CSS, the whole point
  *     of testing against something bigger than our own hand-written fixtures).
@@ -28,7 +30,7 @@ use Pliego\Css\StylesheetParser;
  * into ONE process, a name clash would fatal).
  */
 
-const BOOTSTRAP_INGESTION_CSS_PATH = __DIR__ . '/../Fixtures/bootstrap/bootstrap.min.css';
+const BOOTSTRAP_INGESTION_CSS_PATH = __DIR__ . '/../../resources/presets/bootstrap.min.css';
 
 function bootstrapIngestionCss(): string
 {

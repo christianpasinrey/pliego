@@ -40,6 +40,13 @@ final class Engine
     /** @var list<array{string, int, FontStyle, string}> registros ->font() adicionales, en orden */
     private array $extraFonts = [];
     private string $basePath;
+    // M9-T4: flag, NOT the sheet's content -- Engine::bootstrap() (the static factory below,
+    // alternative to make()) only marks intent on the fresh instance it returns; the actual css
+    // is read and prepended in render() (see assembledCss()), so the preset ends up FIRST in the
+    // parsed stylesheet no matter how many ->stylesheet() calls follow or in what relative order.
+    private bool $bootstrapPreset = false;
+    private const string BOOTSTRAP_PRESET_CSS_PATH = __DIR__ . '/../resources/presets/bootstrap.min.css';
+    private const string BOOTSTRAP_PRESET_PRINT_ADDENDUM_PATH = __DIR__ . '/../resources/presets/bootstrap-print.css';
 
     private function __construct()
     {
@@ -56,6 +63,32 @@ final class Engine
     {
         $this->css .= "\n" . $css;
         return $this;
+    }
+
+    /**
+     * M9-T4: alternative entry point to make() (same "static factory returning a fresh Engine"
+     * shape -- e.g. the playground's "Bootstrap preset" checkbox picks between the two: `$useIt ?
+     * Engine::bootstrap() : Engine::make()`) that opts into the vendored Bootstrap preset
+     * (resources/presets/bootstrap.min.css, MIT, v5.3.6 -- see LICENSE-bootstrap.txt alongside
+     * it) plus pliego's own print addendum (resources/presets/bootstrap-print.css: sane @page
+     * margins, since real Bootstrap ships none -- see that file's docblock). Both are queued as
+     * the FIRST author-origin sheets, BEFORE every subsequent ->stylesheet() call -- author order
+     * lets a same-specificity user rule win (css-cascade-4 §4.1's "declaration order" tiebreak),
+     * the correct semantics for a "preset you then customize", without needing !important or
+     * extra specificity on the user's side.
+     *
+     * A flag on the new instance, not an eager read+concat: assembledCss() (called from
+     * render()) does the actual file_get_contents()+prepend, once, at render time -- so however
+     * many ->stylesheet() calls follow, in whatever order relative to each other, the preset is
+     * always what StylesheetParser sees first (this method itself never touches $this->css --
+     * see that property's own docblock -- it only sets $bootstrapPreset on the fresh instance it
+     * returns, exactly like make() sets nothing beyond the constructor's own defaults).
+     */
+    public static function bootstrap(): static
+    {
+        $engine = new self();
+        $engine->bootstrapPreset = true;
+        return $engine;
     }
 
     public function paper(PaperSize $paper): self
@@ -100,7 +133,7 @@ final class Engine
             // (nikic/php-parser v4.19.1) no reconoce el encadenamiento sin paréntesis y
             // marca el fichero entero "Syntax Error", dejando sin cubrir el grafo de
             // dependencias de Engine (`--fail-on-uncovered` deja de verificar nada aquí).
-            $parseResult = (new StylesheetParser())->parse($this->css);
+            $parseResult = (new StylesheetParser())->parse($this->assembledCss());
             $document = HtmlParser::parse($html);
             // M5-T1 (housekeeping) + M6-T4: un ÚNICO WarningCollector, compartido entre
             // StyleResolver (var()/calc(), M6-T4), BoxTreeBuilder (imágenes),
@@ -245,6 +278,31 @@ final class Engine
             $warnings = [...$parseResult->warnings, ...$pageRuleFactory->drainWarnings(), ...$layoutWarnings->drain()];
             return new RenderReport($warnings, $pageCount);
         });
+    }
+
+    /**
+     * M9-T4: the css StylesheetParser actually parses -- $this->css (every ->stylesheet() call,
+     * in their original relative order, untouched) prefixed by the vendored preset + its print
+     * addendum when ->bootstrap() was called (see that method's docblock for why this is a
+     * flag-then-assemble design rather than eager concatenation). Both preset files are package
+     * assets that always ship with pliego (same guarantee as resources/fonts/DejaVuSans.ttf,
+     * read unconditionally by $fontPath's default) -- a missing file here would mean a broken
+     * install, not a user error, so file_get_contents() failing is treated as fatal (the
+     * bool-false-on-failure branch below never fires in practice, but is handled rather than
+     * silently feeding `false` to string concatenation, which PHP would coerce to `""` and
+     * silently drop the whole preset instead of failing loudly).
+     */
+    private function assembledCss(): string
+    {
+        if (!$this->bootstrapPreset) {
+            return $this->css;
+        }
+        $presetCss = file_get_contents(self::BOOTSTRAP_PRESET_CSS_PATH);
+        $addendumCss = file_get_contents(self::BOOTSTRAP_PRESET_PRINT_ADDENDUM_PATH);
+        if ($presetCss === false || $addendumCss === false) {
+            throw new \RuntimeException('Engine::bootstrap(): missing vendored preset asset(s) under resources/presets/ -- broken pliego install.');
+        }
+        return $presetCss . "\n" . $addendumCss . "\n" . $this->css;
     }
 
     /**

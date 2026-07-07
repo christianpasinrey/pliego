@@ -6,13 +6,24 @@ declare(strict_types=1);
 use Pliego\Engine;
 
 /**
- * M9-T2: the vendored REAL bootstrap.min.css (tests/Fixtures/bootstrap/bootstrap.min.css, v5.3.6 --
- * see LICENSE-bootstrap.txt) driving an actual component page
+ * M9-T2: the vendored REAL bootstrap.min.css (resources/presets/bootstrap.min.css, v5.3.6 -- see
+ * LICENSE-bootstrap.txt) driving an actual component page
  * (tests/Fixtures/bootstrap/components.html: button variants, a card, a striped table, badges,
  * alerts) through the full Engine pipeline -- NOT the hand-written "Bootstrap-flavored" CSS subset
  * BootstrapComponentsTest.php/BootstrapLookTest.php use (those predate this task and stay as-is,
  * M7/M8 closing E2Es for THEIR own milestones); this is the "does the real, unmodified upstream
  * file actually work" proof.
+ *
+ * M9-T4: now driven through Engine::bootstrap() instead of a manual
+ * `->stylesheet(file_get_contents(...))` -- the vendored sheet moved from
+ * tests/Fixtures/bootstrap/ to resources/presets/ specifically so Engine::bootstrap() could read
+ * it as a runtime package asset (see that method's docblock); this test exercises that exact
+ * public entry point end to end, on the real 232KB sheet, instead of only on hand-written probes.
+ * The preset's print addendum (resources/presets/bootstrap-print.css, `@page { margin: 15mm }`)
+ * rides along too -- it adds zero warnings (a bare @page margin declaration, nothing
+ * unsupported), so the pinned warning count below is unaffected; the only visible effect is a
+ * slightly larger page margin than the pre-T4 default (48px), which none of the assertions below
+ * depend on.
  *
  * One known, deliberate DEVIATION from "byte-for-byte real sheet only": `.table-striped`'s row
  * accent is painted, in real Bootstrap 5.3, through `.table > :not(caption) > * > *`'s
@@ -35,7 +46,6 @@ use Pliego\Engine;
  * EndToEnd Bootstrap-* files' docblocks).
  */
 
-const BOOTSTRAP_REAL_COMPONENTS_CSS_PATH = __DIR__ . '/../Fixtures/bootstrap/bootstrap.min.css';
 const BOOTSTRAP_REAL_COMPONENTS_HTML_PATH = __DIR__ . '/../Fixtures/bootstrap/components.html';
 
 // See the class docblock: real Bootstrap's own row-striping mechanism (inset box-shadow +
@@ -45,15 +55,16 @@ const BOOTSTRAP_REAL_COMPONENTS_STRIPE_COMPAT_CSS = '.table-striped-compat tbody
 /** @return array{0: string, 1: \Pliego\RenderReport} */
 function bootstrapRealComponentsRender(): array
 {
-    $css = file_get_contents(BOOTSTRAP_REAL_COMPONENTS_CSS_PATH);
     $html = file_get_contents(BOOTSTRAP_REAL_COMPONENTS_HTML_PATH);
-    if ($css === false || $html === false) {
-        throw new RuntimeException('Missing vendored fixture(s) for the real components E2E');
+    if ($html === false) {
+        throw new RuntimeException('Missing vendored fixture for the real components E2E');
     }
     $stream = fopen('php://memory', 'r+b');
     assert($stream !== false);
-    $report = Engine::make()
-        ->stylesheet($css)
+    // M9-T4: Engine::bootstrap() replaces the old manual ->stylesheet(file_get_contents(...))
+    // -- same vendored sheet content (now read from resources/presets/, see class docblock),
+    // same warning budget, plus the preset's own print addendum queued right after it.
+    $report = Engine::bootstrap()
         ->stylesheet(BOOTSTRAP_REAL_COMPONENTS_STRIPE_COMPAT_CSS)
         ->render($html)
         ->toStream($stream);

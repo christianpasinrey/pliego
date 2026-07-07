@@ -25,6 +25,18 @@ parameters:
 			path: tests/EndToEnd/BootstrapIngestionTest.php
 
 		-
+			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, non\-empty\-string, non\-empty\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/BootstrapPresetTest.php
+
+		-
+			message: '#^Offset 2 might not exist on array\{\}\|array\{non\-falsy\-string, non\-empty\-string, non\-empty\-string\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: tests/EndToEnd/BootstrapPresetTest.php
+
+		-
 			message: '#^Offset 1 might not exist on array\{\}\|array\{non\-falsy\-string, numeric\-string\}\.$#'
 			identifier: offsetAccess.notFound
 			count: 1
