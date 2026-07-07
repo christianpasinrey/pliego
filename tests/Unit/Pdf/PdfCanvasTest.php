@@ -677,3 +677,59 @@ it('strokeLine with a dash pattern wraps w/d in its own q/Q scope and emits the 
     expect($pdf)->toContain('1 J');
     expect($pdf)->toContain("l S\nQ\n");
 });
+
+// --- M8-T5 (css-text-3 §8 reducido; ISO 32000-1 §9.4.3): letter/word-spacing via TJ arrays -----
+
+it('fillText with zero letter/word-spacing (the default) emits the SAME plain Tj bytes as before this task', function () {
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.4, 16.0, new Color(0, 0, 0), 'default:400:normal', false, 1.0, 0.0, 0.0));
+    });
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $expectedHex = '';
+    foreach (mb_str_split('Hola') as $char) {
+        $expectedHex .= sprintf('%04X', $font->glyphId(mb_ord($char)));
+    }
+    expect($pdf)->toContain("<$expectedHex> Tj");
+    expect($pdf)->not->toContain('TJ');
+});
+
+it('fillText with letter-spacing emits a TJ array with a hand-computed adjustment after EVERY glyph, including the last', function () {
+    // letterSpacingPx=2.0, fontSizePx=16.0 -> adj = -(2.0/16.0)*1000 = -125.000 thousandths,
+    // repeated after EACH of the 2 glyphs (adjudication M8-T5: after every char, including last).
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 20, 19.2), 'AB', 24.4, 16.0, new Color(0, 0, 0), 'default:400:normal', false, 1.0, 2.0, 0.0));
+    });
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $hexA = sprintf('%04X', $font->glyphId(0x41));
+    $hexB = sprintf('%04X', $font->glyphId(0x42));
+    expect($pdf)->toContain("[<$hexA> -125.000 <$hexB> -125.000] TJ");
+    expect($pdf)->not->toContain('<' . $hexA . $hexB . '> Tj');
+});
+
+it('fillText with word-spacing only adjusts on the space glyph, zero elsewhere', function () {
+    // wordSpacingPx=8.0, fontSizePx=16.0 -> adj on the space glyph only = -(8.0/16.0)*1000 =
+    // -500.000; every non-space glyph gets a 0.000 adjustment (letterSpacingPx=0.0, never
+    // skipped -- ISO 32000-1 emits an adjustment after every glyph per the adjudication).
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 30, 19.2), 'A B', 24.4, 16.0, new Color(0, 0, 0), 'default:400:normal', false, 1.0, 0.0, 8.0));
+    });
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $hexA = sprintf('%04X', $font->glyphId(0x41));
+    $hexSpace = sprintf('%04X', $font->glyphId(0x20));
+    $hexB = sprintf('%04X', $font->glyphId(0x42));
+    expect($pdf)->toContain("[<$hexA> 0.000 <$hexSpace> -500.000 <$hexB> 0.000] TJ");
+});
+
+it('fillText combines letter-spacing and word-spacing additively on the same space glyph', function () {
+    // letterSpacingPx=1.0 + wordSpacingPx=4.0 = 5.0px total spacing on the space glyph ->
+    // adj = -(5.0/20.0)*1000 = -250.000; letter-spacing alone on the other 2 glyphs ->
+    // adj = -(1.0/20.0)*1000 = -50.000.
+    $pdf = renderOnePage(function (PdfCanvas $canvas): void {
+        $canvas->fillText(new TextFragment(new Rect(10, 10, 30, 24.0), 'A B', 30.5, 20.0, new Color(0, 0, 0), 'default:400:normal', false, 1.0, 1.0, 4.0));
+    });
+    $font = TtfFont::fromFile(__DIR__ . '/../../../resources/fonts/DejaVuSans.ttf');
+    $hexA = sprintf('%04X', $font->glyphId(0x41));
+    $hexSpace = sprintf('%04X', $font->glyphId(0x20));
+    $hexB = sprintf('%04X', $font->glyphId(0x42));
+    expect($pdf)->toContain("[<$hexA> -50.000 <$hexSpace> -250.000 <$hexB> -50.000] TJ");
+});

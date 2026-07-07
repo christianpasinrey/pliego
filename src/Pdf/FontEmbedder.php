@@ -42,15 +42,30 @@ final class FontEmbedder
     /** Codifica texto como CIDs hex (Identity-H: CID = glyph id) y registra uso + ToUnicode. */
     public function encode(string $text): string
     {
-        $hex = '';
+        return implode('', $this->encodeChars($text));
+    }
+
+    /**
+     * M8-T5 (ISO 32000-1 §9.4.3, TJ arrays): variante POR CARÁCTER de encode() -- MISMO registro
+     * de uso/ToUnicode (usedGlyphs/codepointOf) que encode(), pero devuelve la lista de hex
+     * INDIVIDUALES en vez de concatenarlos en un único string, para que Pdf\PdfCanvas pueda
+     * intercalar ajustes de letter/word-spacing entre glifos en un array TJ. encode() es ahora un
+     * envoltorio trivial de este método (implode('', ...)), así que su salida sigue siendo
+     * BYTE-A-BYTE idéntica a la de antes de esta tarea.
+     *
+     * @return list<string> un hex de 4 dígitos (CID) por carácter, en el mismo orden que $text.
+     */
+    public function encodeChars(string $text): array
+    {
+        $hexes = [];
         foreach (mb_str_split($text) as $char) {
             $codepoint = mb_ord($char);
             $glyphId = $this->font->glyphId($codepoint);
             $this->usedGlyphs[$glyphId] = true;
             $this->codepointOf[$glyphId] ??= $codepoint;
-            $hex .= sprintf('%04X', $glyphId);
+            $hexes[] = sprintf('%04X', $glyphId);
         }
-        return $hex;
+        return $hexes;
     }
 
     /** Escribe los objetos de fuente. Llamar una única vez, tras la última página. */

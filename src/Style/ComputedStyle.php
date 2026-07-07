@@ -212,6 +212,20 @@ final readonly class ComputedStyle
         // Layout), este VO YA llega con offsetX/offsetY/blurRadius resueltos a PX -- ver el
         // docblock de Css\Value\BoxShadow para el porqué (ninguno de los 3 admite % en CSS real).
         public ?BoxShadow $boxShadow = null,
+        // M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing EN PX -- AMBAS heredan (a
+        // diferencia de $borderRadius/$opacity/$backgroundGradient/$boxShadow justo arriba, que NO
+        // heredan). 0.0 es el initial value real ('normal') Y TAMBIÉN el sentinel "sin efecto" que
+        // Layout\TextMeasurer::widthOf()/Pdf\PdfCanvas::fillText() usan como fast path (ver sus
+        // docblocks): un documento sin NINGUNA declaración de letter-spacing/word-spacing produce
+        // ComputedStyle idénticos a antes de esta tarea salvo por estos 2 campos nuevos, que nunca
+        // se leen fuera de Layout/Pdf.
+        public float $letterSpacingPx = 0.0,
+        public float $wordSpacingPx = 0.0,
+        // M8-T5 (css-text-3 §8 reducido): text-transform -- SÍ hereda (igual criterio que
+        // $textAlign/$whiteSpace/$listStyleType arriba). Aplicado al TEXTO de los runs en
+        // Box\BoxTreeBuilder ANTES de medir (ver textRunTokensFor()) -- ComputedStyle solo
+        // transporta el valor computado, nunca transforma nada por sí mismo.
+        public TextTransform $textTransform = TextTransform::None,
     ) {}
 
     /**
@@ -530,6 +544,49 @@ final readonly class ComputedStyle
             'normal' => 'normal',
             'pre' => 'pre',
             default => $parent->whiteSpace,
+        };
+
+        // M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing -- ambas heredan (mismo
+        // patrón "array_key_exists + null explícito = reset" que $lineHeightPx justo abajo):
+        // 'normal' declarado explícitamente (DeclarationParser::parseSpacing() -> null) SIEMPRE
+        // resetea a 0.0, cortando cualquier herencia de un ancestro; ausencia total de declaración
+        // hereda $parent->letterSpacingPx/$parent->wordSpacingPx tal cual; un <length>
+        // (Length/CssLength/CalcExpr) resuelve exactamente igual que cualquier otra longitud pura
+        // de este método (mismos closures $resolveCssLength/$resolveCalcPure) -- SIN el chequeo de
+        // NON_NEGATIVE_PROPERTIES (ninguna de las 2 propiedades figura en esa lista: CSS 2.2
+        // §16.3.1/§16.4 admiten valores negativos).
+        $letterSpacingPx = $parent->letterSpacingPx;
+        if (array_key_exists('letter-spacing', $declarations)) {
+            $letterSpacingValue = $declarations['letter-spacing'];
+            $letterSpacingPx = match (true) {
+                $letterSpacingValue === null => 0.0,
+                $letterSpacingValue instanceof Length => $letterSpacingValue->px,
+                $letterSpacingValue instanceof CssLength => $resolveCssLength($letterSpacingValue),
+                $letterSpacingValue instanceof CalcExpr => $resolveCalcPure($letterSpacingValue, 'letter-spacing', 0.0),
+                default => 0.0,
+            };
+        }
+        $wordSpacingPx = $parent->wordSpacingPx;
+        if (array_key_exists('word-spacing', $declarations)) {
+            $wordSpacingValue = $declarations['word-spacing'];
+            $wordSpacingPx = match (true) {
+                $wordSpacingValue === null => 0.0,
+                $wordSpacingValue instanceof Length => $wordSpacingValue->px,
+                $wordSpacingValue instanceof CssLength => $resolveCssLength($wordSpacingValue),
+                $wordSpacingValue instanceof CalcExpr => $resolveCalcPure($wordSpacingValue, 'word-spacing', 0.0),
+                default => 0.0,
+            };
+        }
+
+        // M8-T5: text-transform -- hereda (mismo patrón match-con-default-al-padre que $textAlign/
+        // $whiteSpace arriba).
+        $textTransformValue = $declarations['text-transform'] ?? null;
+        $textTransform = match ($textTransformValue) {
+            'none' => TextTransform::None,
+            'uppercase' => TextTransform::Uppercase,
+            'lowercase' => TextTransform::Lowercase,
+            'capitalize' => TextTransform::Capitalize,
+            default => $parent->textTransform,
         };
 
         $lineHeightPx = $parent->lineHeightPx;
@@ -888,6 +945,9 @@ final readonly class ComputedStyle
             $customProperties,
             $backgroundGradient,
             $boxShadow,
+            $letterSpacingPx,
+            $wordSpacingPx,
+            $textTransform,
         );
     }
 }

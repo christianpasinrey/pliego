@@ -243,8 +243,16 @@ final class InlineFlowContext
             // que el salto de línea "duro" entre tramos preformateados sigue funcionando exactamente
             // igual que el resto de este bucle (rama LineBreakRun de arriba) -- lo único que se
             // desactiva aquí es el WRAP dentro de un mismo tramo.
+            // M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing del ESTILO DE ESTE RUN
+            // entran en CADA llamada a widthOf() de este método -- 0.0/0.0 (el default, sin
+            // declaración) hace que widthOf() tome su fast path interno (ver su docblock), así que
+            // esta línea es un no-op observacional para cualquier documento sin spacing declarado
+            // (byte-stable, M1-M8-T4).
+            $letterSpacingPx = $run->style->letterSpacingPx;
+            $wordSpacingPx = $run->style->wordSpacingPx;
+
             if ($run->style->whiteSpace === 'pre') {
-                $sliceWidth = $this->measurer->widthOf($text, $face, $fontSize);
+                $sliceWidth = $this->measurer->widthOf($text, $face, $fontSize, $letterSpacingPx, $wordSpacingPx);
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $text, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
                 continue;
@@ -255,7 +263,7 @@ final class InlineFlowContext
             foreach ($finder->find($text) as $opportunity) {
                 $end = $opportunity->byteOffset;
                 $sliceText = substr($text, $segStart, $end - $segStart);
-                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize);
+                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize, $letterSpacingPx, $wordSpacingPx);
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $sliceText, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
 
@@ -272,7 +280,7 @@ final class InlineFlowContext
 
             if ($segStart < strlen($text)) {
                 $sliceText = substr($text, $segStart);
-                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize);
+                $sliceWidth = $this->measurer->widthOf($sliceText, $face, $fontSize, $letterSpacingPx, $wordSpacingPx);
                 $carry[] = ['kind' => 'text', 'run' => $run, 'face' => $face, 'text' => $sliceText, 'width' => $sliceWidth];
                 $carryWidth += $sliceWidth;
             }
@@ -409,8 +417,12 @@ final class InlineFlowContext
         }
 
         $last = $word[count($word) - 1];
+        // M8-T5: la medición original de este tramo (más arriba, en layout()) ya incluyó letter-
+        // spacing/word-spacing del estilo del run -- restar el ancho de UN espacio DEBE incluir
+        // esa MISMA spacing para que la resta cancele exactamente lo que la suma añadió (de lo
+        // contrario, un espacio final "colgante" con spacing declarado dejaría un residuo).
         $core = ($last['kind'] === 'text' && str_ends_with($last['text'], ' '))
-            ? $wordWidth - $this->measurer->widthOf(' ', $last['face'], $last['run']->style->fontSizePx)
+            ? $wordWidth - $this->measurer->widthOf(' ', $last['face'], $last['run']->style->fontSizePx, $last['run']->style->letterSpacingPx, $last['run']->style->wordSpacingPx)
             : $wordWidth;
 
         if ($lineEntries !== [] && $lineWidth + $core > $lineAvailWidth) {
@@ -542,7 +554,10 @@ final class InlineFlowContext
         $reportedWidth = $lineWidth;
         $lastEntry = $lineEntries[$lastIndex];
         if ($lastEntry['kind'] === 'text' && str_ends_with($lastEntry['text'], ' ')) {
-            $spaceWidth = $this->measurer->widthOf(' ', $lastEntry['face'], $lastEntry['run']->style->fontSizePx);
+            // M8-T5: misma razón que el análogo de commitWord() -- la resta debe incluir la MISMA
+            // letter/word-spacing que la medición original del tramo ya sumó para ese carácter de
+            // espacio final.
+            $spaceWidth = $this->measurer->widthOf(' ', $lastEntry['face'], $lastEntry['run']->style->fontSizePx, $lastEntry['run']->style->letterSpacingPx, $lastEntry['run']->style->wordSpacingPx);
             $lineEntries[$lastIndex]['width'] -= $spaceWidth;
             $reportedWidth -= $spaceWidth;
         }
@@ -691,6 +706,8 @@ final class InlineFlowContext
                 $entry['face']->key,
                 $style->underline,
                 $style->opacity,
+                $style->letterSpacingPx,
+                $style->wordSpacingPx,
             );
             $lineBoxState = $this->markBoxesTouched($lineBoxState, $openBoxStack, $cursorX, $width);
             $cursorX += $width;
@@ -855,6 +872,8 @@ final class InlineFlowContext
                 $fragment->faceKey,
                 $fragment->underline,
                 $fragment->opacity,
+                $fragment->letterSpacingPx,
+                $fragment->wordSpacingPx,
             );
         }
         if ($fragment instanceof ImageFragment) {

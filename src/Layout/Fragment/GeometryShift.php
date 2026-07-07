@@ -71,6 +71,8 @@ final class GeometryShift
                     $child->faceKey,
                     $child->underline,
                     $child->opacity,
+                    $child->letterSpacingPx,
+                    $child->wordSpacingPx,
                 ),
                 $child instanceof ImageFragment => new ImageFragment(
                     new Rect($child->rect->x, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),
@@ -138,6 +140,8 @@ final class GeometryShift
                     $child->faceKey,
                     $child->underline,
                     $child->opacity,
+                    $child->letterSpacingPx,
+                    $child->wordSpacingPx,
                 ),
                 $child instanceof ImageFragment => new ImageFragment(
                     new Rect($child->rect->x + $deltaX, $child->rect->y + $deltaY, $child->rect->width, $child->rect->height),

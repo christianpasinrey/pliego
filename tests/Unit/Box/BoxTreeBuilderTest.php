@@ -928,3 +928,78 @@ it('treats a non-numeric start attribute on <ol> as absent (null)', function () 
     assert($ol instanceof BlockBox);
     expect($ol->listStart)->toBeNull();
 });
+
+// --- M8-T5 (css-text-3 §8 reducido): text-transform applied to run TEXT before measurement -----
+
+it('leaves text untouched with text-transform: none (the default)', function () {
+    $root = buildTree('<body><p>Hola mundo</p></body>');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hola mundo');
+});
+
+it('uppercases run text with text-transform: uppercase, preserving accented characters (á -> Á)', function () {
+    $root = buildTree('<body><p>café ñoño</p></body>', 'p { text-transform: uppercase }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('CAFÉ ÑOÑO');
+});
+
+it('lowercases run text with text-transform: lowercase, preserving accented characters', function () {
+    $root = buildTree('<body><p>CAFÉ ÑOÑO</p></body>', 'p { text-transform: lowercase }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('café ñoño');
+});
+
+it('capitalizes the first letter of each word with text-transform: capitalize (space/tab boundaries)', function () {
+    $root = buildTree('<body><p>hello world</p></body>', 'p { text-transform: capitalize }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hello World');
+});
+
+it('does NOT treat a hyphen as a word boundary for capitalize (documented divergence from some browsers)', function () {
+    $root = buildTree('<body><p>hello-world</p></body>', 'p { text-transform: capitalize }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Hello-world');
+});
+
+it('capitalizes an accented first letter (á -> Á)', function () {
+    $root = buildTree('<body><p>árbol alto</p></body>', 'p { text-transform: capitalize }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    $run = $p->children[0];
+    assert($run instanceof TextRun);
+    expect($run->text)->toBe('Árbol Alto');
+});
+
+it('inherits text-transform from an ancestor onto a nested inline run', function () {
+    $root = buildTree('<body><p>Hola <strong>mundo</strong></p></body>', 'p { text-transform: uppercase }');
+    $p = $root->children[0];
+    assert($p instanceof BlockBox);
+    [$first, $second] = $p->children;
+    assert($first instanceof TextRun && $second instanceof TextRun);
+    expect($first->text)->toBe('HOLA ');
+    expect($second->text)->toBe('MUNDO');
+});
+
+it('applies text-transform to each line of a white-space:pre run independently', function () {
+    $root = buildTree("<body><pre>hello world\nsecond line</pre></body>", 'pre { text-transform: capitalize }');
+    $pre = $root->children[0];
+    assert($pre instanceof BlockBox);
+    $firstLine = $pre->children[0];
+    assert($firstLine instanceof TextRun);
+    expect($firstLine->text)->toBe('Hello World');
+});

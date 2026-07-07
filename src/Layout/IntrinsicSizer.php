@@ -290,7 +290,9 @@ final class IntrinsicSizer
                 continue;
             }
             $face = $this->faceFor($run->style);
-            $current += $this->measurer->widthOf($run->text, $face, $run->style->fontSizePx);
+            // M8-T5: letter-spacing/word-spacing del ESTILO DE ESTE RUN -- 0.0/0.0 (sin
+            // declaración) es el fast path preexistente de widthOf(), byte-stable para M1-M8-T4.
+            $current += $this->measurer->widthOf($run->text, $face, $run->style->fontSizePx, $run->style->letterSpacingPx, $run->style->wordSpacingPx);
         }
         return max($max, $current);
     }
@@ -300,6 +302,10 @@ final class IntrinsicSizer
     {
         $face = $this->faceFor($run->style);
         $fontSize = $run->style->fontSizePx;
+        // M8-T5: mismo criterio que maxContentOfRunSequence() -- letter-spacing/word-spacing del
+        // ESTILO DE ESTE RUN, fast path preexistente cuando ambos son 0.0.
+        $letterSpacingPx = $run->style->letterSpacingPx;
+        $wordSpacingPx = $run->style->wordSpacingPx;
         $text = $run->text;
         $segStart = 0;
         $max = 0.0;
@@ -307,11 +313,11 @@ final class IntrinsicSizer
         foreach ($this->breakFinder->find($text) as $opportunity) {
             $end = $opportunity->byteOffset;
             $slice = $this->stripTrailingSpace(substr($text, $segStart, $end - $segStart));
-            $max = max($max, $this->measurer->widthOf($slice, $face, $fontSize));
+            $max = max($max, $this->measurer->widthOf($slice, $face, $fontSize, $letterSpacingPx, $wordSpacingPx));
             $segStart = $end;
         }
         if ($segStart < strlen($text)) {
-            $max = max($max, $this->measurer->widthOf(substr($text, $segStart), $face, $fontSize));
+            $max = max($max, $this->measurer->widthOf(substr($text, $segStart), $face, $fontSize, $letterSpacingPx, $wordSpacingPx));
         }
 
         return $max;

@@ -135,6 +135,8 @@ final readonly class Paginator
                 $leaf->faceKey,
                 $leaf->underline,
                 $leaf->opacity,
+                $leaf->letterSpacingPx,
+                $leaf->wordSpacingPx,
             ),
             // M4-T5: un BoxFragment con hijos NO vacíos solo puede llegar aquí desde dentro del
             // subárbol de una hoja compuesta atómica (flatten() nunca aplana esos hijos por

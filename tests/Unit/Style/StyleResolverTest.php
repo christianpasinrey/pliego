@@ -20,6 +20,7 @@ use Pliego\Style\JustifyContent;
 use Pliego\Style\ListStyleType;
 use Pliego\Style\StyleResolver;
 use Pliego\Style\TextAlign;
+use Pliego\Style\TextTransform;
 use Pliego\Style\VerticalAlign;
 
 function resolveDoc(string $css, string $html): array
@@ -1304,4 +1305,63 @@ it('resolves border-{side}-style: dashed/dotted through the real cascade, and ke
     $style = $map->get($div);
     expect($style->borderTop->style)->toBe(BorderStyle::Dashed);
     expect($style->borderTop->widthPx)->toBe(3.0);
+});
+
+// --- M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing/text-transform ---------------
+
+it('defaults letter-spacing/word-spacing to 0.0 and text-transform to None at the root', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(0.0);
+    expect($style->wordSpacingPx)->toBe(0.0);
+    expect($style->textTransform)->toBe(TextTransform::None);
+});
+
+it('inherits letter-spacing/word-spacing/text-transform from an ancestor down onto its descendants', function () {
+    [$doc, $map] = resolveDoc(
+        'div { letter-spacing: 2px; word-spacing: 4px; text-transform: uppercase }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(2.0);
+    expect($style->wordSpacingPx)->toBe(4.0);
+    expect($style->textTransform)->toBe(TextTransform::Uppercase);
+});
+
+it('lets a descendant declaring letter-spacing/word-spacing: normal explicitly reset to 0.0, cutting inheritance', function () {
+    [$doc, $map] = resolveDoc(
+        'div { letter-spacing: 2px; word-spacing: 4px } p { letter-spacing: normal; word-spacing: normal }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(0.0);
+    expect($style->wordSpacingPx)->toBe(0.0);
+});
+
+it('resolves em letter-spacing/word-spacing against the element\'s OWN font-size, not the parent\'s', function () {
+    [$doc, $map] = resolveDoc(
+        'p { font-size: 20px; letter-spacing: 0.5em; word-spacing: 1em }',
+        '<body><p>x</p></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->letterSpacingPx)->toBe(10.0);
+    expect($style->wordSpacingPx)->toBe(20.0);
+});
+
+it('lets an author rule override an inherited text-transform (cascade)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { text-transform: uppercase } p { text-transform: lowercase }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    expect($map->get($p)->textTransform)->toBe(TextTransform::Lowercase);
 });

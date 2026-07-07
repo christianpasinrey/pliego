@@ -1492,3 +1492,51 @@ it('treats box-shadow: none as an explicit reset (null value, no warning)', func
     expect($result)->toBe(['box-shadow' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
+
+// --- M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing/text-transform ---------------
+
+it('parses letter-spacing/word-spacing as normal (explicit null reset) or a px length', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('letter-spacing', 'normal'))->toBe(['letter-spacing' => null]);
+    expect($parser->parse('letter-spacing', '2px'))->toEqual(['letter-spacing' => Length::px(2.0)]);
+    expect($parser->parse('word-spacing', 'normal'))->toBe(['word-spacing' => null]);
+    expect($parser->parse('word-spacing', '4px'))->toEqual(['word-spacing' => Length::px(4.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts em/rem for letter-spacing/word-spacing as symbolic CssLength (resolved in ComputedStyle::compute)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('letter-spacing', '0.1em'))->toEqual(['letter-spacing' => CssLength::of(0.1, LengthUnit::Em)]);
+    expect($parser->parse('word-spacing', '0.5rem'))->toEqual(['word-spacing' => CssLength::of(0.5, LengthUnit::Rem)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts negative letter-spacing/word-spacing (CSS 2.2 §16.3.1/§16.4 allow negative, unlike most lengths)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('letter-spacing', '-1px'))->toEqual(['letter-spacing' => Length::px(-1.0)]);
+    expect($parser->parse('word-spacing', '-2px'))->toEqual(['word-spacing' => Length::px(-2.0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns on an unsupported letter-spacing/word-spacing value (e.g. a percentage)', function () {
+    foreach (['letter-spacing', 'word-spacing'] as $property) {
+        $parser = new DeclarationParser();
+        $result = $parser->parse($property, '10%');
+        expect($result)->toBe([]);
+        expect($parser->drainWarnings())->not->toBeEmpty();
+    }
+});
+
+it('parses text-transform none/uppercase/lowercase/capitalize and warns on an unsupported keyword', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('text-transform', 'none'))->toBe(['text-transform' => 'none']);
+    expect($parser->parse('text-transform', 'uppercase'))->toBe(['text-transform' => 'uppercase']);
+    expect($parser->parse('text-transform', 'lowercase'))->toBe(['text-transform' => 'lowercase']);
+    expect($parser->parse('text-transform', 'capitalize'))->toBe(['text-transform' => 'capitalize']);
+    expect($parser->drainWarnings())->toBeEmpty();
+
+    $parser = new DeclarationParser();
+    $result = $parser->parse('text-transform', 'full-width');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

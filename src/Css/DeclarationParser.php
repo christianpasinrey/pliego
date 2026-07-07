@@ -135,6 +135,12 @@ final class DeclarationParser
         // (mismos 5 literales) en parseListStyleShorthand() más abajo; no se referencia esta
         // constante desde ahí para no acoplar el shorthand a la forma exacta de este mapa.
         'list-style-type' => ['disc', 'circle', 'square', 'decimal', 'none'],
+        // M8-T5 (css-text-3 §8 reducido): text-transform -- los 4 valores del subset reducido de
+        // este milestone (font-variant/full-width/full-size-kana quedan fuera de alcance,
+        // RESTRICCIONES GLOBALES) -- SÍ hereda (ver Style\TextTransform/ComputedStyle::compute()),
+        // aplicado al TEXTO de los runs en Box\BoxTreeBuilder ANTES de medir, nunca aquí (este
+        // parser nunca toca el texto en sí, solo produce el keyword computado).
+        'text-transform' => ['none', 'uppercase', 'lowercase', 'capitalize'],
         // M7-T3 (css-lists-3 §3, reducido): 'outside' es el ÚNICO valor soportado -- y, a
         // diferencia de cualquier otro miembro de este mapa, NO produce ninguna propiedad
         // consumible en ComputedStyle (no existe un campo $listStylePosition: M7 solo implementa
@@ -314,6 +320,9 @@ final class DeclarationParser
         }
         if ($property === 'text-decoration') {
             return $this->parseTextDecoration($value);
+        }
+        if ($property === 'letter-spacing' || $property === 'word-spacing') {
+            return $this->parseSpacing($property, $value);
         }
         if ($property === 'flex-grow' || $property === 'flex-shrink') {
             return $this->parseFlexNumber($property, $value);
@@ -1435,6 +1444,33 @@ final class DeclarationParser
             'underline' => ['text-decoration' => true],
             default => $this->warn("Unsupported text-decoration: $value"),
         };
+    }
+
+    /**
+     * M8-T5 (css-text-3 §8 reducido): letter-spacing/word-spacing -- 'normal' (initial value real,
+     * AMBAS heredan) produce un `null` EXPLÍCITO (mismo patrón que parseLineHeight('normal') justo
+     * arriba), no un array vacío -- ComputedStyle::compute() necesita distinguir "declarado normal"
+     * (resetea a 0.0, corta cualquier herencia de un ancestro) de "no declarado en absoluto"
+     * (hereda el valor computado del padre tal cual); un array vacío sería indistinguible de este
+     * segundo caso (ver el `array_key_exists` de compute()). Cualquier <length> (px/em/rem, mismo
+     * parseLength() que height/border-width/etc.) es válida, INCLUSO negativa -- a diferencia de
+     * casi cualquier otra longitud de este parser, letter-spacing/word-spacing SÍ admiten valores
+     * negativos (CSS 2.2 §16.4/§16.3.1): ninguna de las 2 figura en NON_NEGATIVE_PROPERTIES, así
+     * que no hay chequeo de signo aquí. % no tiene interpretación (fuera de alcance M8, reducido a
+     * longitud pura) -- cae al warning genérico ya emitido por parseLength()/CssLength::fromCss().
+     *
+     * @return array<string, mixed>
+     */
+    private function parseSpacing(string $property, string $value): array
+    {
+        if (strtolower(trim($value)) === 'normal') {
+            return [$property => null];
+        }
+        $length = $this->parseLength($value);
+        if ($length === null) {
+            return $this->warn("Unsupported length for $property: $value");
+        }
+        return [$property => $length];
     }
 
     /**

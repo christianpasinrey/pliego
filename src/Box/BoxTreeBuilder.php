@@ -13,6 +13,7 @@ use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
 use Pliego\Style\Position;
 use Pliego\Style\StyleMap;
+use Pliego\Style\TextTransform;
 
 /**
  * M7-T4 (css-inline-3 reducido): "¿es este tag inline?" ya NO se decide aquí con una lista de
@@ -736,25 +737,79 @@ final class BoxTreeBuilder
      * editor/HTML parser); un '\r' suelto (Mac clásico, prácticamente inexistente hoy) NO se
      * trata como salto -- fuera de alcance, no forma parte del contrato de esta tarea.
      *
+     * M8-T5 (css-text-3 §8 reducido): text-transform se aplica AQUÍ, al texto de CADA TextRun
+     * recién construido -- ANTES de que llegue a ninguna medición (TextMeasurer::widthOf()) o a
+     * collapse() (que puede fundir runs adyacentes del mismo estilo). $style->textTransform ===
+     * None (el default) es un no-op observacional (applyTextTransform() devuelve $raw/$line tal
+     * cual) -- ningún golden existente declara text-transform, así que este cambio es byte-stable
+     * para M1-M8-T4.
+     *
+     * DIVERGENCIA DOCUMENTADA (capitalize + fusión entre nodos): cada nodo de texto fuente se
+     * transforma de forma INDEPENDIENTE, antes de que collapse() pueda fundirlo con un run
+     * ADYACENTE del mismo ComputedStyle (p.ej. dos nodos de texto separados por un elemento
+     * display:none podado, "wor<span style=display:none>X</span>ld" -- ver collapse()). Un
+     * capitalize en ese escenario trataría el INICIO de cada nodo fuente como frontera de palabra,
+     * aunque tras la fusión no lo sea realmente ("world" partido en "wor"+"ld" sin espacio de por
+     * medio produciría "Wor"+"ld" en vez de "World") -- edge case sin cobertura de test (ningún
+     * golden lo ejercita), aceptado por el mismo motivo que el brief ya adjudica "hyphen no es
+     * frontera" como divergencia de M8 reducido.
+     *
      * @return list<TextRun|LineBreakRun>
      */
     private static function textRunTokensFor(string $raw, ComputedStyle $style): array
     {
         if ($style->whiteSpace !== 'pre') {
-            return [new TextRun(self::collapseInternalWhitespace($raw), $style)];
+            $text = self::applyTextTransform(self::collapseInternalWhitespace($raw), $style->textTransform);
+            return [new TextRun($text, $style)];
         }
         $lines = explode("\n", str_replace("\r\n", "\n", $raw));
         $tokens = [];
         $lastIndex = count($lines) - 1;
         foreach ($lines as $index => $line) {
             if ($line !== '') {
-                $tokens[] = new TextRun($line, $style);
+                $tokens[] = new TextRun(self::applyTextTransform($line, $style->textTransform), $style);
             }
             if ($index !== $lastIndex) {
                 $tokens[] = new LineBreakRun();
             }
         }
         return $tokens;
+    }
+
+    /** M8-T5: dispatch por el valor computado de text-transform -- None es un no-op literal
+     *  (devuelve $text sin tocar, ver el docblock de textRunTokensFor() para por qué esto importa
+     *  para la estabilidad de goldens). */
+    private static function applyTextTransform(string $text, TextTransform $transform): string
+    {
+        return match ($transform) {
+            TextTransform::None => $text,
+            TextTransform::Uppercase => mb_convert_case($text, MB_CASE_UPPER, 'UTF-8'),
+            TextTransform::Lowercase => mb_convert_case($text, MB_CASE_LOWER, 'UTF-8'),
+            TextTransform::Capitalize => self::capitalizeWords($text),
+        };
+    }
+
+    /**
+     * M8-T5 (css-text-3 §8, "first typographic letter unit of each word"): implementación
+     * DIRIGIDA en vez de MB_CASE_TITLE (mb_convert_case) -- MB_CASE_TITLE difiere sutilmente de
+     * esta regla (por ejemplo, trata cualquier carácter no-letra como frontera, no solo espacio/
+     * tab) y no es configurable, así que se rueda a mano: frontera de palabra = inicio de cadena o
+     * una tira de espacios/tabs (adjudicación M8-T5 -- guiones y otra puntuación NUNCA son
+     * frontera, a diferencia de algunos navegadores reales, ver el brief; '\n' nunca aparece
+     * DENTRO de un TextRun -- ver textRunTokensFor(), que ya trocea 'pre' por línea antes de
+     * llegar aquí, y 'normal' colapsa \n a un espacio antes de esta llamada). Dentro de cada
+     * palabra, el PRIMER carácter alfabético (\p{L}, soporta acentos: á → Á) se mayúsculiza --
+     * cualquier puntuación que lo preceda dentro de la misma palabra (p.ej. "(hello)" ->
+     * "(Hello)") se conserva intacta, y el resto de la palabra NUNCA se toca.
+     */
+    private static function capitalizeWords(string $text): string
+    {
+        $result = preg_replace_callback(
+            '/(^|[ \t]+)([^\p{L} \t]*)(\p{L})/u',
+            static fn(array $m): string => $m[1] . $m[2] . mb_convert_case($m[3], MB_CASE_UPPER, 'UTF-8'),
+            $text,
+        );
+        return $result ?? $text;
     }
 
     /**

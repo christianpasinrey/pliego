@@ -263,11 +263,18 @@ final class PdfCanvas implements Canvas
         ];
     }
 
-    /** Ver el docblock de toPagePointPt() -- normaliza un -0.0 residual de coma flotante (tras
-     *  redondear a 2 decimales, la misma precisión de sprintf('%.2F', ...)) a un 0.0 limpio. */
-    private static function cleanZero(float $value): float
+    /**
+     * Ver el docblock de toPagePointPt() -- normaliza un -0.0 residual de coma flotante (tras
+     * redondear a $decimals) a un 0.0 limpio. M8-T5: += $decimals opcional (default 2, el
+     * comportamiento PREEXISTENTE de toPagePointPt() -- ambos call sites de ahí no lo pasan, así
+     * que su resultado es IDÉNTICO a antes de esta tarea) -- spacedShowOp() lo llama con 3 (mismo
+     * número de decimales que su propio `%.3F` de formateo final, para que el "-0.000" residual de
+     * una división que da matemáticamente cero se limpie ANTES de sprintf(), igual razón que la
+     * limpieza original de toPagePointPt().
+     */
+    private static function cleanZero(float $value, int $decimals = 2): float
     {
-        $rounded = round($value, 2);
+        $rounded = round($value, $decimals);
         return $rounded === 0.0 ? 0.0 : $rounded;
     }
 
@@ -386,6 +393,16 @@ final class PdfCanvas implements Canvas
         $this->ops .= "q\n" . $this->roundedRectPathOps($rect, $radius) . "W n\n";
     }
 
+    /**
+     * M8-T5 (css-text-3 §8 reducido; ISO 32000-1 §9.4.3): $text->letterSpacingPx/$wordSpacingPx
+     * ambos en 0.0 (el default PREEXISTENTE, M1-M8-T4) siguen produciendo el path `<hex> Tj` PLANO
+     * de siempre -- BYTE-A-BYTE idéntico a antes de esta tarea, ver spacedShowOp() para el path
+     * nuevo. Adjudicación del brief: Tw (word spacing nativo de PDF) NO funciona sobre el byte de
+     * espacio dentro de un `<hex>` de una fuente CID/Identity-H (Tw solo mira BYTES de una cadena
+     * de fuente simple, nunca CIDs de 2 bytes) -- por eso el spacing se implementa por AJUSTE DE
+     * ADVANCES en un array TJ en vez de con Tc/Tw, que funciona igual sea cual sea el tipo de
+     * fuente.
+     */
     public function fillText(TextFragment $text): void
     {
         // M6-T5: fillText() recibe el TextFragment ENTERO (Painter no lo intercepta, ver su
@@ -398,17 +415,48 @@ final class PdfCanvas implements Canvas
         $x = ($text->rect->x + $this->offsetX) * self::PX_TO_PT;
         $baseline = ($this->paper->heightPx() - ($text->baselineY + $this->offsetY)) * self::PX_TO_PT;
         $resourceName = $this->fonts->resourceNameFor($text->faceKey);
-        $hex = $this->fonts->embedderFor($text->faceKey)->encode($text->text);
+        $embedder = $this->fonts->embedderFor($text->faceKey);
+        $showOp = ($text->letterSpacingPx === 0.0 && $text->wordSpacingPx === 0.0)
+            ? sprintf('<%s> Tj', $embedder->encode($text->text))
+            : $this->spacedShowOp($embedder, $text->text, $text->fontSizePx, $text->letterSpacingPx, $text->wordSpacingPx);
         $body = sprintf(
-            "BT /%s %.2F Tf %s %.2F %.2F Td <%s> Tj ET\n",
+            "BT /%s %.2F Tf %s %.2F %.2F Td %s ET\n",
             $resourceName,
             $text->fontSizePx * self::PX_TO_PT,
             $this->rg($color),
             $x,
             $baseline,
-            $hex,
+            $showOp,
         );
         $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
+     * M8-T5 (ISO 32000-1 §9.4.3, "Text-Showing Operators", TJ): `[(g1) adj1 (g2) adj2 ...] TJ` --
+     * un ajuste NUMÉRICO (milésimas de unidad de espacio de texto, es decir, ya escalado ×1000
+     * respecto a una fracción del font-size) tras CADA glifo, INCLUIDO el último (adjudicación
+     * M8-T5, ver TextMeasurer::widthOf() -- el ancho medido añade letter-spacing tras cada
+     * carácter, este método replica EXACTAMENTE la misma regla para que el avance pintado
+     * coincida con el medido). El número se SUBSTRAE de la posición horizontal actual (spec), así
+     * que un ajuste NEGATIVO mueve el siguiente glifo hacia la DERECHA (separa) -- de ahí el signo
+     * `-` en la fórmula: adj = -(spacingPx / fontSizePx) × 1000.
+     *
+     * word-spacing se SUMA al letter-spacing únicamente en el glifo que representa un carácter
+     * ESPACIO (U+0020) del texto ORIGINAL -- ambos son aditivos (nunca uno sustituye al otro),
+     * igual regla que TextMeasurer::widthOf().
+     */
+    private function spacedShowOp(FontEmbedder $embedder, string $text, float $fontSizePx, float $letterSpacingPx, float $wordSpacingPx): string
+    {
+        $chars = mb_str_split($text);
+        $hexes = $embedder->encodeChars($text);
+        $parts = [];
+        foreach ($chars as $i => $char) {
+            $spacingPx = $letterSpacingPx + ($char === ' ' ? $wordSpacingPx : 0.0);
+            $adj = self::cleanZero(-($spacingPx / $fontSizePx) * 1000.0, 3);
+            $parts[] = "<{$hexes[$i]}>";
+            $parts[] = sprintf('%.3F', $adj);
+        }
+        return '[' . implode(' ', $parts) . '] TJ';
     }
 
     /**
