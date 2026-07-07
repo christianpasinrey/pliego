@@ -744,6 +744,43 @@ it('accepts a definite positive calc() line-height at parse time: line-height:ca
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
+// --- M10-T5: line-height accepts a calc() that folds to a bare NUMBER (css-inline-3 §5.2's own
+// unitless multiplier) -- Tailwind v4 emits its `--text-*--line-height` theme vars as exactly
+// this shape (calc(1.25 / .875)), rejected as "calc() must resolve to a length or percentage"
+// before this fix, discarding the whole declaration and leaving the element on inherited/UA
+// line-height (the page-wide vertical drift fixture 08's oracle diff measured). Every OTHER
+// length/percentage property keeps rejecting a bare-number calc() unchanged (see the width test
+// below) -- this leniency is specific to line-height's own <number> value shape. -----------------
+
+it('accepts a calc() resolving to a bare number for line-height (Tailwind\'s ratio pattern): line-height:calc(1.25 / .875)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(1.25 / .875)');
+    // 1.25 / .875 = 1.4285714285714286 (hand-verified) -- exact float comparison.
+    expect($result)->toEqual(['line-height' => 1.25 / 0.875]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('accepts another bare-number line-height ratio: line-height:calc(2 / 1.5)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(2 / 1.5)');
+    expect($result)->toEqual(['line-height' => 2.0 / 1.5]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('rejects a calc() resolving to a NEGATIVE bare number for line-height: line-height:calc(-1.25 / .875)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('line-height', 'calc(-1.25 / .875)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('still rejects a calc() resolving to a bare number for width (length context, unchanged): width:calc(1.25 / .875)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('width', 'calc(1.25 / .875)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
 // --- M6-T5: full color syntax reaches color/background-color/border-*-color via the SAME
 // Color::fromCss() call already exercised above for hex/keywords — these just prove rgb()/hsl()/
 // currentColor flow through the property dispatcher unchanged. -------------------------------

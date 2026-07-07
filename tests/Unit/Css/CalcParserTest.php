@@ -139,3 +139,42 @@ it('warns and returns null when a bare leading-decimal number is the whole expre
     expect($expr)->toBeNull();
     expect($parser->drainWarnings())->not->toBeEmpty();
 });
+
+// --- M10-T5: parseNumberOrLength() -- the line-height-only entry point that accepts a
+// dimensionless calc() result (Tailwind v4's `--text-*--line-height` ratios), unlike parse()
+// above which always rejects a bare number. ------------------------------------------------------
+
+it('parseNumberOrLength() resolves Tailwind\'s calc(1.25 / .875) ratio to a bare-number multiplier', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('1.25 / .875');
+    // 1.25 / .875 = 1.4285714285714286 (hand-verified) -- exact float comparison, same convention
+    // as this file's own "hand-computes Bootstrap's calc()" test above.
+    expect($result)->toEqual(['number' => 1.25 / 0.875]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parseNumberOrLength() resolves calc(2 / 1.5) to 1.3333...', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('2 / 1.5');
+    expect($result)->toEqual(['number' => 2.0 / 1.5]);
+});
+
+it('parseNumberOrLength() still resolves a length/percentage calc() to the vector shape, unchanged', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('1em + 4px');
+    expect($result)->toEqual(['length' => CalcExpr::of(0.0, 1.0, 0.0, 4.0)]);
+});
+
+it('parseNumberOrLength() warns and returns null on the same failures parse() rejects (division by zero)', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('10px / 0');
+    expect($result)->toBeNull();
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});
+
+it('parseNumberOrLength() warns and returns null on malformed syntax (unbalanced parens)', function () {
+    $parser = new CalcParser();
+    $result = $parser->parseNumberOrLength('(2 + 3');
+    expect($result)->toBeNull();
+    expect($parser->drainWarnings())->not->toBeEmpty();
+});

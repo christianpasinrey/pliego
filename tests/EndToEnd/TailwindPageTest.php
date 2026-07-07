@@ -22,23 +22,32 @@ use PliegoOracle\FixtureHtml;
  * vendored sheet here via a real page produces those same 104 sheet-level warnings (they come from
  * the stylesheet's own @layer/@property/@media/pseudo-element/color-mix()/border-shorthand content,
  * independent of which classes any given document actually uses) PLUS this page's own
- * resolved-against-real-elements warnings: 145 total, observed from a real run against this exact
+ * resolved-against-real-elements warnings: 121 total, observed from a real run against this exact
  * fixture (not guessed) -- a regression here means either the vendored sheet or this fixture's
- * markup changed. The extra 41 break down as +2 `unsupported-property-other`, +9
+ * markup changed. The extra 17 break down as +2 `unsupported-property-other`, +9
  * `unsupported-font-weight` (computed font-weight values -- `font-bold`/`font-semibold` resolve
  * fine, but preflight's own `b, strong { font-weight: bolder }`/inherited-`inherit` rules only ever
- * fire once real elements exist to resolve them against) and two genuinely NEW category shapes the
+ * fire once real elements exist to resolve them against) and one genuinely NEW category shape the
  * sheet-only audit never exercises at all (no elements => no declarations ever resolved against a
  * real box): `box-shadow-limitation` (this page's three `shadow-md`/`shadow-sm` cards/buttons, each
  * a real multi-layer `--tw-shadow` chain -- see DeclarationParser's own "Multiple box-shadows not
  * supported" message, same pre-existing M8 limitation TailwindPlaygroundSampleTest.php's single
- * `shadow-md` div already pins) and `calc-bare-number` (Css\Value\CalcParser's "calc() must
- * resolve to a length or percentage, got a bare number" -- Tailwind's real `--text-*--line-height`
- * theme vars are unitless ratios like `calc(1.25 / 1)`, only resolved once `text-xs`/`text-sm`/
- * `text-2xl` etc. apply to a real element with a real `line-height: var(--tw-leading, ...)` chain;
- * the same gap TailwindPlaygroundSampleTest.php's curated CSS sidesteps by omitting the
- * `--text-*--line-height` companion vars entirely -- this page's fixture links the REAL,
- * unmodified build, so it hits the gap honestly instead of curating around it).
+ * `shadow-md` div already pins).
+ *
+ * M10-T5 fix (post-calibration correction): Tailwind's real `--text-*--line-height` theme vars are
+ * unitless RATIOS wrapped in calc(), e.g. `calc(1.25 / .875)`, only resolved once `text-xs`/
+ * `text-sm`/`text-2xl` etc. apply to a real element with a real
+ * `line-height: var(--tw-leading, ...)` chain. This page's FIRST measurement (before the fix) hit
+ * `Css\Value\CalcParser::parse()`'s "calc() must resolve to a length or percentage, got a bare
+ * number" rejection 24 times (the `calc-bare-number` category, since removed) -- every text-*
+ * element on the page silently lost its line-height declaration and fell back to inherited/UA
+ * leading, which turned out to be the DOMINANT cause of fixture 08's own oracle diff (not the
+ * "font-metric noise" this file's original narrative assumed, see thresholds.json's `_08_comment`
+ * and m10-task-5-report.md's "Corrected analysis" section for the full story). Fixed by
+ * `CalcParser::parseNumberOrLength()`/`DeclarationParser::parseLineHeight()` accepting a
+ * dimensionless calc() result as line-height's own <number> multiplier (css-inline-3 §5.2) --
+ * `calc-bare-number` no longer fires for this page at all (0, key absent from $byCategory), and the
+ * pinned total drops 145 -> 121.
  *
  * Helper functions prefixed `tailwindPage` (unique-per-file convention, see every Bootstrap- and
  * Tailwind-prefixed E2E file's own docblock on "one process, unique-per-file helpers").
@@ -150,9 +159,9 @@ it('produces a pinned, categorized warning count for this exact page (honest cap
     expect(array_sum($byCategory))->toBe(count($report->warnings));
 
     // Pinned exact total, observed from a real run against this exact fixture (not guessed) --
-    // see this file's class docblock for the sheet-level (104) vs resolved-against-elements (+41)
-    // breakdown.
-    expect($report->warnings)->toHaveCount(145);
+    // see this file's class docblock for the sheet-level (104) vs resolved-against-elements (+17)
+    // breakdown, and for the M10-T5 fix that dropped this from 145 (calc-bare-number gone).
+    expect($report->warnings)->toHaveCount(121);
 
     // Sheet-level categories, IDENTICAL to TailwindIngestionTest.php's own golden numbers (none of
     // this page's classes touch @media/@property/@layer !important/color-mix()) -- unaffected by
@@ -176,10 +185,13 @@ it('produces a pinned, categorized warning count for this exact page (honest cap
     // (this page's own mix of real elements resolves declarations the ingestion test never does).
     expect($byCategory['unsupported-property-other'] ?? 0)->toBe(35);
     expect($byCategory['unsupported-font-weight'] ?? 0)->toBe(12);
-    // Two categories the sheet-only audit CANNOT produce at all (no elements to resolve against) --
-    // see this file's class docblock.
+    // The one category the sheet-only audit CANNOT produce at all (no elements to resolve
+    // against) -- see this file's class docblock.
     expect($byCategory['box-shadow-limitation'] ?? 0)->toBe(6);
-    expect($byCategory['calc-bare-number'] ?? 0)->toBe(24);
+    // M10-T5 fix: Tailwind's `calc(1.25 / .875)`-shaped line-height ratios now resolve to their
+    // bare-number multiplier instead of warning -- `calc-bare-number` no longer fires for this
+    // page at all (was 24 before the fix, see this file's class docblock).
+    expect($byCategory)->not->toHaveKey('calc-bare-number');
 });
 
 // --- Key bytes: the visual signature this page's Tailwind utilities must actually paint ----------

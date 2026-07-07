@@ -475,21 +475,57 @@ final class DeclarationParser
      * que cualquier otro warning de este parser. */
     private function tryParseCalc(string $value): ?CalcExpr
     {
+        $inner = $this->calcBody($value);
+        if ($inner === null) {
+            return null;
+        }
+        $calcParser = new CalcParser();
+        $expr = $calcParser->parse($inner);
+        $this->warnings = [...$this->warnings, ...$calcParser->drainWarnings()];
+        return $expr;
+    }
+
+    /**
+     * M10-T5: line-height's own calc() entry point -- unlike every other length/percentage
+     * property (tryParseCalc() above), a calc() that folds to a bare NUMBER is a valid line-height
+     * value (the unitless multiplier, css-inline-3 §5.2), not a rejected type mismatch. Tailwind
+     * v4's `--text-*--line-height` theme vars are exactly this shape: `calc(1.25 / .875)`, a
+     * dimensionless ratio only resolvable once `--tw-leading` is known. Delegates to
+     * CalcParser::parseNumberOrLength() (same tokenize/fold pass as tryParseCalc(), just accepting
+     * both possible result shapes) so this and tryParseCalc() never disagree on what a given calc()
+     * body folds to.
+     *
+     * @return array{number: float}|array{length: CalcExpr}|null
+     */
+    private function tryParseCalcNumberOrLength(string $value): ?array
+    {
+        $inner = $this->calcBody($value);
+        if ($inner === null) {
+            return null;
+        }
+        $calcParser = new CalcParser();
+        $result = $calcParser->parseNumberOrLength($inner);
+        $this->warnings = [...$this->warnings, ...$calcParser->drainWarnings()];
+        return $result;
+    }
+
+    /** Extrae y valida el cuerpo entre el "calc(" inicial y su paréntesis de cierre, compartido
+     * por tryParseCalc()/tryParseCalcNumberOrLength() -- ambos delegan la MISMA extracción de
+     * paréntesis a CalcParser, solo difieren en qué método de CalcParser invocan después. */
+    private function calcBody(string $value): ?string
+    {
         $trimmed = trim($value);
-        // looksLikeCalc() (el único llamador) ya garantizó que $trimmed empieza EXACTAMENTE por
-        // "calc(" (5 caracteres) — el paréntesis de apertura está siempre en el índice 4, sin
-        // necesidad de buscarlo (evita un stripos() que PHPStan tipa como int<0,max>|false).
+        // looksLikeCalc() (el único llamador, vía tryParseCalc()/tryParseCalcNumberOrLength()) ya
+        // garantizó que $trimmed empieza EXACTAMENTE por "calc(" (5 caracteres) — el paréntesis de
+        // apertura está siempre en el índice 4, sin necesidad de buscarlo (evita un stripos() que
+        // PHPStan tipa como int<0,max>|false).
         $openParen = 4;
         $closeParen = $this->matchingParen($trimmed, $openParen);
         if ($closeParen === null || $closeParen !== strlen($trimmed) - 1) {
             $this->warnings[] = "Invalid calc() expression: $value";
             return null;
         }
-        $inner = substr($trimmed, $openParen + 1, $closeParen - $openParen - 1);
-        $calcParser = new CalcParser();
-        $expr = $calcParser->parse($inner);
-        $this->warnings = [...$this->warnings, ...$calcParser->drainWarnings()];
-        return $expr;
+        return substr($trimmed, $openParen + 1, $closeParen - $openParen - 1);
     }
 
     private function matchingParen(string $text, int $openIndex): ?int
@@ -1598,10 +1634,25 @@ final class DeclarationParser
             return ['line-height' => $multiplier];
         }
         if ($this->looksLikeCalc($value)) {
-            $calc = $this->tryParseCalc($value);
-            if ($calc === null) {
+            // M10-T5: line-height accepts a calc() folding to EITHER shape -- a bare-number
+            // multiplier (Tailwind v4's `--text-*--line-height` ratios, e.g.
+            // calc(1.25 / .875) = 1.4285714285714286, the exact same value typing
+            // `line-height: 1.4285714285714286` would give) or the pre-existing length/percentage
+            // vector (calc(1em + 2px), etc.) — see tryParseCalcNumberOrLength()'s own docblock for
+            // why line-height alone gets this leniency (every other length/percentage property
+            // still rejects a bare-number calc() via tryParseCalc(), unchanged).
+            $result = $this->tryParseCalcNumberOrLength($value);
+            if ($result === null) {
                 return [];
             }
+            if (isset($result['number'])) {
+                $multiplier = $result['number'];
+                if ($multiplier < 0.0) {
+                    return $this->warn("Negative value not allowed for line-height: $value");
+                }
+                return ['line-height' => $multiplier];
+            }
+            $calc = $result['length'];
             // M6 final-review fix (Finding 2): same definite-negative fold as parseFontSize()
             // above — a calc() with em/rem/% still has no knowable sign until compute-time.
             if ($calc->isDefinite() && $calc->pxOffset < 0.0) {
