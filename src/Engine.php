@@ -144,6 +144,20 @@ final class Engine
             // el generador de Paginator::paginate(), para no perder los warnings que solo se
             // emiten DURANTE esa iteración.
             $layoutWarnings = new WarningCollector();
+            // M9-T6 (controller addition, T5 review): a <style> element ANYWHERE in the parsed
+            // document (head OR body -- getElementsByTagName() walks the whole tree, not just
+            // $document->body, unlike Box\BoxTreeBuilder) is a real engine gap: its CSS is never
+            // parsed nor applied (this codebase's API is CSS/HTML as two SEPARATE strings, see
+            // every EndToEnd test's ->stylesheet()->render() shape) -- silently before this. One
+            // warning per render (addWarningOnce), regardless of how many <style> elements exist.
+            // Auto-extracting and applying it is a real feature (M10 candidate: needs its own
+            // design for cascade ordering against ->stylesheet() calls) -- out of scope here.
+            if ($document->getElementsByTagName('style')->length > 0) {
+                $layoutWarnings->addWarningOnce(
+                    'style-tag-ignored',
+                    'style tags are ignored; pass CSS via stylesheet()',
+                );
+            }
             $styles = (new StyleResolver([new CssStyleSource($parseResult)], $layoutWarnings))->resolve($document);
             $imageLoader = new ImageLoader();
             $boxTree = (new BoxTreeBuilder($imageLoader, $layoutWarnings, $this->basePath))->build($document, $styles);

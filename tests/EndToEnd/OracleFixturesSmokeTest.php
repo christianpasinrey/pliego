@@ -7,7 +7,7 @@ use Pliego\Engine;
 use PliegoOracle\FixtureHtml;
 
 /**
- * M9-T5: the six tools/oracle/fixtures/*.html documents (shared verbatim with Chrome via
+ * M9-T5 (+M9-T6's fixture 07): the tools/oracle/fixtures/*.html documents (shared verbatim with Chrome via
  * render-chrome.mjs) must at minimum render through Engine without throwing and produce exactly
  * one page -- the oracle's compare.php aligns pliego's raster against a single Chrome full-page
  * screenshot, so a fixture that silently paginates to 2 pages would desync the whole comparison
@@ -19,17 +19,20 @@ use PliegoOracle\FixtureHtml;
  * catching "a fixture literally crashes the engine" or "a fixture now needs 2 pages" during normal
  * development, before anyone even runs the oracle.
  *
- * Uses FixtureHtml::extractInlineCss() + ->stylesheet(), exactly like render-pliego.php -- see
- * that class's docblock for why passing the fixture's raw HTML straight to ->render() with no
+ * Uses FixtureHtml::extractCss() + ->stylesheet(), exactly like render-pliego.php -- see that
+ * class's docblock for why passing the fixture's raw HTML straight to ->render() with no
  * ->stylesheet() call silently renders everything with UA defaults instead (a real bug this very
- * test file caught during M9-T5 calibration, before that class existed).
+ * test file caught during M9-T5 calibration, before that class existed). M9-T6's fixture 07 is the
+ * first to need extractCss() rather than extractInlineCss() alone -- it pulls the real vendored
+ * Bootstrap sheet in via `<link rel="stylesheet">` rather than inlining 232KB into a <style> block
+ * (see FixtureHtml::extractCss()'s own docblock).
  */
 
 /** @return array{0: string, 1: \Pliego\RenderReport} */
 function oracleSmokeRender(string $fixturePath): array
 {
     $html = (string) file_get_contents($fixturePath);
-    $css = FixtureHtml::extractInlineCss($html);
+    $css = FixtureHtml::extractCss($html, dirname($fixturePath));
     $stream = fopen('php://memory', 'r+b');
     assert($stream !== false);
     $report = Engine::make()->basePath(dirname($fixturePath))->stylesheet($css)->render($html)->toStream($stream);
@@ -44,6 +47,7 @@ const ORACLE_FIXTURE_NAMES = [
     '04-flex-layout.html',
     '05-blockquote-pre.html',
     '06-gradients-shadows.html',
+    '07-bootstrap-page.html',
 ];
 
 it('finds exactly the oracle fixtures this task calibrated (no stray/missing files)', function () {

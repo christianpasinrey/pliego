@@ -10,7 +10,8 @@ declare(strict_types=1);
  * render-chrome.mjs's deviceScaleFactor:2 screenshot, so both rasters land at the same effective
  * pixel density (see that file's own docblock).
  *
- * Each fixture carries its OWN `@page { margin: 0; size: A4 }` rule (see fixtures/*.html) -- so
+ * Each fixture carries its OWN `@page { margin: 0; }` rule (see fixtures/*.html; page size is left
+ * at Engine's own A4 default -- no fixture declares `size:`) -- so
  * no ->paper()/->margins() call is needed here: Engine's own PageRuleFactory (M2-T6) already
  * overrides the uniform-margin default per side from that rule, the identical mechanism
  * BootstrapPresetTest.php exercises for the vendored preset's print addendum. ->basePath() is set
@@ -84,10 +85,12 @@ function main(): void
         $filename = basename($fixturePath);
         $number = oracleFixtureNumber($filename);
         $html = (string) file_get_contents($fixturePath);
-        // FixtureHtml::extractInlineCss(): the fixture's own <style> block, the SAME text Chrome
-        // parses natively from file:// -- Engine::render() has no auto-extraction of inline
-        // <style> tags (see FixtureHtml's docblock for why this is required, not optional).
-        $css = FixtureHtml::extractInlineCss($html);
+        // FixtureHtml::extractCss(): the fixture's own linked stylesheet(s) (fixture 07's
+        // <link rel="stylesheet" href="...bootstrap.min.css">) plus its inline <style> block(s) --
+        // the SAME CSS Chrome applies natively from file:// -- Engine::render() has no
+        // auto-extraction of either (see FixtureHtml's own docblock for why this is required, not
+        // optional). Backward compatible with fixtures 01-06 (no <link> at all).
+        $css = FixtureHtml::extractCss($html, $fixturesDir);
 
         $pdfPath = $outDir . "/$number-pliego.pdf";
         $report = Engine::make()->basePath($fixturesDir)->stylesheet($css)->render($html)->save($pdfPath);

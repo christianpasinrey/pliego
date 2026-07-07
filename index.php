@@ -30,8 +30,14 @@ $action = $_POST['action'] ?? null;
 if ($action === 'pdf' || $action === 'download' || $action === 'report') {
     $html = (string) ($_POST['html'] ?? '');
     $css = (string) ($_POST['css'] ?? '');
+    // M9-T6: the "Bootstrap preset" checkbox picks between the two "returns a fresh Engine"
+    // static factories (see Engine::bootstrap()'s own docblock) -- Engine::make() is completely
+    // unaffected either way, so unchecking the box (the default) renders exactly as before this
+    // task.
+    $useBootstrapPreset = ($_POST['bootstrap'] ?? '') === '1';
     try {
-        $engine = Engine::make()->basePath(__DIR__)->stylesheet($css)->margins(Length::px(48));
+        $engine = ($useBootstrapPreset ? Engine::bootstrap() : Engine::make())
+            ->basePath(__DIR__)->stylesheet($css)->margins(Length::px(48));
         $start = microtime(true);
         $stream = fopen('php://temp', 'r+b');
         assert($stream !== false);
@@ -208,6 +214,50 @@ p { line-height: 1.45 }
   @bottom-right { content: "Pagina " counter(page) " de " counter(pages); }
 }
 CSS;
+
+// M9-T6: the "Ejemplo Bootstrap" sample — deliberately NO custom CSS at all (an empty textarea,
+// see $bootstrapSampleCss below): every rounded button, striped row and pill badge below comes
+// from Engine::bootstrap()'s vendored preset alone, the whole point of this second sample
+// existing side by side with the hand-styled one above.
+$bootstrapSampleHtml = <<<'HTML'
+<body>
+  <h1 class="display-6 mb-2">Bootstrap preset sample</h1>
+  <p class="lead">No custom CSS anywhere in this sample — every look below comes from the vendored Bootstrap 5.3.6 preset via <code>Engine::bootstrap()</code>. Check "Bootstrap preset" to render it.</p>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <h5 class="card-title">Invoice #1042</h5>
+      <p class="card-text">Rendered entirely with Bootstrap's own classes, no author stylesheet.</p>
+      <a href="#" class="btn btn-primary">Pay now</a>
+      <a href="#" class="btn btn-outline-secondary">Details</a>
+    </div>
+  </div>
+
+  <p>
+    <span class="badge bg-primary">New</span>
+    <span class="badge bg-success rounded-pill">Active</span>
+    <span class="badge bg-danger">Overdue</span>
+  </p>
+
+  <table class="table table-striped">
+    <thead>
+      <tr><th>#</th><th>Item</th><th>Amount</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Consulting</td><td>296,33 &euro;</td></tr>
+      <tr><td>2</td><td>Support plan</td><td>120,00 &euro;</td></tr>
+      <tr><td>3</td><td>Onboarding</td><td>80,00 &euro;</td></tr>
+    </tbody>
+  </table>
+
+  <blockquote class="blockquote">
+    <p>Rounded corners, real gradients and soft shadows, straight from the preset.</p>
+    <footer class="blockquote-footer">pliego <cite title="Source Title">playground</cite></footer>
+  </blockquote>
+</body>
+HTML;
+
+$bootstrapSampleCss = '';
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -251,6 +301,9 @@ CSS;
   .warnings li { color:#c9b17c; margin:.15rem 0; font-family:ui-monospace,Consolas,monospace }
   .warnings .none { color:#7fb08a }
   .warnings .error { color:#e07070; font-family:ui-monospace,Consolas,monospace; white-space:pre-wrap }
+  .preset-toggle { display:flex; align-items:center; gap:.35rem; color:var(--fg); font-size:.85rem;
+                   cursor:pointer; user-select:none }
+  .preset-toggle input { cursor:pointer }
 </style>
 </head>
 <body>
@@ -271,6 +324,9 @@ CSS;
     <div class="actions">
       <button id="btn-generate" type="button">Generar PDF</button>
       <button id="btn-download" class="secondary" type="button">Descargar</button>
+      <button id="btn-sample" class="secondary" type="button">Ejemplo</button>
+      <button id="btn-sample-bootstrap" class="secondary" type="button">Ejemplo Bootstrap</button>
+      <label class="preset-toggle"><input type="checkbox" id="chk-bootstrap"> Bootstrap preset</label>
       <span class="stats" id="stats"></span>
     </div>
   </div>
@@ -284,6 +340,7 @@ CSS;
   <input type="hidden" name="action" value="pdf">
   <input type="hidden" name="html" id="form-html">
   <input type="hidden" name="css" id="form-css">
+  <input type="hidden" name="bootstrap" id="form-bootstrap">
 </form>
 
 <script src="playground-assets/codemirror.min.js"></script>
@@ -294,6 +351,23 @@ CSS;
   const cmOpts = { lineNumbers: true, theme: 'material-darker', lineWrapping: true, tabSize: 2 };
   const cmHtml = CodeMirror.fromTextArea(document.getElementById('src-html'), { ...cmOpts, mode: 'htmlmixed' });
   const cmCss = CodeMirror.fromTextArea(document.getElementById('src-css'), { ...cmOpts, mode: 'css' });
+
+  // M9-T6: both samples' HTML/CSS, round-tripped from PHP as JSON (not re-fetched) -- "Ejemplo"
+  // restores the hand-styled default (unchecking "Bootstrap preset"), "Ejemplo Bootstrap" loads
+  // the preset-only sample and CHECKS the box for you (it renders unstyled without it).
+  const SAMPLES = {
+    default: { html: <?= json_encode($sampleHtml, JSON_UNESCAPED_UNICODE) ?>, css: <?= json_encode($sampleCss, JSON_UNESCAPED_UNICODE) ?>, bootstrap: false },
+    bootstrap: { html: <?= json_encode($bootstrapSampleHtml, JSON_UNESCAPED_UNICODE) ?>, css: <?= json_encode($bootstrapSampleCss, JSON_UNESCAPED_UNICODE) ?>, bootstrap: true },
+  };
+  const chkBootstrap = document.getElementById('chk-bootstrap');
+  function loadSample(name) {
+    const sample = SAMPLES[name];
+    cmHtml.setValue(sample.html);
+    cmCss.setValue(sample.css);
+    chkBootstrap.checked = sample.bootstrap;
+  }
+  document.getElementById('btn-sample').addEventListener('click', () => loadSample('default'));
+  document.getElementById('btn-sample-bootstrap').addEventListener('click', () => loadSample('bootstrap'));
 
   const tabs = { html: document.getElementById('tab-html'), css: document.getElementById('tab-css') };
   const wraps = { html: document.getElementById('wrap-html'), css: document.getElementById('wrap-css') };
@@ -310,13 +384,15 @@ CSS;
   async function generate(download) {
     const html = cmHtml.getValue();
     const css = cmCss.getValue();
+    const bootstrap = chkBootstrap.checked ? '1' : '';
     document.getElementById('form-html').value = html;
     document.getElementById('form-css').value = css;
+    document.getElementById('form-bootstrap').value = bootstrap;
     const form = document.getElementById('pdf-form');
     form.action.value = download ? 'download' : 'pdf';
     form.submit();
 
-    const body = new URLSearchParams({ action: 'report', html, css });
+    const body = new URLSearchParams({ action: 'report', html, css, bootstrap });
     const box = document.getElementById('warnings');
     try {
       const res = await fetch('', { method: 'POST', body });
