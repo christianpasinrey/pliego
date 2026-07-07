@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M9 — pliego: Bootstrap real + oráculo Chrome</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M9 «Bootstrap real + oráculo Chrome»</h1>
+<p class="meta">2026-07-07 · Previos: M0-M8 ✅ (main, CI verde, 1232 tests; el look Bootstrap sale con CSS propio) · Ejecución: subagent-driven · Objetivo: que pliego trague el <code>bootstrap.min.css</code> AUTÉNTICO y que la fidelidad se mida contra Chrome, no contra nuestra intuición.</p>
+
+<div class="task">
+  <strong>Goal:</strong> (1) auditar y hacer digerible el Bootstrap 5.3 real (fixture vendorizada): warnings acotados y categorizados, perf aceptable, render convincente de los componentes clave; (2) cerrar los 2 gaps visuales que Bootstrap toca de verdad: alpha en gradient stops (soft masks) y tiling real (PatternType 1); (3) API de preset limpia (<code>Engine::stylesheet()</code> ya existe — el preset añade la hoja empaquetada + defaults print); (4) <strong>oráculo Chrome</strong>: pipeline local+CI que renderiza fixtures en Chrome headless y en pliego (rasterizado Ghostscript) y compara por píxel con tolerancia — la métrica de fidelidad pasa a ser objetiva y regresionable.<br>
+  <strong>Riesgos:</strong> bootstrap.min.css son ~200KB de CSS minificado con miles de reglas — parser robustness + perf del resolver (bucketing T1-M8 ayuda); el oráculo introduce toolchain JS (Playwright) SOLO como dev-dependency de CI/local, jamás runtime del package.
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M8 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales, trailer, TDD 4-gates, baselines tests-only, warning discipline).</li>
+  <li>Lecciones del ledger completas. 1232 tests + goldens intactos salvo autorización por tarea.</li>
+  <li>El package COMPOSER no gana dependencias runtime nuevas: Playwright/node viven en <code>tools/oracle/</code> con su package.json propio, gitignoreado node_modules, y el workflow CI los instala; el oráculo es opt-in local (script) y job CI separado que NO bloquea el job PHP.</li>
+  <li>bootstrap.min.css se vendoriza en <code>tests/Fixtures/bootstrap/bootstrap.min.css</code> (MIT, header de licencia preservado + LICENSE-bootstrap.txt) — pin a 5.3.x concreto, versión documentada.</li>
+  <li>Excluidos M9 con warning (ya avisan o se añade): transiciones/animaciones (irrelevantes en print — SILENCIO adjudicado: no warning, son no-op legítimo en media print; documentar), :hover/:focus (ya excluidos permanentes), position:sticky, filter, transform (warning).</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Engine
+Engine::bootstrap(): static            // añade la hoja Bootstrap vendorizada ANTES de las hojas del usuario
+                                       // (capa author-order: preset primero, usuario después gana por orden)
+// (adjudicado: método explícito > string mágico preset('bootstrap'); Tailwind tendrá el suyo en M10)
+
+// Pdf
+PdfWriter::registerTilingPattern(sig, xobjectId, tileW, tileH): patternId  // PatternType 1 /PaintType 1
+// PdfCanvas: fill del border box con /Pattern cs + /Pn scn en vez de N Do's
+PdfWriter::registerSoftMaskGroup(...): gsId  // ExtGState /SMask con Form XObject en gris (luminosity)
+// para gradient stops con alpha: shading gris paralelo como máscara del shading de color
+
+// tools/oracle/ (fuera de src/ — no deptrac)
+render-chrome.mjs  // Playwright: HTML fixture → screenshot PNG (viewport = tamaño de página CSS, deviceScaleFactor 2)
+compare.php        // GD/Imagick? — adjudicado: comparación en PHP puro con las mismas primitivas PNG del engine
+                   // (decoder PNG propio ya existe — reutilizar Image\PngImage para leer ambos)
+                   // métrica: % de píxeles con ΔRGB > umbral, con máscara de antialiasing (vecindad)
+// .github/workflows/oracle.yml — job separado, matrix de fixtures, artefactos con diffs visuales</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M8"] --> T2["T2 tragar bootstrap.min.css<br/>real: auditoría + perf"]
+  T1 --> T3["T3 PatternType 1 tiling<br/>+ soft masks alpha"]
+  T2 --> T4["T4 Engine::bootstrap()<br/>preset API"]
+  T3 --> T5["T5 oráculo Chrome:<br/>Playwright + pixel diff + CI"]
+  T4 --> T6["T6 E2E página Bootstrap completa<br/>+ README + playground"]
+  T5 --> T6
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M9-T1 — Housekeeping M8</h3>
+<p>(1) FragmentDumper: representar dashed/dotted en los dumps (clave style por lado; goldens regenerados solo-adiciones verificadas). (2) FontCatalog::select(): warning en el fallback interno a default (hoy silencioso e inalcanzable — barato y defensivo). (3) Test combinado blur&gt;0 + radius&gt;0 (el gap señalado en T4-M8). (4) README: nota de alcance "inline style=&quot;&quot; attributes no soportados" (+ warning one-time al detectar atributo style en BoxTreeBuilder — coherencia con la disciplina; barato). (5) Sombras inset: warning ya existe — verificar mensaje y dejar. Commit: <code>chore: apply M8 final-review housekeeping</code></p>
+</div>
+
+<div class="task">
+<h3>M9-T2 — Tragar bootstrap.min.css real: auditoría + perf</h3>
+<p>Vendorizar bootstrap.min.css 5.3.x (pin exacto, licencia MIT preservada). Test de ingestión: parsear la hoja ENTERA → sin excepciones, sin timeouts; snapshot de la auditoría de warnings (contarlos POR CATEGORÍA — regex sobre el texto de warning — y pinnear el desglose como test: N transform, N :hover excluido permanente, N media queries no-print...; @media: hoy ¿qué hacemos? bootstrap está lleno — ADJUDICADO: @media print se aplica, @media (min-width...) etc → se IGNORAN silenciosamente las no-print (correcto per media, documentar; screen → skip + warning one-time «screen-only rules skipped»)... verificar qué hace StylesheetParser hoy con @media y diseñar el manejo mínimo correcto: extract con el extractor propio, aplicar print y sin-media, saltar el resto con UN warning agregado). Perf: render de un doc básico con la hoja completa cargada — presupuesto ≤500ms el primer render (bucketing M8-T1 ayuda; medir y reportar honesto; si explota, memoizar parse por hash de hoja). Fixture de componentes (botones/cards/tables/badges/alerts) renderizada con la hoja REAL + Ghostscript. Commit: <code>feat(css): ingest real bootstrap stylesheet with media handling and warning audit</code></p>
+</div>
+
+<div class="task">
+<h3>M9-T3 — PatternType 1 tiling + soft masks para alpha en gradientes</h3>
+<p><strong>Tiling real</strong>: PdfWriter::registerTilingPattern (PatternType 1, PaintType 1, XStep/YStep, Resources con el XObject de la imagen, BBox tile); PdfCanvas: pintar background-repeat con <code>/Pattern cs /Pn scn</code> + fill del rect (reemplaza el bucle de Do's y el cap de 2000 — el cap queda como salvaguarda absurda-tiles con el patrón matriz). <strong>Soft masks</strong>: gradient stops con alpha (rgba en stops — Bootstrap los usa en gradientes de botones) → ExtGState /SMask tipo luminosity con Form XObject conteniendo el shading GRIS (alpha→luminancia) + el shading de color debajo; dedup por firma como shadings. El warning «alpha ignored» de T3-M8 desaparece para stops (opacity de elemento sigue igual). Tests: bytes del pattern (/PatternType 1, XStep, scn), tiling grande SIN cap warning, soft mask (/SMask /Luminosity, shading gris con stops = alphas), Ghostscript visual de gradiente rgba, dedup. Commit: <code>feat(pdf): tiling patterns and gradient alpha via soft masks</code></p>
+</div>
+
+<div class="task">
+<h3>M9-T4 — Engine::bootstrap() preset API</h3>
+<p>Método explícito que encola la hoja vendorizada como PRIMERA hoja author (el CSS del usuario después → gana por orden a especificidad igual, semántica correcta de "preset"). La hoja se lee del package (ruta resources/presets/bootstrap.min.css — mover la fixture o compartir; adjudicado: resources/ es runtime del package, tests/Fixtures apunta ahí para no duplicar). Defaults print del preset: @page margins razonables si el usuario no define @page (solo si preset activo — diseño: el preset es CSS puro, los defaults van como reglas @page en una hoja print-addendum del preset, override-able). README sección preset + ejemplo. Tests: preset + usuario override; sin preset nada cambia; el addendum @page cede ante @page del usuario. Commit: <code>feat(engine): bootstrap preset</code></p>
+</div>
+
+<div class="task">
+<h3>M9-T5 — Oráculo Chrome: Playwright + pixel diff + CI</h3>
+<p><code>tools/oracle/</code>: render-chrome.mjs (Playwright chromium headless: carga fixture HTML con la hoja inline, viewport A4 CSS px (794×1123 @96dpi), deviceScaleFactor 2, screenshot fullPage PNG); render-pliego.php (Engine → PDF → Ghostscript -sDEVICE=png16m -r192); compare.php (REUTILIZA Image\PngImage para decodificar ambos, normaliza tamaños, métrica: % píxeles con max ΔRGB &gt; 24, ignorando píxeles con vecino igual-diferente (máscara antialias 1px), umbral de fallo por fixture configurable, default ≤2%; genera diff.png (rojo donde difiere) con un encoder PNG mínimo (¡solo para el tool, no runtime!)). Corpus inicial: 6 fixtures (tipografía+headings, tabla striped, card+btn+badge, flex layout, lista+blockquote, gradientes+sombras) con umbrales calibrados HONESTOS (documentar el % real de cada una — las aproximaciones (sombras, hyphenation ausente, métricas de fuente distintas Arial vs DejaVu — ¡usar @font-face DejaVu EN CHROME para igualar métricas!) justifican tolerancias; fixture de texto con DejaVu debería clavar &lt;1%). Workflow .github/workflows/oracle.yml: job independiente (no bloquea CI PHP), setup-node + playwright install chromium + ghostscript apt, corre el corpus, sube artefactos (par de PNGs + diff) SIEMPRE, falla si algún fixture supera su umbral. Local: <code>composer oracle</code> script si node disponible. Commit: <code>ci: chrome-as-oracle visual regression pipeline</code></p>
+</div>
+
+<div class="task">
+<h3>M9-T6 — E2E página Bootstrap completa, README, playground</h3>
+<p>E2E: una PÁGINA Bootstrap real (markup de la doc oficial de componentes: navbar simplificada, grid de cards, tabla, alerts, badges, botones) con Engine::bootstrap() → renderiza multipágina, warnings = el snapshot auditado de T2 (subset), Ghostscript, y COMO FIXTURE DEL ORÁCULO (la séptima — su umbral documentado honesto). README: sección M9 (preset, oráculo, tabla de fidelidad por fixture con los % reales — transparencia radical), estado del proyecto actualizado (esto ya es usable para reports/facturas/emails). Playground: botón "Bootstrap preset" (checkbox que activa Engine::bootstrap() en el POST) + sample bootstrap-flavored. Commit: <code>test: full bootstrap page e2e; oracle fixture, README and playground for M9</code></p>
+</div>
+
+</body>
+</html>
