@@ -1016,19 +1016,23 @@ complete honest partition just like the Bootstrap audit.
   rank order (css-cascade-5, reduced: no recursion into a nested `@layer`,
   and layered `!important` doesn't invert cross-layer precedence per
   §4.4 — one document-wide warning instead).
-- `:nth-child(odd)`/`:nth-child(even)` (Tailwind's own table-striping
-  idiom) and CSS custom properties/`calc()` (Tailwind's entire spacing
-  scale is `calc(var(--spacing) * N)`).
+- Hand-written `:nth-child(odd)`/`:nth-child(even)` CSS pseudo-classes
+  (used in the sample at line 208) and CSS custom properties/`calc()`
+  (Tailwind's entire spacing scale is `calc(var(--spacing) * N)`). Note:
+  Tailwind's own `odd:` and `even:` **utilities** do **not** work — they
+  compile to CSS nesting which sabberworm mishandles (see below).
 
 ### What doesn't, and why
 
 - **Variant classes never apply**: `hover:`, `sm:`, `md:`, `dark:`,
-  `odd:`, `even:`, … all fail to match. Tailwind escapes the colon in the
-  generated selector (`.hover\:bg-blue-600`), and this engine's
-  `SelectorParser` tokenizes class names with a plain CSS-ident regex that
-  doesn't accept a backslash escape — the whole compound selector fails to
-  parse (`invalid-selector`, one warning per variant class encountered).
-  Static (non-variant) utilities on the same element are unaffected.
+  `odd:`, `even:`, … all fail to match. Tailwind v4 compiles these to CSS
+  nesting rules (e.g., `.odd\:bg-white { &:nth-child(odd) {...} }`), and
+  sabberworm (the CSS parser) mishandles `&` nesting — it returns an empty
+  block **and silently drops all subsequent rules in the stylesheet** (a
+  verified regression, see M10-T4's report for details). The escaped colon
+  in the class name (`.odd\:bg-white`) is secondary; the nesting
+  mis-handling is the primary cause. Static (non-variant) utilities on the
+  same element are unaffected.
 - **Fraction utilities fail the exact same way**: `w-1/2`, `h-1/2`, …
   Tailwind escapes the `/` as `\/` in the class name for the identical
   reason above — the same backslash-escape gap, not a fraction-math
@@ -1052,10 +1056,14 @@ complete honest partition just like the Bootstrap audit.
   property) are dropped with a single aggregated warning; animation/
   transition support is out of scope for a paginated PDF regardless.
 
-None of this is silent — every gap above surfaces as a real entry in
-`RenderReport::$warnings` (the same list the playground's warnings panel
-renders), and the counts above come from ingesting the **entire** real
-build with zero exceptions carved out, not a cherry-picked sample.
+Most gaps surface as warnings, except nested variant rules: when
+sabberworm mishandles `&` nesting (see the bullet above), it silently
+drops all subsequent rules until the next top-level rule, with zero
+warning emitted — a data loss risk tracked in the roadmap. All other gaps
+above surface as real entries in `RenderReport::$warnings` (the same list
+the playground's warnings panel renders), and the counts come from
+ingesting the **entire** real build with zero exceptions carved out, not a
+cherry-picked sample.
 
 ### Why no preflight preset
 
