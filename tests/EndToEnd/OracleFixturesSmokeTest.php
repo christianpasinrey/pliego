@@ -33,9 +33,10 @@ function oracleSmokeRender(string $fixturePath): array
 {
     $html = (string) file_get_contents($fixturePath);
     $css = FixtureHtml::extractCss($html, dirname($fixturePath));
+    $htmlStripped = FixtureHtml::stripStyleTags($html);
     $stream = fopen('php://memory', 'r+b');
     assert($stream !== false);
-    $report = Engine::make()->basePath(dirname($fixturePath))->stylesheet($css)->render($html)->toStream($stream);
+    $report = Engine::make()->basePath(dirname($fixturePath))->stylesheet($css)->render($htmlStripped)->toStream($stream);
     rewind($stream);
     return [(string) stream_get_contents($stream), $report];
 }

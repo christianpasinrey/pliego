@@ -81,4 +81,28 @@ final class FixtureHtml
         $parts = array_filter([...$linkedCss, self::extractInlineCss($html)], static fn(string $css): bool => $css !== '');
         return implode("\n", $parts);
     }
+
+    /**
+     * Removes all `<style>...</style>` blocks from the HTML while preserving all other content.
+     * This is needed to prevent Engine::render() from emitting a spurious "style-tag-ignored"
+     * warning after the CSS has been extracted and applied via ->stylesheet() -- the engine
+     * has no HTML parsing of <style> tags (by design: CSS and HTML are two separate strings),
+     * so any remaining <style> tags are truly ignored (see Engine.php M9-T6 for the warning).
+     *
+     * Keeps <link> tags intact -- they are already ignored by the engine without warning.
+     */
+    public static function stripStyleTags(string $html): string
+    {
+        if (preg_match_all('/<style\b[^>]*>(.*?)<\/style>/is', $html, $matches, PREG_OFFSET_CAPTURE) === false) {
+            throw new \RuntimeException('FixtureHtml: regex failure while stripping <style> tags.');
+        }
+
+        // Process matches in reverse order to maintain correct string positions as we remove them
+        $positions = array_reverse($matches[0]);
+        foreach ($positions as [$fullMatch, $offset]) {
+            $html = substr_replace($html, '', $offset, strlen($fullMatch));
+        }
+
+        return $html;
+    }
 }

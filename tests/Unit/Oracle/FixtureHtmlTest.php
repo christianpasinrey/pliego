@@ -70,3 +70,49 @@ it('extractCss(): throws when a linked stylesheet file does not exist', function
 
     FixtureHtml::extractCss($html, $dir);
 })->throws(RuntimeException::class);
+
+// --- stripStyleTags(): M9-T5, removes <style>...</style> blocks while keeping <link> tags
+// intact -- needed to prevent spurious "style-tag-ignored" warnings after CSS extraction. ---
+
+it('stripStyleTags(): removes a single <style> block', function () {
+    $html = '<html><head><style>h1 { color: red; }</style></head><body><p>text</p></body></html>';
+    $stripped = FixtureHtml::stripStyleTags($html);
+
+    expect($stripped)->not()->toContain('<style>');
+    expect($stripped)->not()->toContain('h1 { color: red; }');
+    expect($stripped)->toContain('<p>text</p>');
+    expect($stripped)->toContain('<html>');
+    expect($stripped)->toContain('</body>');
+});
+
+it('stripStyleTags(): removes multiple <style> blocks in any location', function () {
+    $html = '<head><style>a{}</style></head><body><style>b{}</style><p>content</p></body>';
+    $stripped = FixtureHtml::stripStyleTags($html);
+
+    expect($stripped)->toBe('<head></head><body><p>content</p></body>');
+});
+
+it('stripStyleTags(): preserves <link> tags (e.g. Bootstrap)', function () {
+    $html = '<head><link rel="stylesheet" href="bootstrap.css"><style>p{margin:0}</style></head><body>text</body>';
+    $stripped = FixtureHtml::stripStyleTags($html);
+
+    expect($stripped)->toContain('<link rel="stylesheet" href="bootstrap.css">');
+    expect($stripped)->not()->toContain('<style>');
+    expect($stripped)->toContain('text');
+});
+
+it('stripStyleTags(): preserves <style> tags with attributes (type, media, etc.) by removing the whole tag', function () {
+    $html = '<style type="text/css" media="print">h1 { font-size: 20pt; }</style><p>content</p>';
+    $stripped = FixtureHtml::stripStyleTags($html);
+
+    expect($stripped)->not()->toContain('<style');
+    expect($stripped)->not()->toContain('font-size');
+    expect($stripped)->toContain('<p>content</p>');
+});
+
+it('stripStyleTags(): returns unchanged HTML when there is no <style> tag', function () {
+    $html = '<html><head><link rel="stylesheet" href="style.css"></head><body><p>no css</p></body></html>';
+    $stripped = FixtureHtml::stripStyleTags($html);
+
+    expect($stripped)->toBe($html);
+});

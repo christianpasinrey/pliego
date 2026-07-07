@@ -92,8 +92,14 @@ function main(): void
         // optional). Backward compatible with fixtures 01-06 (no <link> at all).
         $css = FixtureHtml::extractCss($html, $fixturesDir);
 
+        // Strip <style> tags from the HTML before rendering: Engine::render() has no HTML parsing
+        // of <style> tags (by design: CSS and HTML are separate strings), so any remaining <style>
+        // blocks would trigger a spurious "style-tag-ignored" warning. FixtureHtml::stripStyleTags()
+        // removes the <style>...</style> blocks while keeping <link> tags intact.
+        $htmlStripped = FixtureHtml::stripStyleTags($html);
+
         $pdfPath = $outDir . "/$number-pliego.pdf";
-        $report = Engine::make()->basePath($fixturesDir)->stylesheet($css)->render($html)->save($pdfPath);
+        $report = Engine::make()->basePath($fixturesDir)->stylesheet($css)->render($htmlStripped)->save($pdfPath);
 
         if ($report->pageCount !== 1) {
             fwrite(
