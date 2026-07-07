@@ -236,6 +236,20 @@ final class DeclarationParser
         if ($property === 'background-image') {
             return $this->parseBackgroundImageValue($value);
         }
+        // M8-T6 (css-backgrounds-3 §4 reducido): las 3 longhands independientes que gobiernan
+        // CÓMO se pinta un background-image (escalado/tiling/origen) -- ninguna hereda (ver
+        // ComputedStyle::compute(), mismo patrón "initial value siempre, nunca $parent->X" que
+        // overflow/box-sizing), así que cada una se resuelve fresca aquí, sin relación con el
+        // cascade de $declarations más allá del merge normal por clave.
+        if ($property === 'background-size') {
+            return $this->parseBackgroundSize($value);
+        }
+        if ($property === 'background-repeat') {
+            return $this->parseBackgroundRepeat($value);
+        }
+        if ($property === 'background-position') {
+            return $this->parseBackgroundPositionValue($value);
+        }
         // M8-T4 (css-backgrounds-3 §6 reducido): box-shadow -- ver parseBoxShadowValue() para la
         // gramática soportada (sin inset/spread/multi-shadow reales, ver su docblock).
         if ($property === 'box-shadow') {
@@ -780,42 +794,169 @@ final class DeclarationParser
             // rule declarations key-by-key, in cascade order -- omitting the key here would let
             // that earlier value silently survive; `$declarations[$k] ?? null` in
             // ComputedStyle::compute() treats an explicit null exactly like "never declared").
-            return ['background-gradient' => $gradient, 'background-color' => null];
+            // M8-T6: += 'background-image' => null -- the reset TRIO now covers all 3 sub-values
+            // this reduced shorthand can carry (color XOR gradient XOR image, see this method's
+            // url() branch below), so a gradient value must ALSO clear a previously-cascaded
+            // background-image, same reasoning as the color reset just below.
+            return ['background-gradient' => $gradient, 'background-color' => null, 'background-image' => null];
         }
         if (stripos($trimmed, 'url(') === 0) {
-            return $this->warn("Unsupported background (url() images land in a later milestone): $value");
+            $rawPath = $this->extractUrlBody($trimmed);
+            if ($rawPath === null) {
+                return $this->warn("Unsupported background url(): $value");
+            }
+            // M8-T6: full reset trio (per the brief: "background shorthand resets siblings"
+            // extended to all 3 sub-properties) -- a url() value resets BOTH background-color and
+            // background-gradient, mirroring the gradient/color branches above/below.
+            return ['background-image' => $rawPath, 'background-color' => null, 'background-gradient' => null];
         }
         $color = Color::fromCss($trimmed);
         if ($color !== null) {
             // code review Finding 1 (symmetric case): a color value resets background-gradient to
             // its initial 'none' the same way -- see the docblock above for why an explicit null
             // (not an omitted key) is required for the reset to actually win the cascade merge.
-            return ['background-color' => $color, 'background-gradient' => null];
+            // M8-T6: += 'background-image' => null, same reset-trio discipline as the other 2
+            // branches.
+            return ['background-color' => $color, 'background-gradient' => null, 'background-image' => null];
         }
         return $this->warn("Unsupported background shorthand: $value");
     }
 
     /**
-     * M8-T3: `background-image: <gradient-function> | url(...) | none` -- misma detección que el
-     * shorthand de arriba (ver su docblock), sin la rama de color (background-image nunca acepta
-     * un color liso).
+     * M8-T3/M8-T6: `background-image: <gradient-function> | url(...) | none` -- misma detección
+     * que el shorthand de arriba (ver su docblock), sin la rama de color (background-image nunca
+     * acepta un color liso). M8-T6: url(...) implementado de verdad (antes caía a un warning de
+     * "milestone posterior") -- extractUrlBody() ya validó el paréntesis balanceado y despojó las
+     * comillas opcionales, así que el raw path que llega a ComputedStyle es SIEMPRE la ruta cruda
+     * tal cual la escribió el autor (sin basePath resuelto -- eso ocurre en tiempo de PINTADO, ver
+     * Paint\Painter::paintBackgroundImage(), arquitectura M8-T6).
      *
      * @return array<string, mixed>
      */
     private function parseBackgroundImageValue(string $value): array
     {
         if (strtolower(trim($value)) === 'none') {
-            return ['background-gradient' => null];
+            // M8-T6: 'none' resetea AMBOS -- gradient (ya desde T3) Y image (extensión de esta
+            // tarea) -- un autor puede sobreescribir cualquiera de los dos con 'none' y el otro
+            // debe desaparecer igual (mismo argumento de reset explícito que el resto de este
+            // método: null, no ausencia de clave, para ganar el merge del cascade).
+            return ['background-gradient' => null, 'background-image' => null];
         }
         $trimmed = $this->firstBackgroundLayer($value);
         if ($this->isGradientFunction($trimmed)) {
             $gradient = $this->parseGradientFunction($trimmed);
-            return $gradient === null ? [] : ['background-gradient' => $gradient];
+            // M8-T6: un gradiente declarado en 'background-image' TAMBIÉN resetea 'background-image'
+            // a null -- mismo argumento de reset-trio que el shorthand (arriba): esta longhand
+            // puede llevar gradient XOR image, así que una cascada `background-image: url(a.jpg)`
+            // seguida de `background-image: linear-gradient(...)` en una regla más específica debe
+            // dejar SOLO el gradiente vivo, nunca ambos.
+            return $gradient === null ? [] : ['background-gradient' => $gradient, 'background-image' => null];
         }
         if (stripos($trimmed, 'url(') === 0) {
-            return $this->warn("Unsupported background-image (url() images land in a later milestone): $value");
+            $rawPath = $this->extractUrlBody($trimmed);
+            if ($rawPath === null) {
+                return $this->warn("Unsupported background-image url(): $value");
+            }
+            // M8-T6: setting an image resets a previously-cascaded gradient, mirroring the
+            // gradient branch above (both directions of the XOR now reset the other).
+            return ['background-image' => $rawPath, 'background-gradient' => null];
         }
         return $this->warn("Unsupported background-image: $value");
+    }
+
+    /**
+     * M8-T6 (css-images-3 §3.1 reducido): extrae el cuerpo de `url(...)` -- reutiliza
+     * functionArgs() (ya usado por parseGradientFunction(), garantiza paréntesis balanceados que
+     * coinciden EXACTAMENTE con el final de la cadena) y despoja UNA capa opcional de comillas
+     * simples O dobles que coincidan (comillas son opcionales en la gramática real de url(),
+     * css-values-4 §4.5). `null` si los paréntesis no están balanceados, o si las comillas no
+     * coinciden en ambos lados (p.ej. `url('a.jpg")`, un error de autor) -- el llamador convierte
+     * eso en el warning genérico correspondiente.
+     */
+    private function extractUrlBody(string $trimmed): ?string
+    {
+        $inner = $this->functionArgs($trimmed);
+        if ($inner === null) {
+            return null;
+        }
+        $inner = trim($inner);
+        if ($inner === '') {
+            return null;
+        }
+        $first = $inner[0];
+        $last = $inner[strlen($inner) - 1];
+        $isQuoted = ($first === '"' || $first === '\'') && strlen($inner) >= 2;
+        if ($isQuoted) {
+            if ($last !== $first) {
+                return null;
+            }
+            return substr($inner, 1, -1);
+        }
+        return $inner;
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): `background-size: auto | cover | contain` -- ÚNICOS 3
+     * keywords soportados en este subset de milestone; cualquier otra cosa (una longitud, un
+     * porcentaje, o la forma de dos valores `<size> <size>`) cae al warning genérico y la
+     * declaración se descarta ENTERA (sin clave 'background-size'), resolviendo al default Auto de
+     * ComputedStyle::compute() -- mismo patrón "warning + sin declaración = fallback al initial
+     * value" que el resto de KEYWORD_PROPERTIES de este parser.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundSize(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        return match ($keyword) {
+            'auto' => ['background-size' => 'auto'],
+            'cover' => ['background-size' => 'cover'],
+            'contain' => ['background-size' => 'contain'],
+            default => $this->warn("Unsupported background-size (only auto|cover|contain supported in M8): $value"),
+        };
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): `background-repeat: no-repeat | repeat` -- se
+     * resuelve directamente a bool (true = tiling, false = una sola instancia) porque
+     * ComputedStyle::$backgroundRepeat/BoxFragment::$backgroundRepeat son bool, sin un enum
+     * intermedio (a diferencia de background-size/background-position, que sí necesitan un enum
+     * porque tienen 3+/2+ estados). repeat-x/repeat-y/space/round (y cualquier otro valor) caen al
+     * warning genérico + sin declaración, resolviendo al default false (no-repeat) de
+     * ComputedStyle::compute().
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundRepeat(string $value): array
+    {
+        $keyword = strtolower(trim($value));
+        return match ($keyword) {
+            'no-repeat' => ['background-repeat' => false],
+            'repeat' => ['background-repeat' => true],
+            default => $this->warn("Unsupported background-repeat (only no-repeat|repeat supported in M8): $value"),
+        };
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): `background-position: center | top left | left top`
+     * -- 'top left'/'left top' son el MISMO punto (esquina superior-izquierda, el default real del
+     * spec) así que ambas grafías colapsan al mismo raw value canónico ('top left') antes de
+     * llegar a ComputedStyle::compute(), que solo necesita distinguir dos casos (ver
+     * Style\BackgroundPosition). Espacios repetidos se normalizan (`preg_replace('/\s+/', ' ', ...)`)
+     * para que "top   left" o un solo espacio final también matcheen. Cualquier otro valor
+     * (porcentajes, longitudes, un solo keyword lateral como "right", "bottom right", etc.) cae al
+     * warning genérico + sin declaración, resolviendo al default TopLeft de ComputedStyle::compute().
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundPositionValue(string $value): array
+    {
+        $normalized = strtolower(trim((string) preg_replace('/\s+/', ' ', trim($value))));
+        return match ($normalized) {
+            'center' => ['background-position' => 'center'],
+            'top left', 'left top' => ['background-position' => 'top left'],
+            default => $this->warn("Unsupported background-position (only center|top left supported in M8): $value"),
+        };
     }
 
     /**

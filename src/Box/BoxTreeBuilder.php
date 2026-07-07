@@ -9,6 +9,7 @@ use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\WarningCollector;
 use Pliego\Image\ImageException;
 use Pliego\Image\ImageLoader;
+use Pliego\Image\ImagePathResolver;
 use Pliego\Style\ComputedStyle;
 use Pliego\Style\Display;
 use Pliego\Style\Position;
@@ -194,6 +195,15 @@ final class BoxTreeBuilder
         // lo excluido avisa"). El propio box-shadow nunca se pinta de todas formas (M8), así que
         // forzar el camino solo sirve para llegar hasta ese warning.
         if ($style->boxShadow !== null) {
+            return true;
+        }
+        // M8-T6 (brief: "InlineBoxFragment: NO background-image support M8 -- declarado en inline
+        // -> warning, documentado"): mismo motivo exacto que $boxShadow justo arriba -- un
+        // background-image en un <span> SIN ningún otro CSS de caja visible debe seguir tomando el
+        // camino InlineBoxStart/InlineBoxEnd, o el warning de InlineFlowContext::
+        // buildInlineBoxFragment() (el único sitio que lo emite) nunca llegaría a dispararse,
+        // dejando el background-image "silenciosamente" descartado sin aviso.
+        if ($style->backgroundImagePath !== null) {
             return true;
         }
         $nonZero = static fn(LengthPercentage $lp): bool => $lp->calc !== null || $lp->value !== 0.0;
@@ -532,12 +542,14 @@ final class BoxTreeBuilder
         );
     }
 
-    /** src relativo se resuelve contra basePath (Engine::basePath(), default getcwd()); un src ya
-     * absoluto (unix "/..." o Windows "C:\..."/"C:/...") se usa tal cual. */
+    /** M8-T6: delegado en Image\ImagePathResolver (extraído VERBATIM de aquí) -- ver su docblock
+     * de clase para el porqué (background-image, parseado en Css\ pero resuelto/cargado en tiempo
+     * de pintado por Paint\Painter, necesita la MISMA resolución para que Pdf\ImageRegistry
+     * deduplique un <img> y un background-image que apunten al mismo fichero bajo una única
+     * entrada). Comportamiento byte-idéntico a antes de esta tarea. */
     private function resolvePath(string $src): string
     {
-        $isAbsolute = str_starts_with($src, '/') || preg_match('#^[a-zA-Z]:[\\\\/]#', $src) === 1;
-        return $isAbsolute ? $src : rtrim($this->basePath, '/\\') . '/' . $src;
+        return ImagePathResolver::resolve($this->basePath, $src);
     }
 
     /** Valores <= 0 se tratan como ausentes (null), igual que los navegadores ignoran un

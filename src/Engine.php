@@ -166,7 +166,12 @@ final class Engine
             // M8-T2: comparte el MISMO WarningCollector que Style/Box/Layout (ver arriba) -- así
             // "mixed border widths with border-radius approximated" sale por el mismo
             // $layoutWarnings->drain() de más abajo, junto con cualquier otro warning del render.
-            $painter = new Painter($catalog, $layoutWarnings);
+            // M8-T6: $imageLoader (la MISMA instancia que BoxTreeBuilder ya usó para <img>, ver
+            // arriba -- memoización compartida por path, dedup de decodificación) y
+            // $this->basePath (el MISMO basePath que BoxTreeBuilder ya usó para resolver rutas
+            // relativas) -- background-image se carga en tiempo de PINTADO, ver Paint\Painter::
+            // paintBackgroundImage().
+            $painter = new Painter($catalog, $imageLoader, $this->basePath, $layoutWarnings);
             // M2-T7: margin boxes with counter(pages) can't be painted while streaming (the total
             // page count is only known once every page is laid out) — see MarginBoxPainter's
             // docblock for the deferred-XObject design and PdfWriter's for the ordering contract

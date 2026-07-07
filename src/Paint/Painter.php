@@ -10,6 +10,9 @@ use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
 use Pliego\Css\WarningCollector;
+use Pliego\Image\ImageException;
+use Pliego\Image\ImageLoader;
+use Pliego\Image\ImagePathResolver;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
@@ -19,6 +22,8 @@ use Pliego\Layout\Fragment\InlineBoxFragment;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 use Pliego\Text\FontCatalog;
 
 final readonly class Painter
@@ -37,8 +42,23 @@ final readonly class Painter
      * Box/Layout (ver Engine::render()), así que el aviso de "mixed border widths with
      * border-radius approximated" (ver paintBorders()) sale por el mismo canal que cualquier otro
      * warning del render.
+     *
+     * M8-T6 (css-backgrounds-3 §4 reducido): $images/$basePath, AMBOS obligatorios (sin default) --
+     * background-image se carga EN TIEMPO DE PINTADO (arquitectura M8-T6, a diferencia de <img>,
+     * que Box\BoxTreeBuilder carga en tiempo de LAYOUT) para mantener Layout puro (ver el brief de
+     * esta tarea); $images es la MISMA instancia de Image\ImageLoader que Engine ya construye y
+     * pasa a Box\BoxTreeBuilder (memoización compartida por path, ver el docblock de esa clase --
+     * un <img> y un background-image que apunten al mismo fichero decodifican UNA sola vez).
+     * $basePath es el MISMO Engine::basePath() contra el que Box\BoxTreeBuilder ya resuelve los
+     * `src` relativos de <img> (ver Image\ImagePathResolver, extraído de ahí en esta misma tarea
+     * para que ambos caminos de resolución nunca puedan divergir).
      */
-    public function __construct(private FontCatalog $catalog, private ?WarningCollector $warnings = null) {}
+    public function __construct(
+        private FontCatalog $catalog,
+        private ImageLoader $images,
+        private string $basePath,
+        private ?WarningCollector $warnings = null,
+    ) {}
 
     public function paint(Page $page, Canvas $canvas): void
     {
@@ -69,7 +89,18 @@ final readonly class Painter
             // withOpacity() — no-op si opacity es 1.0, ver su docblock) — los HIJOS (pintados más
             // abajo, vía recursión) NO reciben esta opacity (divergencia M6 documentada, ver
             // ComputedStyle::$opacity): cada uno trae la SUYA propia.
-            $this->paintBackground($fragment->rect, $fragment->background, $fragment->backgroundGradient, $fragment->opacity, $fragment->borderRadius, $canvas);
+            $this->paintBackground(
+                $fragment->rect,
+                $fragment->background,
+                $fragment->backgroundGradient,
+                $fragment->backgroundImagePath,
+                $fragment->backgroundSize,
+                $fragment->backgroundRepeat,
+                $fragment->backgroundPosition,
+                $fragment->opacity,
+                $fragment->borderRadius,
+                $canvas,
+            );
             $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $fragment->borderRadius, $canvas);
             // M7-T5 (css-overflow-3): $clipsChildren envuelve SOLO a los descendientes en un
             // scope de recorte PDF (Canvas::clipRect()/restoreClip()) al rect BORDER-BOX de ESTA
@@ -107,7 +138,20 @@ final readonly class Painter
             // lógica de slice-awareness propia, solo pinta lo que trae el BorderSet. M8-T2:
             // $fragment->borderRadius llega YA con las esquinas no-extremas a cero (misma
             // convención de slice, ver InlineFlowContext::buildInlineBoxFragment()).
-            $this->paintBackground($fragment->rect, $fragment->background, $fragment->backgroundGradient, $fragment->opacity, $fragment->borderRadius, $canvas);
+            // M8-T6: InlineBoxFragment nunca lleva background-image (ver su docblock/el de
+            // BoxFragment::$backgroundImagePath) -- se pasan los defaults "sin imagen" explícitos.
+            $this->paintBackground(
+                $fragment->rect,
+                $fragment->background,
+                $fragment->backgroundGradient,
+                null,
+                BackgroundSize::Auto,
+                false,
+                BackgroundPosition::TopLeft,
+                $fragment->opacity,
+                $fragment->borderRadius,
+                $canvas,
+            );
             $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $fragment->borderRadius, $canvas);
         } elseif ($fragment instanceof TextFragment) {
             // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
@@ -243,8 +287,28 @@ final readonly class Painter
      * es la interpretación correcta del spec y barata de mantener). Canvas::paintGradient() recibe
      * el MISMO $radius (recorta a la curva del border-box, igual criterio que fillRoundedRect()).
      */
-    private function paintBackground(Rect $rect, ?Color $background, ?Gradient $gradient, float $opacity, BorderRadius $radius, Canvas $canvas): void
-    {
+    /**
+     * M8-T6: orden de pintado extendido a 3 capas -- background-color (ya existía), LUEGO
+     * background-image (esta tarea), LUEGO background-gradient (M8-T3, sin cambios de orden
+     * respecto a antes). En la práctica imagen y gradiente nunca coexisten (DeclarationParser::
+     * firstBackgroundLayer() solo conserva la PRIMERA capa CSS, y las ramas url()/gradient()/color
+     * de background-image/background son mutuamente excluyentes -- ver DeclarationParser::
+     * parseBackgroundImageValue()/parseBackgroundShorthand(), cada una resetea explícitamente a
+     * null la otra), pero el orden se documenta de todas formas en vez de dar por sentado "solo uno
+     * puede estar declarado".
+     */
+    private function paintBackground(
+        Rect $rect,
+        ?Color $background,
+        ?Gradient $gradient,
+        ?string $backgroundImagePath,
+        BackgroundSize $backgroundSize,
+        bool $backgroundRepeat,
+        BackgroundPosition $backgroundPosition,
+        float $opacity,
+        BorderRadius $radius,
+        Canvas $canvas,
+    ): void {
         if ($background !== null) {
             $color = $background->withOpacity($opacity);
             if ($radius->isZero()) {
@@ -253,9 +317,138 @@ final readonly class Painter
                 $canvas->fillRoundedRect($rect, $radius, $color);
             }
         }
+        if ($backgroundImagePath !== null) {
+            $this->paintBackgroundImage($rect, $backgroundImagePath, $backgroundSize, $backgroundRepeat, $backgroundPosition, $opacity, $radius, $canvas);
+        }
         if ($gradient !== null) {
             $canvas->paintGradient($rect, $gradient, $radius);
         }
+    }
+
+    /**
+     * M8-T6 (css-backgrounds-3 §4 reducido): carga (o falla suavemente) y pinta un
+     * background-image dentro de un clip del border-box (radius-aware, mismo criterio que
+     * $clipsChildren de Paint\Painter::paintFragment() -- pero un ámbito de clip INDEPENDIENTE,
+     * abierto y cerrado aquí mismo, nunca compartido con el de overflow:hidden). $rawPath es el
+     * valor CRUDO tal cual lo dejó ComputedStyle::$backgroundImagePath (sin resolver contra ningún
+     * basePath todavía, ver su docblock) -- se resuelve aquí, en tiempo de pintado, contra
+     * $this->basePath vía Image\ImagePathResolver (el MISMO helper que Box\BoxTreeBuilder usa para
+     * `<img src="...">`, condición necesaria para que Pdf\ImageRegistry deduplique un <img> y un
+     * background-image que compartan fichero bajo un único XObject).
+     *
+     * Fallo suave (fichero ausente, formato no soportado, etc.): un warning y `return` inmediato --
+     * el background-color, si lo hay, YA se pintó (llamador: paintBackground()) y sigue visible;
+     * nada más se pinta (ni siquiera se abre el clip).
+     *
+     * Geometría (adjudicaciones M8-T6, ver el brief de la tarea, hand-verificadas en PainterTest):
+     *   - auto: tamaño = intrínseco de la imagen (px, 96dpi, igual que <img>), sin escalar.
+     *     Posición: top-left (default) -> origen = origen de la caja; center -> origen = origen +
+     *     (tamaño caja - tamaño imagen)/2 (puede ser negativo, el clip se encarga del overflow).
+     *   - cover: scale = max(boxW/imgW, boxH/imgH); tamaño = imagen×scale; SIEMPRE centrado
+     *     (adjudicación M8: cover ignora background-position en este modelo reducido) --
+     *     hand-verificado: imagen 300×150 en caja 200×200 -> scale=max(200/300,200/150)=1.333...
+     *     -> destino 400×200, centrado -> offset (-100, 0) relativo al origen de la caja.
+     *   - contain: scale = min(boxW/imgW, boxH/imgH); tamaño = imagen×scale; posición según
+     *     background-position (igual que auto) -- el letterboxing (el background-color, ya pintado
+     *     debajo) se ve solo porque el área sobrante del clip queda intacta, sin nada extra que
+     *     hacer aquí. Hand-verificado: misma imagen/caja -> scale=min(200/300,200/150)=0.667 ->
+     *     destino 200×100.
+     *   - repeat=true: SIEMPRE tilea la imagen a su tamaño INTRÍNSECO (auto), sin importar lo que
+     *     $backgroundSize resolviera (adjudicación M8: "tile the AUTO-sized image n×m" del brief --
+     *     repeat manda sobre size para las dimensiones del tile en este modelo reducido) -- grid
+     *     n=ceil(boxW/imgW) × m=ceil(boxH/imgH) tiles desde el origen de posición, cada uno
+     *     dibujado ENTERO (nunca recortado a un tamaño parcial) -- el clip se encarga de cortar los
+     *     tiles de borde que sobresalen. `background-position: center` combinado con repeat es una
+     *     combinación no soportada en este modelo reducido -- warning UNA vez, se sigue tileando
+     *     desde top-left (repeat permanece true, no se degrada a no-repeat).
+     */
+    private function paintBackgroundImage(
+        Rect $rect,
+        string $rawPath,
+        BackgroundSize $size,
+        bool $repeat,
+        BackgroundPosition $position,
+        float $opacity,
+        BorderRadius $radius,
+        Canvas $canvas,
+    ): void {
+        $resolved = ImagePathResolver::resolve($this->basePath, $rawPath);
+        try {
+            $decoded = $this->images->load($resolved);
+        } catch (ImageException $e) {
+            $this->warnings?->addWarning("Could not load background image \"$rawPath\": " . $e->getMessage());
+            return;
+        }
+        $imgW = (float) $decoded->widthPx();
+        $imgH = (float) $decoded->heightPx();
+        if ($imgW <= 0.0 || $imgH <= 0.0) {
+            // Guardia defensiva -- un JPEG/PNG decodificado con éxito nunca reporta dimensión cero
+            // en la práctica, pero evita una división por cero / bucle infinito de tiling si
+            // alguna vez ocurriera.
+            return;
+        }
+        if ($radius->isZero()) {
+            $canvas->clipRect($rect);
+        } else {
+            $canvas->clipRoundedRect($rect, $radius);
+        }
+        if ($repeat) {
+            if ($position === BackgroundPosition::Center) {
+                $this->warnings?->addWarningOnce(
+                    'background-repeat-center-origin',
+                    'background-repeat with background-position:center is not supported (M8): tiling from top-left',
+                );
+            }
+            $cols = (int) ceil($rect->width / $imgW);
+            $rows = (int) ceil($rect->height / $imgH);
+            for ($row = 0; $row < $rows; $row++) {
+                for ($col = 0; $col < $cols; $col++) {
+                    $tile = new Rect($rect->x + $col * $imgW, $rect->y + $row * $imgH, $imgW, $imgH);
+                    $canvas->drawImage($tile, $resolved, $opacity);
+                }
+            }
+            $canvas->restoreClip();
+            return;
+        }
+        $dest = match ($size) {
+            BackgroundSize::Cover => self::coverDestRect($rect, $imgW, $imgH),
+            BackgroundSize::Contain => self::sizedDestRect($rect, $imgW, $imgH, min($rect->width / $imgW, $rect->height / $imgH), $position),
+            BackgroundSize::Auto => self::sizedDestRect($rect, $imgW, $imgH, 1.0, $position),
+        };
+        $canvas->drawImage($dest, $resolved, $opacity);
+        $canvas->restoreClip();
+    }
+
+    /** cover: escala = max(boxW/imgW, boxH/imgH), SIEMPRE centrado (ignora $position -- adjudicación
+     *  M8, ver el docblock de paintBackgroundImage()). */
+    private static function coverDestRect(Rect $rect, float $imgW, float $imgH): Rect
+    {
+        $scale = max($rect->width / $imgW, $rect->height / $imgH);
+        $w = $imgW * $scale;
+        $h = $imgH * $scale;
+        return new Rect(
+            $rect->x + ($rect->width - $w) / 2.0,
+            $rect->y + ($rect->height - $h) / 2.0,
+            $w,
+            $h,
+        );
+    }
+
+    /** auto ($scale=1.0) / contain (scale=min(boxW/imgW, boxH/imgH)): posicionado según
+     *  $position -- top-left (default) ancla al origen de la caja; center centra en ambos ejes
+     *  (puede dar un offset negativo para auto, si la imagen es más grande que la caja -- el clip
+     *  de paintBackgroundImage() se encarga del overflow). */
+    private static function sizedDestRect(Rect $rect, float $imgW, float $imgH, float $scale, BackgroundPosition $position): Rect
+    {
+        $w = $imgW * $scale;
+        $h = $imgH * $scale;
+        $x = $rect->x;
+        $y = $rect->y;
+        if ($position === BackgroundPosition::Center) {
+            $x += ($rect->width - $w) / 2.0;
+            $y += ($rect->height - $h) / 2.0;
+        }
+        return new Rect($x, $y, $w, $h);
     }
 
     /**

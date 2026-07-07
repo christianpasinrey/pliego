@@ -586,6 +586,11 @@ final class BlockFlowContext implements FormattingContext
             backgroundGradient: $style->backgroundGradient,
             // M8-T4: VO YA resuelto a px -- ver el docblock de BoxFragment::$boxShadow.
             boxShadow: $style->boxShadow,
+            // M8-T6: raw path sin resolver -- ver el docblock de BoxFragment::$backgroundImagePath.
+            backgroundImagePath: $style->backgroundImagePath,
+            backgroundSize: $style->backgroundSize,
+            backgroundRepeat: $style->backgroundRepeat,
+            backgroundPosition: $style->backgroundPosition,
         );
 
         // M7-T6 (CSS 2.2 §9.4.3): position:relative -- shift visual PURO, aplicado DESPUÉS de que
@@ -1090,6 +1095,10 @@ final class BlockFlowContext implements FormattingContext
             borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $borderBoxHeight),
             backgroundGradient: $style->backgroundGradient,
             boxShadow: $style->boxShadow,
+            backgroundImagePath: $style->backgroundImagePath,
+            backgroundSize: $style->backgroundSize,
+            backgroundRepeat: $style->backgroundRepeat,
+            backgroundPosition: $style->backgroundPosition,
         );
 
         // M7-T6: un <img> también puede ser position:relative -- mismo shift visual puro que un

@@ -939,13 +939,37 @@ parameters:
 		-
 			message: '#^Cannot access property \$backgroundColor on mixed\.$#'
 			identifier: property.nonObject
-			count: 4
+			count: 5
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot access property \$backgroundGradient on mixed\.$#'
 			identifier: property.nonObject
 			count: 5
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$backgroundImagePath on mixed\.$#'
+			identifier: property.nonObject
+			count: 5
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$backgroundPosition on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$backgroundRepeat on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
+			path: tests/Unit/Style/StyleResolverTest.php
+
+		-
+			message: '#^Cannot access property \$backgroundSize on mixed\.$#'
+			identifier: property.nonObject
+			count: 3
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
@@ -1251,13 +1275,13 @@ parameters:
 		-
 			message: '#^Cannot call method get\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 147
+			count: 152
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-
 			message: '#^Cannot call method querySelector\(\) on mixed\.$#'
 			identifier: method.nonObject
-			count: 133
+			count: 138
 			path: tests/Unit/Style/StyleResolverTest.php
 
 		-

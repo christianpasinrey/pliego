@@ -110,8 +110,25 @@ final readonly class Paginator
         // background/borde/gradiente propios, p.ej. una tarjeta cuyo único CSS de caja es
         // `box-shadow: ...`) también necesita una hoja paintable, mismo motivo que
         // $backgroundGradient (M8-T3, ver su docblock) y el borde-sin-fondo de T5.
-        if ($box->background !== null || $box->borders->isVisible() || $box->backgroundGradient !== null || $box->boxShadow !== null) {
-            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity, borderRadius: $box->borderRadius, backgroundGradient: $box->backgroundGradient, boxShadow: $box->boxShadow);
+        // M8-T6: $backgroundImagePath SE UNE a la condición -- una caja con SOLO background-image
+        // (sin background-color/borde/gradiente/sombra propios, p.ej. `background-image:
+        // url(bg.jpg)` a secas) también necesita una hoja paintable, mismo motivo que
+        // $backgroundGradient (M8-T3) y $boxShadow (M8-T4) más arriba.
+        if ($box->background !== null || $box->borders->isVisible() || $box->backgroundGradient !== null || $box->boxShadow !== null || $box->backgroundImagePath !== null) {
+            yield new BoxFragment(
+                $box->rect,
+                $box->background,
+                [],
+                $box->borders,
+                opacity: $box->opacity,
+                borderRadius: $box->borderRadius,
+                backgroundGradient: $box->backgroundGradient,
+                boxShadow: $box->boxShadow,
+                backgroundImagePath: $box->backgroundImagePath,
+                backgroundSize: $box->backgroundSize,
+                backgroundRepeat: $box->backgroundRepeat,
+                backgroundPosition: $box->backgroundPosition,
+            );
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -155,6 +172,10 @@ final readonly class Paginator
                 $leaf->borderRadius,
                 $leaf->backgroundGradient,
                 $leaf->boxShadow,
+                $leaf->backgroundImagePath,
+                $leaf->backgroundSize,
+                $leaf->backgroundRepeat,
+                $leaf->backgroundPosition,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se

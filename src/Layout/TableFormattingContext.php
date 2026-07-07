@@ -238,6 +238,10 @@ final readonly class TableFormattingContext
             borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
             backgroundGradient: $style->backgroundGradient,
             boxShadow: $style->boxShadow,
+            backgroundImagePath: $style->backgroundImagePath,
+            backgroundSize: $style->backgroundSize,
+            backgroundRepeat: $style->backgroundRepeat,
+            backgroundPosition: $style->backgroundPosition,
         );
     }
 
@@ -450,6 +454,10 @@ final readonly class TableFormattingContext
             opacity: $row->style->opacity,
             backgroundGradient: $row->style->backgroundGradient,
             boxShadow: $row->style->boxShadow,
+            backgroundImagePath: $row->style->backgroundImagePath,
+            backgroundSize: $row->style->backgroundSize,
+            backgroundRepeat: $row->style->backgroundRepeat,
+            backgroundPosition: $row->style->backgroundPosition,
         );
 
         return [$rowFragment, $rowTop + $rowHeight];
@@ -490,6 +498,10 @@ final readonly class TableFormattingContext
             $stretched->borderRadius,
             $stretched->backgroundGradient,
             $stretched->boxShadow,
+            $stretched->backgroundImagePath,
+            $stretched->backgroundSize,
+            $stretched->backgroundRepeat,
+            $stretched->backgroundPosition,
         );
     }
 
@@ -519,6 +531,10 @@ final readonly class TableFormattingContext
             $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
             $fragment->backgroundGradient,
             $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 

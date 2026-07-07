@@ -177,7 +177,7 @@ final readonly class FlexFormattingContext implements FormattingContext
             $lineCross = $declaredContentHeight ?? 0.0;
             $height = $lineCross + $paddingTop + $paddingBottom + $borderTop + $borderBottom;
             $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
-            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow);
+            return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, [], $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow, backgroundImagePath: $style->backgroundImagePath, backgroundSize: $style->backgroundSize, backgroundRepeat: $style->backgroundRepeat, backgroundPosition: $style->backgroundPosition);
         }
 
         if ($style->flexDirection === FlexDirection::Column) {
@@ -240,7 +240,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
         $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow, backgroundImagePath: $style->backgroundImagePath, backgroundSize: $style->backgroundSize, backgroundRepeat: $style->backgroundRepeat, backgroundPosition: $style->backgroundPosition);
     }
 
     /**
@@ -478,6 +478,10 @@ final readonly class FlexFormattingContext implements FormattingContext
             $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
             $fragment->backgroundGradient,
             $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 
@@ -1007,7 +1011,7 @@ final readonly class FlexFormattingContext implements FormattingContext
         $height = ($contentBottom - $y) + $paddingBottom + $borderBottom;
 
         $radius = BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height);
-        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow);
+        return new BoxFragment(new Rect($x, $y, $borderBoxWidth, $height), $style->backgroundColor, $finalFragments, $borders, atomic: true, opacity: $style->opacity, borderRadius: $radius, backgroundGradient: $style->backgroundGradient, boxShadow: $style->boxShadow, backgroundImagePath: $style->backgroundImagePath, backgroundSize: $style->backgroundSize, backgroundRepeat: $style->backgroundRepeat, backgroundPosition: $style->backgroundPosition);
     }
 
     /**

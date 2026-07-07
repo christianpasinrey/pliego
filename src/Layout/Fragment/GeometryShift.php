@@ -49,6 +49,10 @@ final class GeometryShift
             $fragment->borderRadius,
             $fragment->backgroundGradient,
             $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 
@@ -112,6 +116,10 @@ final class GeometryShift
             $fragment->borderRadius,
             $fragment->backgroundGradient,
             $fragment->boxShadow,
+            $fragment->backgroundImagePath,
+            $fragment->backgroundSize,
+            $fragment->backgroundRepeat,
+            $fragment->backgroundPosition,
         );
     }
 

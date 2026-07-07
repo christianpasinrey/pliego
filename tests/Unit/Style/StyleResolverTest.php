@@ -11,6 +11,8 @@ use Pliego\Css\Value\GradientKind;
 use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Style\AlignItems;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 use Pliego\Style\CssStyleSource;
 use Pliego\Style\Display;
 use Pliego\Style\FlexDirection;
@@ -1364,4 +1366,64 @@ it('lets an author rule override an inherited text-transform (cascade)', functio
     $p = $doc->querySelector('p');
     assert($p !== null);
     expect($map->get($p)->textTransform)->toBe(TextTransform::Lowercase);
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-image/size/repeat/position -------------
+
+it('defaults background-image/size/repeat/position at the root (none/Auto/false/TopLeft)', function () {
+    [$doc, $map] = resolveDoc('', '<body><p>x</p></body>');
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->backgroundImagePath)->toBeNull();
+    expect($style->backgroundSize)->toBe(BackgroundSize::Auto);
+    expect($style->backgroundRepeat)->toBeFalse();
+    expect($style->backgroundPosition)->toBe(BackgroundPosition::TopLeft);
+});
+
+it('resolves background-image: url(...) to the RAW path, unresolved against any basePath', function () {
+    [$doc, $map] = resolveDoc('div { background-image: url(photo.jpg) }', '<body><div>x</div></body>');
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    expect($map->get($div)->backgroundImagePath)->toBe('photo.jpg');
+});
+
+it('does NOT inherit background-image/size/repeat/position down the tree (initial values, not $parent->X)', function () {
+    [$doc, $map] = resolveDoc(
+        'div { background-image: url(photo.jpg); background-size: cover; background-repeat: repeat; background-position: center }',
+        '<body><div><p>x</p></div></body>',
+    );
+    $p = $doc->querySelector('p');
+    assert($p !== null);
+    $style = $map->get($p);
+    expect($style->backgroundImagePath)->toBeNull();
+    expect($style->backgroundSize)->toBe(BackgroundSize::Auto);
+    expect($style->backgroundRepeat)->toBeFalse();
+    expect($style->backgroundPosition)->toBe(BackgroundPosition::TopLeft);
+});
+
+it('resolves background-size: cover|contain and background-repeat: repeat and background-position: center through the real cascade', function () {
+    [$doc, $map] = resolveDoc(
+        'div { background-image: url(photo.jpg); background-size: cover; background-repeat: repeat; background-position: center }',
+        '<body><div>x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundImagePath)->toBe('photo.jpg');
+    expect($style->backgroundSize)->toBe(BackgroundSize::Cover);
+    expect($style->backgroundRepeat)->toBeTrue();
+    expect($style->backgroundPosition)->toBe(BackgroundPosition::Center);
+});
+
+it('lets a more-specific rule override a cascaded background-image with the "background" shorthand (reset trio)', function () {
+    [$doc, $map] = resolveDoc(
+        '.box { background-image: url(photo.jpg); } .box.override { background: yellow; }',
+        '<body><div class="box override">x</div></body>',
+    );
+    $div = $doc->querySelector('div');
+    assert($div !== null);
+    $style = $map->get($div);
+    expect($style->backgroundImagePath)->toBeNull();
+    expect($style->backgroundColor)->toEqual(new Color(255, 255, 0));
 });

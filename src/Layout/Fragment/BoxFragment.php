@@ -8,6 +8,8 @@ use Pliego\Css\Value\BoxShadow;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\Gradient;
 use Pliego\Layout\Geometry\Rect;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 
 final readonly class BoxFragment implements Fragment
 {
@@ -79,6 +81,20 @@ final readonly class BoxFragment implements Fragment
         // a antes de esta tarea. InlineBoxFragment NO tiene este campo (M8: box-shadow declarado
         // en una caja inline real -> warning, ver InlineFlowContext::buildInlineBoxFragment()).
         public ?BoxShadow $boxShadow = null,
+        // M8-T6 (css-backgrounds-3 §4 reducido): $backgroundImagePath es el RAW path tal cual lo
+        // dejó ComputedStyle::$backgroundImagePath (sin resolver contra basePath todavía -- eso
+        // ocurre en Paint\Painter::paintBackgroundImage(), igual división de responsabilidades que
+        // $backgroundGradient frente a Pdf\PdfCanvas::paintGradient()). Default null/Auto/false/
+        // TopLeft para que los ~15 construction sites preexistentes (tests + GeometryShift/
+        // Paginator/*FormattingContext, ver grep) sigan compilando sin tocarlos: sin
+        // background-image declarado, comportamiento de pintado byte-idéntico a antes de esta
+        // tarea. InlineBoxFragment NO tiene estos 4 campos (M8: background-image declarado en una
+        // caja inline real -> warning + descartado, ver InlineFlowContext::
+        // buildInlineBoxFragment()), mismo patrón que $boxShadow.
+        public ?string $backgroundImagePath = null,
+        public BackgroundSize $backgroundSize = BackgroundSize::Auto,
+        public bool $backgroundRepeat = false,
+        public BackgroundPosition $backgroundPosition = BackgroundPosition::TopLeft,
     ) {}
 
     public function rect(): Rect

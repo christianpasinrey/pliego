@@ -10,6 +10,7 @@ use Pliego\Css\Value\Gradient;
 use Pliego\Css\Value\GradientKind;
 use Pliego\Css\Value\GradientStop;
 use Pliego\Css\WarningCollector;
+use Pliego\Image\ImageLoader;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
 use Pliego\Layout\Fragment\BoxFragment;
@@ -20,6 +21,8 @@ use Pliego\Layout\Geometry\Rect;
 use Pliego\Page\Page;
 use Pliego\Paint\Canvas;
 use Pliego\Paint\Painter;
+use Pliego\Style\BackgroundPosition;
+use Pliego\Style\BackgroundSize;
 use Pliego\Text\FontCatalog;
 
 final class RecordingCanvas implements Canvas
@@ -206,19 +209,32 @@ final class RecordingCanvas implements Canvas
     }
 }
 
+// M8-T6: Painter's constructor now REQUIRES an Image\ImageLoader + a basePath (background-image
+// is loaded at PAINT time, see Paint\Painter::paintBackgroundImage()) -- every pre-T6 test in this
+// file only exercised paths that never touch either (no background-image involved), so a fresh
+// ImageLoader + an arbitrary basePath (this directory) is a safe, inert placeholder wherever the
+// test doesn't care. PAINTER_IMAGE_FIXTURES_DIR points at the REAL fixture directory, for the new
+// background-image tests below that DO need a real file to load.
+const PAINTER_IMAGE_FIXTURES_DIR = __DIR__ . '/../../../resources/images';
+
+function testPainter(FontCatalog $catalog, ?WarningCollector $warnings = null): Painter
+{
+    return new Painter($catalog, new ImageLoader(), PAINTER_IMAGE_FIXTURES_DIR, $warnings);
+}
+
 it('paints backgrounds and text in page order', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none()),
         new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)', 'text(Hola)']);
 });
 it('skips boxes without background', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none())]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([]);
 });
 it('does not stroke an underline for non-underlined text', function () {
@@ -226,7 +242,7 @@ it('does not stroke an underline for non-underlined text', function () {
     $page = new Page(1, [
         new TextFragment(new Rect(10, 10, 50, 19.2), 'Hola', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe(['text(Hola)']);
 });
 it('strokes an underline below the baseline for underlined text, using real post-table metrics', function () {
@@ -238,7 +254,7 @@ it('strokes an underline below the baseline for underlined text, using real post
         new TextFragment($rect, 'Hola', $baselineY, $fontSizePx, new Color(0, 0, 0), 'default:400:normal', true),
     ]);
     $catalog = FontCatalog::withDefaults();
-    new Painter($catalog)->paint($page, $canvas);
+    testPainter($catalog)->paint($page, $canvas);
 
     expect($canvas->calls)->toHaveCount(2);
     expect($canvas->calls[0])->toBe('text(Hola)');
@@ -267,7 +283,7 @@ it('skips painting an empty forced-line fragment (from <br>) without touching th
     $page = new Page(1, [
         new TextFragment(new Rect(10, 20, 0.0, 19.2), '', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', true),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([]);
 });
 
@@ -283,7 +299,7 @@ it('falls back to -0.1em/0.05em underline metrics when the font has no post tabl
         $page = new Page(1, [
             new TextFragment($rect, 'Hola', $baselineY, $fontSizePx, new Color(0, 0, 0), 'nopost:400:normal', true),
         ]);
-        new Painter($catalog)->paint($page, $canvas);
+        testPainter($catalog)->paint($page, $canvas);
 
         $expectedY = $baselineY - (-0.1 * $fontSizePx);
         $expectedThickness = 0.05 * $fontSizePx;
@@ -313,7 +329,7 @@ it('paints background then all 4 visible borders, in top/right/bottom/left order
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], $borders),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000)', // background
@@ -337,7 +353,7 @@ it('paints only the visible border sides when some sides have width 0 or style n
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,3.00,#000000)', // top
@@ -352,7 +368,7 @@ it('paints a border-only box with no background (T5 gating: no background, still
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toHaveCount(4);
     foreach ($canvas->calls as $call) {
@@ -370,7 +386,7 @@ it('defensively skips a border side whose color is null even though width>0 and 
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toHaveCount(3); // top skipped, right/bottom/left painted
 });
@@ -378,7 +394,7 @@ it('defensively skips a border side whose color is null even though width>0 and 
 it('skips border painting entirely when the box has no visible border side', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none())]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([]);
 });
 
@@ -412,7 +428,7 @@ it('recurses into a composite BoxFragment (M4-T6): background, then borders, the
     $outer = new BoxFragment(new Rect(0, 0, 100, 50), $red, [$inner], $outerBorder, atomic: true);
     $page = new Page(1, [$outer]);
 
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000)', // outer background
@@ -430,7 +446,7 @@ it('paints an ImageFragment via Canvas::drawImage(), in document order between b
         new ImageFragment(new Rect(10, 10, 40, 30), '/tmp/tiny.jpg'),
         new TextFragment(new Rect(10, 50, 50, 19.2), 'Hola', 60.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000)',
         'image(10.00,10.00,40.00,30.00,/tmp/tiny.jpg,1.00)',
@@ -447,7 +463,7 @@ it('multiplies the background alpha by the BoxFragment opacity', function () {
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none(), opacity: 0.5),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000,a=0.50)']);
 });
 
@@ -456,7 +472,7 @@ it('combines an rgba background alpha WITH the element opacity multiplicatively 
     $page = new Page(1, [
         new BoxFragment(new Rect(0, 0, 100, 50), new Color(0, 0, 255, 0.5), [], BorderSet::none(), opacity: 0.5),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#0000ff,a=0.25)']);
 });
 
@@ -466,7 +482,7 @@ it('does NOT apply a BoxFragment opacity to its children (M6 divergence: no real
     $inner = new BoxFragment(new Rect(0, 0, 40, 30), new Color(0, 0, 255), [$innerText], BorderSet::none());
     $outer = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$inner], BorderSet::none(), atomic: true, opacity: 0.5);
     $page = new Page(1, [$outer]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000,a=0.50)', // outer: dimmed by its own opacity
         'rect(0.00,0.00,40.00,30.00,#0000ff)',          // inner: its OWN opacity is 1.0, untouched
@@ -479,7 +495,7 @@ it('multiplies a visible border side alpha by the BoxFragment opacity', function
     $side = new BorderSide(2.0, BorderStyle::Solid, new Color(0, 0, 0));
     $borders = new BorderSet($side, $side, $side, $side);
     $page = new Page(1, [new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, opacity: 0.4)]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     foreach ($canvas->calls as $call) {
         expect($call)->toContain('a=0.40');
     }
@@ -492,7 +508,7 @@ it('multiplies the underline stroke alpha by the TextFragment opacity', function
     $page = new Page(1, [
         new TextFragment($rect, 'Hola', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', true, 0.5),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toHaveCount(2);
     expect($canvas->calls[1])->toContain('a=0.50');
 });
@@ -500,7 +516,7 @@ it('multiplies the underline stroke alpha by the TextFragment opacity', function
 it('passes the ImageFragment opacity through to Canvas::drawImage()', function () {
     $canvas = new RecordingCanvas();
     $page = new Page(1, [new ImageFragment(new Rect(0, 0, 40, 30), '/tmp/tiny.jpg', 0.3)]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe(['image(0.00,0.00,40.00,30.00,/tmp/tiny.jpg,0.30)']);
 });
 
@@ -514,7 +530,7 @@ it('paints an InlineBoxFragment background then its 4 border sides, exactly like
         new InlineBoxFragment(new Rect(0, 0, 100, 50), new Color(200, 200, 200), $borders, 1.0, true, true),
         new TextFragment(new Rect(10, 10, 50, 19.2), 'mid', 24.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#c8c8c8)', // background
@@ -537,7 +553,7 @@ it('paints only top/bottom borders for a non-extreme slice (lateral sides alread
     $page = new Page(1, [
         new InlineBoxFragment(new Rect(0, 0, 100, 50), null, $borders, 1.0, false, false),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,2.00,#000000)',  // top
@@ -552,7 +568,7 @@ it('wraps a clipsChildren BoxFragment\'s descendants in clipRect()/restoreClip()
     $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$innerText], BorderSet::none(), clipsChildren: true);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000)', // own background: NOT inside the clip scope
@@ -567,7 +583,7 @@ it('does not clip a BoxFragment whose clipsChildren is false (default), same as 
     $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [$innerText], BorderSet::none());
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#ff0000)',
@@ -583,7 +599,7 @@ it('clips a nested composite subtree (borders included) inside a single clip sco
     $canvas = new RecordingCanvas();
     $outer = new BoxFragment(new Rect(0, 0, 100, 50), null, [$inner], BorderSet::none(), clipsChildren: true);
     $page = new Page(1, [$outer]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls[0])->toBe('clip(0.00,0.00,100.00,50.00)');
     expect(end($canvas->calls))->toBe('restoreClip()');
@@ -598,7 +614,7 @@ it('multiplies an InlineBoxFragment background/border alpha by its own opacity',
     $page = new Page(1, [
         new InlineBoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), $borders, 0.5, true, true),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls[0])->toBe('rect(0.00,0.00,100.00,50.00,#ff0000,a=0.50)');
     foreach (array_slice($canvas->calls, 1) as $call) {
@@ -612,7 +628,7 @@ it('paints a rounded background via fillRoundedRect() instead of fillRect() when
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none(), borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['roundedRect(0.00,0.00,100.00,50.00,r=10.00/10.00/10.00/10.00,#ff0000)']);
 });
@@ -621,7 +637,7 @@ it('keeps plain fillRect() when borderRadius is zero (default), byte-identical t
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
 });
@@ -632,7 +648,7 @@ it('paints UNIFORM borders with non-zero radius as a single fillRoundedRectRing(
     $borders = new BorderSet($side, $side, $side, $side);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(20.0, 20.0, 20.0, 20.0));
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     // Inner rect inset by the uniform border width (5px each side); inner radius reduced by the
     // SAME width (§5.3-style clamp, ver Painter::paintBorders()).
@@ -649,7 +665,7 @@ it('falls back to the flat 4-rect border painting + a one-time warning when bord
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
     $page = new Page(1, [$box]);
     $warnings = new WarningCollector();
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,2.00,#000000)',  // top
@@ -664,7 +680,7 @@ it('does not paint a ring when a uniform border has radius but the border is not
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
     expect($canvas->calls)->toBe([]);
 });
 
@@ -673,7 +689,7 @@ it('clips with clipRoundedRect() instead of clipRect() when a clipsChildren box 
     $innerText = new TextFragment(new Rect(5, 5, 30, 19.2), 'Hi', 20.0, 16.0, new Color(0, 0, 0), 'default:400:normal', false);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [$innerText], BorderSet::none(), clipsChildren: true, borderRadius: new BorderRadius(8.0, 8.0, 8.0, 8.0));
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'clipRounded(0.00,0.00,100.00,50.00,r=8.00/8.00/8.00/8.00)',
@@ -689,7 +705,7 @@ it('paints a rounded InlineBoxFragment background+border the same way as a BoxFr
     $page = new Page(1, [
         new InlineBoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), $borders, 1.0, true, true, new BorderRadius(6.0, 6.0, 6.0, 6.0)),
     ]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'roundedRect(0.00,0.00,100.00,50.00,r=6.00/6.00/6.00/6.00,#ff0000)',
@@ -719,7 +735,7 @@ it('Finding 1: a FIRST slice (right side suppressed to None) still paints via th
     $radius = new BorderRadius(8.0, 0.0, 0.0, 8.0);
     $box = new InlineBoxFragment(new Rect(0, 0, 100, 50), null, $borders, 1.0, true, false, $radius);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         // inner inset: left/top/bottom by the common 2px width, right by 0 (None side, flush to
@@ -742,7 +758,7 @@ it('Finding 1: a LAST slice (left side suppressed to None) still paints via the 
     $radius = new BorderRadius(0.0, 8.0, 8.0, 0.0);
     $box = new InlineBoxFragment(new Rect(0, 0, 100, 50), null, $borders, 1.0, false, true, $radius);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'roundedRing(outer=0.00,0.00,100.00,50.00,r=0.00/8.00/8.00/0.00;inner=0.00,2.00,98.00,46.00,r=0.00/6.00/6.00/0.00,#000000)',
@@ -776,7 +792,7 @@ it('a border-bottom-only side with radius on ALL corners falls back to flat pain
     $radius = new BorderRadius(15.0, 15.0, 15.0, 15.0);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: $radius);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     // Flat painting: only the bottom side is Solid && width>0 -- the same paintBordersFlat() as
     // always, radius ignored entirely (no roundedRing(...) call anywhere in $canvas->calls, no
@@ -804,7 +820,7 @@ it('edge case: radius restricted to ONLY the bottom corners (border-bottom-left/
     $radius = new BorderRadius(0.0, 0.0, 15.0, 15.0); // tl=0, tr=0, br=15, bl=15
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: $radius);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,42.00,100.00,8.00,#000000)',
@@ -824,7 +840,7 @@ it('Finding 1 regression guard: GENUINELY mixed declared border widths (no None 
     $borders = new BorderSet($top, $right, $top, $top);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,2.00,#000000)',
@@ -849,7 +865,7 @@ it('paints a gradient via Canvas::paintGradient() when the box has no background
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), backgroundGradient: twoStopGradient());
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['gradient(0.00,0.00,100.00,50.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)']);
 });
@@ -858,7 +874,7 @@ it('paints the gradient AFTER the background-color, when both are declared (grad
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(0, 128, 0), [], BorderSet::none(), backgroundGradient: twoStopGradient());
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(0.00,0.00,100.00,50.00,#008000)',
@@ -877,7 +893,7 @@ it('passes the box borderRadius through to Canvas::paintGradient() (rounded clip
         borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0),
     );
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['gradient(0.00,0.00,100.00,50.00,Linear,stops=2,r=10.00/10.00/10.00/10.00)']);
 });
@@ -886,7 +902,7 @@ it('does not paint any gradient op when backgroundGradient is null (default), by
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
 });
@@ -895,7 +911,7 @@ it('paints an InlineBoxFragment gradient using its OWN (per-slice) rect as the g
     $canvas = new RecordingCanvas();
     $inline = new InlineBoxFragment(new Rect(10, 10, 40, 20), null, BorderSet::none(), 1.0, true, true, backgroundGradient: twoStopGradient());
     $page = new Page(1, [$inline]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['gradient(10.00,10.00,40.00,20.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)']);
 });
@@ -907,7 +923,7 @@ it('paints a blur=0 box-shadow as ONE offset rect, BEFORE the background', funct
     $shadow = new BoxShadow(5.0, 5.0, 0.0, new Color(0, 0, 0));
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none(), boxShadow: $shadow);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(5.00,5.00,100.00,50.00,#000000)', // shadow: rect offset by (5,5), same size, opaque
@@ -920,7 +936,7 @@ it('paints a blur=0 box-shadow with no background at all (shadow-only card)', fu
     $shadow = new BoxShadow(4.0, 4.0, 0.0, new Color(0, 0, 0, 0.3));
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), boxShadow: $shadow);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['rect(4.00,4.00,100.00,50.00,#000000,a=0.30)']);
 });
@@ -930,7 +946,7 @@ it('multiplies the shadow color alpha by the BoxFragment opacity', function () {
     $shadow = new BoxShadow(2.0, 2.0, 0.0, new Color(0, 0, 0));
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), opacity: 0.5, boxShadow: $shadow);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['rect(2.00,2.00,100.00,50.00,#000000,a=0.50)']);
 });
@@ -947,7 +963,7 @@ it('paints a blur=0 box-shadow rounded when the fragment has border-radius (foll
         boxShadow: $shadow,
     );
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'roundedRect(3.00,3.00,100.00,50.00,r=10.00/10.00/10.00/10.00,#000000)',
@@ -967,7 +983,7 @@ it('approximates a blur>0 box-shadow as 4 concentric layers, each 1/4 alpha, han
     $shadow = new BoxShadow(0.0, 0.0, 6.0, new Color(0, 0, 0));
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), boxShadow: $shadow);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'rect(3.00,3.00,94.00,44.00,#000000,a=0.25)',           // layer 0: delta=-3 (inset), sharp
@@ -982,7 +998,7 @@ it('offsets every blur>0 layer by (offsetX, offsetY) before expanding/insetting'
     $shadow = new BoxShadow(10.0, 20.0, 6.0, new Color(255, 0, 0));
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), boxShadow: $shadow);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     // Base shadow rect (before blur layers): (10,20,100,50) -- same insets/expansions as the
     // no-offset test above, just translated.
@@ -998,7 +1014,7 @@ it('paints nothing for box-shadow when null (default), byte-identical to before 
     $canvas = new RecordingCanvas();
     $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
 });
@@ -1011,7 +1027,7 @@ it('paints a UNIFORM dashed border (no radius) as ONE strokeRect() call along th
     $borders = new BorderSet($side, $side, $side, $side);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     // centerline: inset by widthPx/2=1 on all sides -- (1,1,98,48). dash pattern [3w w] = [6,2].
     expect($canvas->calls)->toBe([
@@ -1025,7 +1041,7 @@ it('paints a UNIFORM dotted border as ONE strokeRect() with the [0 2w] pattern a
     $borders = new BorderSet($side, $side, $side, $side);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'strokeRect(1.00,1.00,98.00,48.00,w=2.00,#000000,dash=[0.00,4.00],cap=round)',
@@ -1038,7 +1054,7 @@ it('paints a UNIFORM dashed border WITH border-radius as strokeRoundedRect(), ce
     $borders = new BorderSet($side, $side, $side, $side);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     // centerline: inset by 4/2=2; radius reduced by the same 2 -> 10-2=8.
     expect($canvas->calls)->toBe([
@@ -1052,7 +1068,7 @@ it('folds the BoxFragment opacity into the dashed border Color BEFORE calling st
     $borders = new BorderSet($side, $side, $side, $side);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, opacity: 0.5);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     expect($canvas->calls)->toHaveCount(1);
     expect($canvas->calls[0])->toBe('strokeRect(1.00,1.00,98.00,48.00,w=2.00,#000000,dash=[6.00,2.00],cap=butt,a=0.50)');
@@ -1067,7 +1083,7 @@ it('per-side heterogeneous dashed border: each Dashed/Dotted side strokes an ind
     $borders = new BorderSet($top, $right, $bottom, $left);
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders);
     $page = new Page(1, [$box]);
-    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
 
     // top: Solid -> full band fillRect (0,0,100,2). right: Dashed, width 2, band x=98..100,
     // y=2..48 (middleHeight=50-topW(2)-bottomW(2)=46) -> vertical centerline at x=99, from y=2 to
@@ -1088,7 +1104,7 @@ it('per-side heterogeneous with radius falls back to flat painting + the mixed-b
     $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], $borders, borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0));
     $page = new Page(1, [$box]);
     $warnings = new WarningCollector();
-    new Painter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
 
     expect($canvas->calls)->toBe([
         'line(0.00,1.00,100.00,1.00,2.00,dash=[6.00,2.00])',
@@ -1097,4 +1113,338 @@ it('per-side heterogeneous with radius falls back to flat painting + the mixed-b
         'line(1.00,2.00,1.00,48.00,2.00,dash=[6.00,2.00])',
     ]);
     expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-image (cover/contain/tiling) ------------
+
+/**
+ * A REAL GD-generated JPEG of the requested dimensions -- same generation pattern as
+ * tests/EndToEnd/ItineraryWithPhotosTest.php's itineraryPhotoFixture(). Tests that need the EXACT
+ * 300x150/100x40 hand-computed numbers from the brief skip gracefully when GD is missing (see
+ * ->skip() below).
+ *
+ * @param positive-int $width
+ * @param positive-int $height
+ */
+function painterBgImageFixture(int $width, int $height): string
+{
+    $path = sys_get_temp_dir() . '/pliego-painter-bg-' . getmypid() . '-' . $width . 'x' . $height . '.jpg';
+    $image = imagecreatetruecolor($width, $height);
+    $color = imagecolorallocate($image, 200, 120, 40);
+    // imagecolorallocate() returns int|false (color-table exhaustion, effectively never for a
+    // fresh truecolor image with a single color) -- same defensive ternary already used by
+    // tests/Unit/Image/PngImageTest.php for the same GD quirk.
+    imagefilledrectangle($image, 0, 0, $width - 1, $height - 1, $color === false ? 0 : $color);
+    imagejpeg($image, $path, 85);
+    imagedestroy($image);
+    return $path;
+}
+
+it('paints an auto-sized background-image top-left (default position), no scaling', function () {
+    $path = painterBgImageFixture(40, 30);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(new Rect(10, 10, 100, 100), null, [], BorderSet::none(), backgroundImagePath: $path);
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        expect($canvas->calls)->toBe([
+            'clip(10.00,10.00,100.00,100.00)',
+            sprintf('image(10.00,10.00,40.00,30.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
+    } finally {
+        unlink($path);
+    }
+});
+
+it('centers an auto-sized background-image when background-position:center is declared', function () {
+    $path = painterBgImageFixture(40, 30);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 100, 100),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundPosition: BackgroundPosition::Center,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        // offset = (100-40)/2=30, (100-30)/2=35.
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,100.00,100.00)',
+            sprintf('image(30.00,35.00,40.00,30.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
+    } finally {
+        unlink($path);
+    }
+});
+
+it('computes the cover destination rect hand-verified for a 300x150 image in a 200x200 box (scale=1.333, centered, offset -100,0)', function () {
+    $path = painterBgImageFixture(300, 150);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 200, 200),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundSize: BackgroundSize::Cover,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        // scale = max(200/300, 200/150) = 200/150 = 1.333... -> dest 400x200, centered -> x=-100, y=0.
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,200.00,200.00)',
+            sprintf('image(-100.00,0.00,400.00,200.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
+    } finally {
+        unlink($path);
+    }
+})->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
+
+it('cover IGNORES background-position (always centered), per the M8 adjudication', function () {
+    $path = painterBgImageFixture(300, 150);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 200, 200),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundSize: BackgroundSize::Cover,
+            backgroundPosition: BackgroundPosition::Center,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,200.00,200.00)',
+            sprintf('image(-100.00,0.00,400.00,200.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
+    } finally {
+        unlink($path);
+    }
+})->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
+
+it('computes the contain destination rect hand-verified for a 300x150 image in a 200x200 box (scale=0.667, letterboxed, top-left)', function () {
+    $path = painterBgImageFixture(300, 150);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 200, 200),
+            new Color(0, 128, 0),
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundSize: BackgroundSize::Contain,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        // scale = min(200/300, 200/150) = 200/300 = 0.667... -> dest 200x100, top-left (default
+        // position): the green background-color, already painted first, shows through the
+        // untouched bottom half of the clipped area (letterboxing) without any extra code here.
+        expect($canvas->calls)->toBe([
+            'rect(0.00,0.00,200.00,200.00,#008000)',
+            'clip(0.00,0.00,200.00,200.00)',
+            sprintf('image(0.00,0.00,200.00,100.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
+    } finally {
+        unlink($path);
+    }
+})->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
+
+it('contain centers when background-position:center is declared', function () {
+    $path = painterBgImageFixture(300, 150);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 200, 200),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundSize: BackgroundSize::Contain,
+            backgroundPosition: BackgroundPosition::Center,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        // dest 200x100 (as above); centered -> x=(200-200)/2=0, y=(200-100)/2=50.
+        expect($canvas->calls)->toBe([
+            'clip(0.00,0.00,200.00,200.00)',
+            sprintf('image(0.00,50.00,200.00,100.00,%s,1.00)', $path),
+            'restoreClip()',
+        ]);
+    } finally {
+        unlink($path);
+    }
+})->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
+
+it('tiles a 100x40 image into a 250x100 box as a 3x3=9 drawImage() grid, hand-verified (repeat always uses the AUTO/intrinsic size)', function () {
+    $path = painterBgImageFixture(100, 40);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 250, 100),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            // backgroundSize:Cover is set here on PURPOSE and must be IGNORED -- repeat always
+            // tiles at the image's intrinsic size, taking precedence over background-size in this
+            // reduced model (see Painter::paintBackgroundImage()'s docblock).
+            backgroundSize: BackgroundSize::Cover,
+            backgroundRepeat: true,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        // n=ceil(250/100)=3, m=ceil(100/40)=3 -> 9 tiles, row-major, each 100x40, from (0,0).
+        $expected = ['clip(0.00,0.00,250.00,100.00)'];
+        for ($row = 0; $row < 3; $row++) {
+            for ($col = 0; $col < 3; $col++) {
+                $expected[] = sprintf('image(%.2F,%.2F,100.00,40.00,%s,1.00)', $col * 100.0, $row * 40.0, $path);
+            }
+        }
+        $expected[] = 'restoreClip()';
+        expect($canvas->calls)->toBe($expected);
+        expect($canvas->calls)->toHaveCount(11); // clip + 9 tiles + restoreClip
+    } finally {
+        unlink($path);
+    }
+})->skip(!extension_loaded('gd'), 'GD extension not available in this environment.');
+
+it('warns once and keeps tiling from top-left when background-repeat:repeat is combined with background-position:center', function () {
+    $path = painterBgImageFixture(50, 50);
+    try {
+        $canvas = new RecordingCanvas();
+        $warnings = new WarningCollector();
+        $box = new BoxFragment(
+            new Rect(0, 0, 100, 100),
+            null,
+            [],
+            BorderSet::none(),
+            backgroundImagePath: $path,
+            backgroundRepeat: true,
+            backgroundPosition: BackgroundPosition::Center,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+        // Still tiles (2x2=4 tiles) from top-left, repeat NOT downgraded to non-repeat.
+        expect($canvas->calls)->toHaveCount(6); // clip + 4 tiles + restoreClip
+        expect($canvas->calls[0])->toBe('clip(0.00,0.00,100.00,100.00)');
+        expect($canvas->calls[1])->toBe(sprintf('image(0.00,0.00,50.00,50.00,%s,1.00)', $path));
+        expect($warnings->drain())->toBe([
+            'background-repeat with background-position:center is not supported (M8): tiling from top-left',
+        ]);
+    } finally {
+        unlink($path);
+    }
+});
+
+it('clips to a ROUNDED border-box when the fragment has border-radius', function () {
+    $path = painterBgImageFixture(40, 30);
+    try {
+        $canvas = new RecordingCanvas();
+        $box = new BoxFragment(
+            new Rect(0, 0, 100, 100),
+            null,
+            [],
+            BorderSet::none(),
+            borderRadius: new BorderRadius(8.0, 8.0, 8.0, 8.0),
+            backgroundImagePath: $path,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        expect($canvas->calls[0])->toBe('clipRounded(0.00,0.00,100.00,100.00,r=8.00/8.00/8.00/8.00)');
+        expect(end($canvas->calls))->toBe('restoreClip()');
+    } finally {
+        unlink($path);
+    }
+});
+
+it('paints background-color THEN background-image THEN background-gradient, in that order', function () {
+    $path = painterBgImageFixture(40, 30);
+    try {
+        $canvas = new RecordingCanvas();
+        // NOTE: image and gradient never coexist in practice (DeclarationParser resets one when
+        // the other is set), but Painter documents/tests the order defensively anyway.
+        $gradient = new Gradient(GradientKind::Linear, 90.0, [
+            new GradientStop(new Color(255, 0, 0), 0.0),
+            new GradientStop(new Color(0, 0, 255), 100.0),
+        ]);
+        $box = new BoxFragment(
+            new Rect(0, 0, 100, 100),
+            new Color(0, 128, 0),
+            [],
+            BorderSet::none(),
+            backgroundGradient: $gradient,
+            backgroundImagePath: $path,
+        );
+        $page = new Page(1, [$box]);
+        testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+        expect($canvas->calls)->toBe([
+            'rect(0.00,0.00,100.00,100.00,#008000)',
+            'clip(0.00,0.00,100.00,100.00)',
+            sprintf('image(0.00,0.00,40.00,30.00,%s,1.00)', $path),
+            'restoreClip()',
+            'gradient(0.00,0.00,100.00,100.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)',
+        ]);
+    } finally {
+        unlink($path);
+    }
+});
+
+it('resolves a RELATIVE background-image path against the Painter basePath', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 100), null, [], BorderSet::none(), backgroundImagePath: 'tiny.jpg');
+    $page = new Page(1, [$box]);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    $resolvedPath = PAINTER_IMAGE_FIXTURES_DIR . '/tiny.jpg';
+    expect($canvas->calls)->toContain(sprintf('image(0.00,0.00,4.00,3.00,%s,1.00)', $resolvedPath));
+});
+
+it('falls back to background-color only + a warning when the background-image file cannot be loaded (soft failure)', function () {
+    $canvas = new RecordingCanvas();
+    $warnings = new WarningCollector();
+    $box = new BoxFragment(
+        new Rect(0, 0, 100, 100),
+        new Color(255, 0, 0),
+        [],
+        BorderSet::none(),
+        backgroundImagePath: 'does-not-exist.jpg',
+    );
+    $page = new Page(1, [$box]);
+    testPainter(FontCatalog::withDefaults(), $warnings)->paint($page, $canvas);
+
+    // background-color still painted; NOTHING else (no clip, no drawImage call at all).
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,100.00,#ff0000)']);
+    $drained = $warnings->drain();
+    expect($drained)->toHaveCount(1);
+    expect($drained[0])->toContain('does-not-exist.jpg');
+});
+
+it('does not paint any background-image op when backgroundImagePath is null (default), byte-identical to before this task', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
+    $page = new Page(1, [$box]);
+    testPainter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
 });

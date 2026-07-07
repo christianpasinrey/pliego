@@ -226,6 +226,28 @@ final readonly class ComputedStyle
         // Box\BoxTreeBuilder ANTES de medir (ver textRunTokensFor()) -- ComputedStyle solo
         // transporta el valor computado, nunca transforma nada por sí mismo.
         public TextTransform $textTransform = TextTransform::None,
+        // M8-T6 (css-backgrounds-3 §4 reducido): NO hereda -- initial value real es "none" (sin
+        // imagen) siempre que no haya declaración propia, nunca $parent->backgroundImagePath
+        // (mismo patrón que $backgroundGradient/$borderRadius: cada caja pinta la SUYA propia).
+        // RAW string sin resolver contra ningún basePath -- Style no tiene basePath y no debería
+        // necesitarlo (arquitectura M8-T6: la resolución de ruta + la carga del fichero ocurren
+        // en tiempo de PINTADO, ver Paint\Painter::paintBackgroundImage()/Image\ImagePathResolver,
+        // el MISMO momento/mecanismo que <img> usa en Box\BoxTreeBuilder — así ambos caminos
+        // producen el mismo string de ruta resuelta para el mismo fichero, condición necesaria
+        // para el dedup de Pdf\ImageRegistry entre un <img> y un background-image que compartan
+        // src). DeclarationParser::parseBackgroundImageValue()/parseBackgroundShorthand() ya
+        // producen este valor listo para usar (string|null, nunca otro tipo).
+        public ?string $backgroundImagePath = null,
+        // M8-T6: NO hereda -- initial value real 'auto' (sin escalado, tamaño intrínseco) siempre
+        // que no haya declaración propia, nunca $parent->backgroundSize (mismo patrón que
+        // $backgroundImagePath justo arriba).
+        public BackgroundSize $backgroundSize = BackgroundSize::Auto,
+        // M8-T6: NO hereda -- initial value real 'no-repeat' (false) siempre que no haya
+        // declaración propia, nunca $parent->backgroundRepeat.
+        public bool $backgroundRepeat = false,
+        // M8-T6: NO hereda -- initial value real 'top left' (equivalente a '0% 0%') siempre que no
+        // haya declaración propia, nunca $parent->backgroundPosition.
+        public BackgroundPosition $backgroundPosition = BackgroundPosition::TopLeft,
     ) {}
 
     /**
@@ -865,6 +887,34 @@ final readonly class ComputedStyle
         // NON_NEGATIVE_PROPERTIES). El color, si no se declaró, llega como el sentinel
         // Color::currentColor() (ver parseBoxShadowValue()) -- se resuelve exactamente igual que
         // border-*-color/background-color, contra el $color YA computado de ESTE elemento.
+        // M8-T6 (css-backgrounds-3 §4 reducido): NO hereda (ver docblock del constructor) --
+        // initial "none" (null) siempre que no haya declaración propia, nunca
+        // $parent->backgroundImagePath. DeclarationParser::parseBackgroundImageValue()/
+        // parseBackgroundShorthand() ya producen este valor listo para usar (string, sin resolver
+        // contra basePath -- eso ocurre en tiempo de pintado, ver el docblock del campo).
+        $backgroundImagePathValue = $declarations['background-image'] ?? null;
+        $backgroundImagePath = is_string($backgroundImagePathValue) ? $backgroundImagePathValue : null;
+
+        // M8-T6: NO hereda -- initial 'auto' siempre que no haya declaración propia.
+        // DeclarationParser::parseBackgroundSize() ya solo produce 'auto'|'cover'|'contain' aquí.
+        $backgroundSize = match ($declarations['background-size'] ?? null) {
+            'cover' => BackgroundSize::Cover,
+            'contain' => BackgroundSize::Contain,
+            default => BackgroundSize::Auto,
+        };
+
+        // M8-T6: NO hereda -- initial 'no-repeat' (false) siempre que no haya declaración propia.
+        // DeclarationParser::parseBackgroundRepeat() ya solo produce bool aquí.
+        $backgroundRepeatValue = $declarations['background-repeat'] ?? null;
+        $backgroundRepeat = is_bool($backgroundRepeatValue) && $backgroundRepeatValue;
+
+        // M8-T6: NO hereda -- initial 'top left' siempre que no haya declaración propia.
+        // DeclarationParser::parseBackgroundPositionValue() ya solo produce 'center'|'top left'
+        // aquí (ambas grafías 'top left'/'left top' ya colapsadas a 'top left' en el parser).
+        $backgroundPosition = ($declarations['background-position'] ?? null) === 'center'
+            ? BackgroundPosition::Center
+            : BackgroundPosition::TopLeft;
+
         $boxShadowValue = $declarations['box-shadow'] ?? null;
         $boxShadow = null;
         if (is_array($boxShadowValue)) {
@@ -948,6 +998,10 @@ final readonly class ComputedStyle
             $letterSpacingPx,
             $wordSpacingPx,
             $textTransform,
+            $backgroundImagePath,
+            $backgroundSize,
+            $backgroundRepeat,
+            $backgroundPosition,
         );
     }
 }

@@ -1157,6 +1157,9 @@ it('parses a numeric-angle linear-gradient() with 2 explicit color stops, zero w
             new GradientStop(new Color(255, 0, 0), 0.0),
             new GradientStop(new Color(0, 0, 255), 100.0),
         ]),
+        // M8-T6: the gradient branch of 'background-image' now ALSO resets a previously-cascaded
+        // background-image to null (reset-trio discipline, see the M8-T6 tests below).
+        'background-image' => null,
     ]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
@@ -1278,21 +1281,58 @@ it('detects a plain color inside the "background" shorthand (gradient/color/imag
     // A null here (vs. simply omitting the key) is what lets a cascaded gradient from a
     // LESS-specific rule get overridden -- see the dedicated "resets" block below and the
     // cascade-level repro in StyleResolverTest.php.
-    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null]);
+    // M8-T6: the color branch also resets background-image to null (reset-trio discipline).
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null, 'background-image' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
-it('warns that url() images are not supported yet, in both "background" and "background-image"', function () {
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-image: url(...) is now implemented for
+// real (the M8-T3 stub used to warn "lands in a later milestone" -- this milestone IS that later
+// milestone). Both quoted forms (single/double) are optional per spec; the raw path (unresolved
+// against any basePath -- that happens at PAINT time, see Paint\Painter) is what ComputedStyle
+// carries under 'background-image'.
+
+it('parses background-image: url(...) with no quotes, storing the raw path', function () {
     $parser = new DeclarationParser();
-    expect($parser->parse('background', 'url(photo.jpg)'))->toBe([]);
-    expect($parser->drainWarnings())->toHaveCount(1);
-    expect($parser->parse('background-image', 'url(photo.jpg)'))->toBe([]);
+    $result = $parser->parse('background-image', 'url(photo.jpg)');
+    expect($result)->toEqual(['background-image' => 'photo.jpg', 'background-gradient' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses background-image: url(...) with single quotes, stripping them', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', "url('photo.jpg')");
+    expect($result)->toEqual(['background-image' => 'photo.jpg', 'background-gradient' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses background-image: url(...) with double quotes, stripping them', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'url("photo.jpg")');
+    expect($result)->toEqual(['background-image' => 'photo.jpg', 'background-gradient' => null]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses url() inside the "background" shorthand, resetting color AND gradient', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'url(photo.jpg)');
+    expect($result)->toEqual([
+        'background-image' => 'photo.jpg',
+        'background-color' => null,
+        'background-gradient' => null,
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards an unbalanced background-image: url(...)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-image', 'url(photo.jpg'))->toBe([]);
     expect($parser->drainWarnings())->toHaveCount(1);
 });
 
-it('treats background-image: none as an explicit declaration that wins the cascade (clears gradients)', function () {
+it('treats background-image: none as an explicit declaration that wins the cascade (clears gradients AND images)', function () {
     $parser = new DeclarationParser();
-    expect($parser->parse('background-image', 'none'))->toBe(['background-gradient' => null]);
+    expect($parser->parse('background-image', 'none'))->toBe(['background-gradient' => null, 'background-image' => null]);
     expect($parser->drainWarnings())->toBeEmpty();
 });
 
@@ -1311,8 +1351,9 @@ it('uses only the first layer of a multi-layer background-image, with a warning'
 it('uses only the first layer of a multi-layer "background" shorthand, with a warning', function () {
     $parser = new DeclarationParser();
     $result = $parser->parse('background', '#ff0000, linear-gradient(red, blue)');
-    // See the Finding 1 fix note above: the color branch always resets background-gradient.
-    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null]);
+    // See the Finding 1 fix note above: the color branch always resets background-gradient (and,
+    // since M8-T6, background-image too).
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0), 'background-gradient' => null, 'background-image' => null]);
     expect($parser->drainWarnings())->toHaveCount(1);
 });
 
@@ -1404,6 +1445,64 @@ it('still parses radial-gradient(red, blue) (color first, no prefix at all) with
         new GradientStop(new Color(0, 0, 255), 100.0),
     ]));
     expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- M8-T6 (css-backgrounds-3 §4 reducido): background-size/background-repeat/background-position
+
+it('parses background-size: auto|cover|contain', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-size', 'auto'))->toBe(['background-size' => 'auto']);
+    expect($parser->parse('background-size', 'cover'))->toBe(['background-size' => 'cover']);
+    expect($parser->parse('background-size', 'contain'))->toBe(['background-size' => 'contain']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards background-size when given a concrete length/percentage (only keywords supported in M8)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-size', '50%'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($parser->parse('background-size', '100px'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($parser->parse('background-size', '100px 50px'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('parses background-repeat: no-repeat|repeat to bool', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-repeat', 'no-repeat'))->toBe(['background-repeat' => false]);
+    expect($parser->parse('background-repeat', 'repeat'))->toBe(['background-repeat' => true]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards unsupported background-repeat values (repeat-x/repeat-y/space/round), naming the value', function () {
+    $parser = new DeclarationParser();
+    foreach (['repeat-x', 'repeat-y', 'space', 'round'] as $value) {
+        expect($parser->parse('background-repeat', $value))->toBe([]);
+        $warnings = $parser->drainWarnings();
+        expect($warnings)->toHaveCount(1);
+        expect($warnings[0])->toContain($value);
+    }
+});
+
+it('parses background-position: center and both spellings of top-left (top left / left top)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-position', 'center'))->toBe(['background-position' => 'center']);
+    expect($parser->parse('background-position', 'top left'))->toBe(['background-position' => 'top left']);
+    expect($parser->parse('background-position', 'left top'))->toBe(['background-position' => 'top left']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('normalizes whitespace/case in background-position (e.g. "  Top   Left  ")', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-position', '  Top   Left  '))->toBe(['background-position' => 'top left']);
+    expect($parser->parse('background-position', 'CENTER'))->toBe(['background-position' => 'center']);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns and discards an unsupported background-position (e.g. bottom right)', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-position', 'bottom right'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
 });
 
 // --- M8-T4 (css-backgrounds-3 §6 reducido): box-shadow ------------------------------------------

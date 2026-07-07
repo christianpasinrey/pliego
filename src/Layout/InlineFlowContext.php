@@ -827,6 +827,19 @@ final class InlineFlowContext
                 'box-shadow not supported on inline elements (M8): declaration ignored',
             );
         }
+        // M8-T6 (brief: background-image on inline is unsupported, same treatment as box-shadow
+        // just above) -- InlineBoxFragment has no $backgroundImagePath/$backgroundSize/
+        // $backgroundRepeat/$backgroundPosition fields at all (only $backgroundGradient survives
+        // per-slice, see its docblock), so a background-image declared on a real inline element
+        // (e.g. a <span>) is simply dropped, with a one-time warning (addWarningOnce -- an inline
+        // box split into N slices by box-decoration-break:slice reconstructs the SAME $style, and
+        // would otherwise fire this check N times).
+        if ($style->backgroundImagePath !== null) {
+            $this->warnings?->addWarningOnce(
+                'background-image-on-inline',
+                'background-image not supported on inline elements (M8): declaration ignored',
+            );
+        }
         return new InlineBoxFragment(
             new Rect($minX, $rectY, $maxX - $minX, $rectHeight),
             $style->backgroundColor,
@@ -860,6 +873,10 @@ final class InlineFlowContext
                 $fragment->borderRadius,
                 $fragment->backgroundGradient,
                 $fragment->boxShadow,
+                $fragment->backgroundImagePath,
+                $fragment->backgroundSize,
+                $fragment->backgroundRepeat,
+                $fragment->backgroundPosition,
             );
         }
         if ($fragment instanceof TextFragment) {
