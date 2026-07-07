@@ -66,6 +66,10 @@ function tailwindIngestionCategorizeWarning(string $warning): string
     return match (true) {
         (bool) preg_match('/@media rule blocks skipped/', $warning) => 'media-skipped',
         (bool) preg_match('/@property rule blocks skipped/', $warning) => 'property-skipped',
+        // M10 final-review Finding B: css-nesting-1 `&` guard -- see StylesheetParser::
+        // resolveCssNesting()'s own docblock. Tailwind's odd:/even:/etc. variant classes compile to
+        // this exact nested shape, so a real v4 build trips it many times over.
+        (bool) preg_match('/nested CSS rules skipped/', $warning) => 'nesting-skipped',
         (bool) preg_match('/^layered !important uses simplified precedence/', $warning) => 'layer-important-simplified',
         (bool) preg_match('/^color-mix\(\) is not supported/', $warning) => 'color-mix-fallback',
         (bool) preg_match('/^Invalid selector syntax:/', $warning) => 'invalid-selector',

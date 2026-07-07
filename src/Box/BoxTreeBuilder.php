@@ -100,11 +100,21 @@ final class BoxTreeBuilder
      * information is genuinely gone once flattened, see hasVisibleInlineBox()'s own docblock on
      * the M7-T4 fast path this still reuses for the NON-flex-parent case).
      *
-     * Documented, UNCHANGED scope: a Display::InlineBlock direct child of a flex container still
-     * coalesces into the shared anonymous item alongside adjacent text/inline content (same
-     * pending-run path as before this task) -- no verified regression traces to that case (fixture
-     * 07's navbar uses two Display::Inline elements, not inline-block), so widening the fix to
-     * cover it too is left out of this task's narrowly-verified scope.
+     * M10 final-review Finding A: the paragraph above USED to say Display::InlineBlock direct
+     * children were left out of this fix's scope ("no verified regression traces to that case") --
+     * that carve-out was wrong. A `display:flex` container with two adjacent inline-block children
+     * (Bootstrap's own `.btn-group`-shaped markup: `<span class="ib">a</span><span
+     * class="ib">b</span>`, no text between) merged BOTH into ONE shared anonymous flex item,
+     * exactly the same css-flexbox-1 §4 violation the Display::Inline case above was fixed for --
+     * `justify-content:space-between` never saw two items to space apart. Display::InlineBlock now
+     * takes the SAME $parentIsFlex branch as Display::Inline (see the check just below): flush +
+     * buildChildBox(), never entering the pending/run token sequence when the parent is a flex
+     * container. wrapAnonymousFlexItems()'s own InlineBlock-coalesce branch is consequently DEAD
+     * code (it only ever receives children collected with $parentIsFlex=true — buildBlock() is its
+     * only call site, always under `if ($isFlex)`) and was removed there; the OLD, still-live
+     * behavior (coalescing an inline-block into a shared anonymous item alongside a NON-flex
+     * ancestor's other inline content, e.g. nested inside a plain `<p>`) is unaffected — this
+     * change only touches inline-block children whose DIRECT parent is itself a flex container.
      *
      * @return list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd>
      */
@@ -163,7 +173,14 @@ final class BoxTreeBuilder
             // igual que cualquier hijo bloque real), la única diferencia es DÓNDE aterriza el
             // BlockBox resultante. Se comprueba ANTES que Display::Inline porque ambos son
             // mutuamente excluyentes (un elemento no puede tener los dos display a la vez).
-            if ($childStyle->display === Display::InlineBlock) {
+            //
+            // M10 final-review Finding A: `&& !$parentIsFlex` -- same $parentIsFlex gate as the
+            // Display::Inline branch just below (M10-T2), now widened to cover InlineBlock too
+            // (see this method's own docblock above for the root cause this closes). When the
+            // parent IS a flex container, an inline-block child falls through to the generic
+            // Display::Block-shaped fallback at the bottom of this method instead (flush() +
+            // buildChildBox()), becoming its own top-level flex item.
+            if ($childStyle->display === Display::InlineBlock && !$parentIsFlex) {
                 $this->warnIfFloatOrAbsoluteOnInlineBlock($childStyle);
                 $pending[] = $this->buildBlock($node, $styles);
                 continue;
@@ -515,13 +532,24 @@ final class BoxTreeBuilder
      * contenedor (M4-T1: ninguna de esas hereda), así que el anónimo nunca es él mismo un flex
      * container aunque su padre lo sea.
      *
-     * M7-T4: += InlineBoxStart/InlineBoxEnd (caja inline real) y BlockBox-con-display:InlineBlock
-     * (token atómico de inline-block, ver collectChildren()) al tramo "suelto" que se envuelve en
-     * el anónimo — TRATADOS IGUAL que TextRun/LineBreakRun (nunca son, por sí mismos, un flex item
-     * directo): un `<div style="display:flex"><span class="badge">x</span></div>` o un
-     * `<div style="display:flex">texto <a class="btn">click</a></div>` deben coalescer su
-     * contenido inline suelto en UN ÚNICO BlockBox anónimo, exactamente igual que texto plano —
-     * distinguido de un BlockBox flex item REAL únicamente por su propio $style->display.
+     * M7-T4: += InlineBoxStart/InlineBoxEnd (caja inline real) al tramo "suelto" que se envuelve
+     * en el anónimo — TRATADOS IGUAL que TextRun/LineBreakRun (nunca son, por sí mismos, un flex
+     * item directo). NOTA (M10 final-review Finding A): en la práctica, este $children YA llega
+     * sin ningún InlineBoxStart/InlineBoxEnd -- collectChildren() (único productor de esos
+     * tokens) solo los emite cuando `!$parentIsFlex` (M10-T2), y este método SOLO se invoca desde
+     * buildBlock() bajo `if ($isFlex)`, con esos MISMOS $children -- así que la rama de abajo para
+     * esos dos tokens es, de hecho, código defensivo inalcanzable ya desde M10-T2 (no introducido
+     * ni tocado por esta tarea, fuera de su alcance verificado; se deja tal cual).
+     *
+     * M10 final-review Finding A: la rama gemela que coalescía un BlockBox con
+     * display:InlineBlock ("token atómico de inline-block") en el mismo tramo suelto SÍ se ha
+     * ELIMINADO -- collectChildren() ya no produce ese token cuando $parentIsFlex (ver el propio
+     * docblock de esa rama, arriba), así que aquí sería la MISMA clase de código inalcanzable, pero
+     * a diferencia de InlineBoxStart/InlineBoxEnd, esta sí es la rama que ESTA tarea deja de
+     * producir, así que se retira en el mismo cambio en vez de quedar como comentario mintiendo
+     * sobre un comportamiento que ya no ocurre (`<div style="display:flex"><span
+     * class="ib">a</span><span class="ib">b</span></div>` produce ahora DOS BlockBox flex items
+     * reales, tag "span", nunca un "anonymous" compartido — ver BoxTreeBuilderTest).
      *
      * @param list<BlockBox|TextRun|LineBreakRun|ImageBox|TableBox|InlineBoxStart|InlineBoxEnd> $children
      * @return list<BlockBox|ImageBox|TableBox>
@@ -529,7 +557,7 @@ final class BoxTreeBuilder
     private function wrapAnonymousFlexItems(array $children, ComputedStyle $containerStyle): array
     {
         $items = [];
-        /** @var list<TextRun|LineBreakRun|InlineBoxStart|InlineBoxEnd|BlockBox> $run */
+        /** @var list<TextRun|LineBreakRun|InlineBoxStart|InlineBoxEnd> $run */
         $run = [];
         $flushRun = function () use (&$items, &$run, $containerStyle): void {
             if ($run === []) {
@@ -543,10 +571,6 @@ final class BoxTreeBuilder
             if ($child instanceof TextRun || $child instanceof LineBreakRun
                 || $child instanceof InlineBoxStart || $child instanceof InlineBoxEnd
             ) {
-                $run[] = $child;
-                continue;
-            }
-            if ($child instanceof BlockBox && $child->style->display === Display::InlineBlock) {
                 $run[] = $child;
                 continue;
             }

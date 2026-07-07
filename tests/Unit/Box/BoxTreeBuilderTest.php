@@ -505,18 +505,66 @@ it('an inline element with NO visible box CSS inside a flex container ALSO becom
     expect($b->tag)->toBe('span');
 });
 
-it('Display::InlineBlock direct children of a flex container still coalesce into a shared anonymous item (documented, unchanged scope)', function () {
+// --- M10 final-review Finding A (css-flexbox-1 §4): a Display::InlineBlock direct child of a
+// flex container becomes its OWN flex item too, mirroring the M10-T2 fix just above for
+// Display::Inline -- the "documented, unchanged scope" carve-out from that task's own docblock
+// (collectChildren()'s comment used to read "Display::InlineBlock direct children of a flex
+// container are UNCHANGED... no verified regression traces to that case") turned out to be a real
+// gap once exercised (two adjacent inline-block spans + justify-content:space-between: BOTH used
+// to merge into ONE anonymous flex item, so space-between never saw two items to space apart --
+// same root-cause shape as the M10-T2 navbar bug, just for InlineBlock instead of Inline). Fix:
+// collectChildren()'s $parentIsFlex gate now covers BOTH Display::Inline AND Display::InlineBlock
+// -- an inline-block child of a flex container is flushed + buildChildBox()'d exactly like a real
+// block child, never entering the pending/run token sequence at all. wrapAnonymousFlexItems()'s
+// own InlineBlock-coalesce branch is now dead code for that reason (it only ever receives children
+// collected with $parentIsFlex=true, see buildBlock()'s only call site) and was removed.
+
+it('two adjacent Display::InlineBlock children of a flex container each become a SEPARATE flex item, not one merged anonymous wrapper (Finding A)', function () {
     $root = buildTree(
         '<body><div class="flex"><span class="ib">a</span><span class="ib">b</span></div></body>',
         '.flex { display: flex } .ib { display: inline-block }',
     );
     $flex = $root->children[0];
     assert($flex instanceof BlockBox);
+    expect($flex->children)->toHaveCount(2);
+    [$a, $b] = $flex->children;
+    assert($a instanceof BlockBox && $b instanceof BlockBox);
+    expect($a->tag)->toBe('span');
+    expect($b->tag)->toBe('span');
+    expect($a->tag)->not->toBe('anonymous');
+    expect($b->tag)->not->toBe('anonymous');
+});
+
+it('an inline-block child of a flex container keeps its OWN computed style (Finding A, mirrors the Inline case above)', function () {
+    $root = buildTree(
+        '<body><div class="flex"><span class="ib">x</span></div></body>',
+        '.flex { display: flex } .ib { display: inline-block; padding: 5px; color: #00ff00 }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
     expect($flex->children)->toHaveCount(1);
-    $anon = $flex->children[0];
-    assert($anon instanceof BlockBox);
-    expect($anon->tag)->toBe('anonymous');
-    expect($anon->children)->toHaveCount(2);
+    $item = $flex->children[0];
+    assert($item instanceof BlockBox);
+    expect($item->tag)->toBe('span');
+    expect($item->style->paddingTop->value)->toBe(5.0);
+    expect($item->style->color->g)->toBe(255);
+});
+
+it('loose text directly in a flex container still merges into ONE shared anonymous item around an inline-block sibling (Finding A, mirrors the Inline case above)', function () {
+    $root = buildTree(
+        '<body><div class="flex">hello <span class="ib">x</span> world</div></body>',
+        '.flex { display: flex } .ib { display: inline-block }',
+    );
+    $flex = $root->children[0];
+    assert($flex instanceof BlockBox);
+    // Same 3-item shape as the Display::Inline "loose text" test above: the loose "hello " text,
+    // the inline-block <span> (its own item now), the loose " world" text.
+    expect($flex->children)->toHaveCount(3);
+    [$before, $ib, $after] = $flex->children;
+    assert($before instanceof BlockBox && $ib instanceof BlockBox && $after instanceof BlockBox);
+    expect($before->tag)->toBe('anonymous');
+    expect($ib->tag)->toBe('span');
+    expect($after->tag)->toBe('anonymous');
 });
 
 // M5-T3: css-tables-3 §2 — un elemento con Display::Table (UA default para <table>, ver

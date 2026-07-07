@@ -25,11 +25,14 @@ use Pliego\Engine;
  * one omits) to index.php's $tailwindSampleHtml/$tailwindSampleCss BY HAND -- if you touch one,
  * touch the other.
  *
- * Two real, pre-existing engine gaps the sample deliberately AVOIDS demoing broken (documented in
+ * ONE real, pre-existing engine gap the sample deliberately AVOIDS demoing broken (documented in
  * both the README and index.php's own comment): the all-sides `border-width`/`border-style`/
- * `border-color` shorthand (only the 4-part per-side longhands are supported) and a bare-number
- * calc() for line-height (calc() must resolve to a length/percentage) -- this test's warning
- * assertion below is the guardrail that catches it if either gap is ever reintroduced by accident.
+ * `border-color` shorthand (only the 4-part per-side longhands are supported) -- this test's
+ * warning assertion below is the guardrail that catches it if that gap is ever reintroduced by
+ * accident. (A SECOND gap used to live here too -- a bare-number `calc()` for `line-height` --
+ * but that was FIXED by M10-T5's `CalcParser::parseNumberOrLength()`, see the README's "Tailwind"
+ * section; this sample's --text-* vars just were never revisited to add the paired
+ * --text-*--line-height companion back in, not because it would fail now.)
  */
 
 const TAILWIND_PLAYGROUND_SAMPLE_HTML = <<<'HTML'
@@ -37,7 +40,7 @@ const TAILWIND_PLAYGROUND_SAMPLE_HTML = <<<'HTML'
   <div class="p-6 mb-3 rounded-lg bg-slate-50 shadow-md">
     <p class="mb-2 text-sm font-bold tracking-wide text-slate-700">TAILWIND SAMPLE</p>
     <h1 class="mb-3 text-2xl font-bold text-slate-900">Invoice #1042</h1>
-    <p class="text-base text-slate-700 leading-normal">Bring your own Tailwind build: this CSS is a slim, hand-curated slice of a real npx @tailwindcss/cli output, pasted straight into stylesheet(). No CLI runs inside pliego -- see the README's "Tailwind" section for the full workflow and its honest gaps (variant classes like hover:/sm:/odd: and fractions like w-1/2 do not apply, grid is unsupported, the all-sides border shorthand this sample deliberately avoids is unsupported too).</p>
+    <p class="text-base text-slate-700 leading-normal">Bring your own Tailwind build: this CSS is a slim, hand-curated slice of a real npx @tailwindcss/cli output, pasted straight into stylesheet(). No CLI runs inside pliego -- see the README's "Tailwind" section for the full workflow and its honest gaps. Variant classes (hover:/sm:/odd: etc.) don't apply (CSS nesting isn't supported); fractions like w-1/2 fail similarly (same escaped-character parsing gap); grid is unsupported; the all-sides border shorthand this sample deliberately avoids is unsupported too.</p>
     <div class="flex items-center justify-between gap-4 mb-2">
       <span class="p-4 rounded-md bg-blue-500 text-white font-bold text-sm">Pay now</span>
       <span class="p-4 rounded-md bg-slate-100 text-slate-700 text-sm">Details</span>
@@ -152,9 +155,10 @@ it('renders the playground\'s Tailwind sample as a single-page, valid PDF', func
 /**
  * The ONLY warning this curated sample should produce is the well-known, pre-existing "multiple
  * box-shadow layers" limitation (Tailwind's real .shadow-md chains 5 var()-based layers, this
- * engine paints only the first) -- if either of the two gaps documented in index.php's own
- * comment (all-sides border shorthand, bare-number calc() line-height) were reintroduced by
- * editing the sample without re-checking against the engine, THIS assertion is what catches it.
+ * engine paints only the first) -- if the all-sides border shorthand gap documented in index.php's
+ * own comment were reintroduced by editing the sample without re-checking against the engine, THIS
+ * assertion is what catches it. (The sample's other gap, bare-number calc() for line-height, was
+ * FIXED by M10-T5 -- see this file's class docblock and index.php's own comment.)
  */
 it('produces exactly the one documented warning (multiple box-shadow layers), nothing else', function () {
     [, $report] = tailwindPlaygroundSampleRender();

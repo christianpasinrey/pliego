@@ -559,6 +559,70 @@ it('has no @media warning at all when the stylesheet has no @media blocks', func
     expect($result->warnings)->toBe([]);
 });
 
+// --- M10 final-review Finding C: resolveLayers() must not hoist @layer out of a conditional
+// at-rule (css-cascade-5 / css-conditional-3) ------------------------------------------------------
+//
+// resolveLayers() used to scan for `@layer` with a flat, depth-blind regex -- it matched a
+// `@layer` construct at ANY brace depth, including one nested inside an UNRESOLVED @media. Since
+// resolveLayers() HOISTS a layer's body out to wherever that layer's rank places it (never an
+// in-place splice), finding a `@layer` inside `@media screen { @layer x { p{color:red} } }` and
+// hoisting `p{color:red}` out UNCONDITIONALLY (before @media ever got to decide screen doesn't
+// apply) made it apply on EVERY medium, including print -- plus resolveMediaBlocks() then saw an
+// @media screen block that LOOKED empty (already hollowed out) and reported "1 @media rule blocks
+// skipped", technically true but misleading (something from inside it had already leaked through
+// unconditionally). Fix: (1) resolveLayers() now only matches `@layer` at brace depth 0 (skips
+// and leaves untouched any match nested inside something else); (2) @media now resolves BEFORE
+// @layer (see parse()'s own docblock at that call site for why this ordering, combined with (1),
+// is what makes BOTH nesting directions work: `@layer` wrapping `@media` AND `@media` wrapping
+// `@layer`).
+
+it('Finding C repro: a @layer nested inside a skipped @media screen does NOT leak its rule onto every medium, and the skip warning is accurate (not misleading)', function () {
+    $css = '@media screen { @layer x { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(0);
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('Finding C: a @layer nested inside an APPLYING @media print DOES apply (media resolves first, unwrapping the @layer to top level for a later, safe top-level pass)', function () {
+    $css = '@media print { @layer x { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe([]);
+});
+
+it('Finding C: the reverse nesting (@media inside @layer) still works -- an applying @media print inside a @layer keeps applying, a skipped @media screen inside stays skipped', function () {
+    $css = '@layer x { @media print { p { color: red } } @media screen { p { color: blue } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe(['1 @media rule blocks skipped (screen/interactive-only media)']);
+});
+
+it('Finding C: a @layer nested inside an unresolved @container does NOT leak its rule out unconditionally (depth guard, not just the @media/@layer ordering swap)', function () {
+    // @container is never evaluated (M10-T6, out of scope) and always extracted+discarded AFTER
+    // @layer resolution -- so a @layer nested inside one is STILL at brace depth > 0 when
+    // resolveLayers() scans, even after Finding C's @media-vs-@layer ordering swap (that swap only
+    // reorders @media relative to @layer, @container still resolves after both). Without the
+    // top-level-only depth guard, resolveLayers()'s old flat regex would hoist `p{color:red}` out
+    // of the @container conditional entirely, making it apply unconditionally -- exactly the same
+    // "misleading skip count" shape as the @media repro above, proving the depth guard does real
+    // work beyond the ordering swap alone.
+    $css = '@container (min-width: 200px) { @layer x { p { color: red } } }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(0);
+    expect($result->warnings)->toBe(['1 @container rule blocks skipped (not supported)']);
+});
+
+it('Finding C: a top-level @layer with NO @media involved is completely unchanged', function () {
+    $css = '@layer base { p { color: red } } p { color: blue }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->warnings)->toBe([]);
+});
+
 // --- M10-T3: @layer (css-cascade-5, reduced) -----------------------------------------------------
 
 it('unwraps a single named @layer block, rules parse normally', function () {
@@ -709,5 +773,77 @@ it('aggregates multiple @container rules into a SINGLE warning with the total co
 
 it('has no @container warning at all when the stylesheet declares none', function () {
     $result = new StylesheetParser()->parse('p { color: red }');
+    expect($result->warnings)->toBe([]);
+});
+
+// --- M10 final-review Finding B: CSS nesting (&) guard ---------------------------------------
+//
+// sabberworm/php-css-parser 8.9 does not understand css-nesting-1's `&` syntax -- probed by hand
+// (see StylesheetParser::resolveCssNesting()'s own docblock): `.a { &:hover { color: red } }
+// .b { color: blue } .c { color: green }` parses through sabberworm DIRECTLY to `.a {}` (its own
+// nested block silently swallowed) AND `.b` gone too -- only `.c` survives. Zero warnings, real
+// silent data loss, not just "nesting unsupported". This is exactly Tailwind v4's `odd:`/`even:`
+// (and every other pseudo-class variant) compiled shape: `.odd\:bg-white { &:nth-child(odd) {
+// background-color: ... } }` (README's Tailwind section). Fix: a pre-extraction pass strips the
+// nested `&...{...}` construct out of the css BEFORE sabberworm ever sees it, replaced by a
+// single space (same precise, non-hoisting, in-place removal shape as extractAtRuleBlocks()) --
+// the outer rule keeps whatever plain declarations it had of its own, and NOTHING after it is
+// ever lost, with ONE aggregated warning for the whole document.
+
+it('the exact repro: .a{&:x{...}} silently ate .b before this fix -- now .a survives (empty), .b AND .c both survive, ONE warning', function () {
+    $css = '.a { &:hover { color: red } } .b { color: blue } .c { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    // .a has no declarations of its own (its only content was the nested block) -- Sabberworm's
+    // getAllDeclarationBlocks() never emits a block with zero rules, so only .b and .c produce
+    // StyleRule entries.
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('blue'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('green'));
+    expect($result->warnings)->toBe(['1 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('keeps the outer rule\'s OWN plain declarations when it has some, alongside the nested block that gets stripped', function () {
+    $css = '.a { color: red; &:hover { color: blue } } .b { color: green }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(2);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->rules[1]->declarations['color'])->toEqual(Color::fromCss('green'));
+    expect($result->warnings)->toBe(['1 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('strips Tailwind\'s real odd:/even: nested-variant SHAPE (the & nesting itself) without losing any sibling rule', function () {
+    // Same nesting shape Tailwind v4 actually emits for `odd:`/`even:` variants
+    // (`.odd\:bg-white { &:nth-child(odd) { ... } }`, see README's Tailwind section) -- unescaped
+    // class names here on purpose, to isolate THIS finding (the `&` nesting) from the separate,
+    // already-documented `\:`-escaping gap (SelectorParser's ident regex) that a literal
+    // `.odd\:bg-white` selector would ALSO trip, independently of nesting.
+    $css = '.oddbg { &:nth-child(odd) { background-color: #ffffff } } '
+        . '.evenbg { &:nth-child(even) { background-color: #f0f0f0 } } '
+        . '.static { color: red }';
+    $result = new StylesheetParser()->parse($css);
+    expect($result->rules)->toHaveCount(1);
+    expect($result->rules[0]->declarations['color'])->toEqual(Color::fromCss('red'));
+    expect($result->warnings)->toBe(['2 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('declaration-block-count regression: N ordinary rules with ONE nested-variant rule in the middle all survive except the nested content itself', function () {
+    $css = 'a1 { color: red } a2 { color: blue } a3 { &:hover { color: purple } } a4 { color: green } a5 { color: orange }';
+    $result = new StylesheetParser()->parse($css);
+    // 5 selectors total; a3 contributes no declarations of its own (nested-only), so 4 StyleRule
+    // entries -- none of a1/a2/a4/a5 is silently dropped the way the unfixed sabberworm bug would
+    // have dropped the rule immediately AFTER a3 (a4).
+    expect($result->rules)->toHaveCount(4);
+    $colors = array_map(static fn($rule) => $rule->declarations['color'], $result->rules);
+    expect($colors)->toEqual([
+        Color::fromCss('red'),
+        Color::fromCss('blue'),
+        Color::fromCss('green'),
+        Color::fromCss('orange'),
+    ]);
+    expect($result->warnings)->toBe(['1 nested CSS rules skipped (CSS nesting is not supported)']);
+});
+
+it('has no nesting warning at all when the stylesheet uses no & nesting', function () {
+    $result = new StylesheetParser()->parse('p { color: red } .a.bar { color: blue }');
     expect($result->warnings)->toBe([]);
 });

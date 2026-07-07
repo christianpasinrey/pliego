@@ -93,16 +93,41 @@ final class StylesheetParser
     public function parse(string $css, float $pageWidthPx = self::DEFAULT_PAGE_WIDTH_PX): ParseResult
     {
         $css = $this->stripComments($css);
-        // M10-T3 (css-cascade-5, reduced -- see resolveLayers()'s own docblock for the full
-        // algorithm): @layer resolved FIRST, before @media -- a real Tailwind v4 build's layers
-        // (theme/base/components/utilities) never nest a @media inside a @layer in practice, but
-        // if one did, flattening layers first means @media's own brace-matching (below) sees
-        // perfectly ordinary top-level text, no special-casing needed on that side.
-        [$css, $importantInLayer] = $this->resolveLayers($css);
-        // M9-T2: @media resuelto ANTES de @font-face/@page (ver docblock de clase) -- un bloque
-        // `@media print { @font-face { ... } }` (raro, pero legal) debe quedar aplanado a un
-        // `@font-face` de nivel superior para que extractAtRuleBlocks() lo vea a continuación.
+        // M10 final-review Finding B (css-nesting-1 `&`, see resolveCssNesting()'s own docblock):
+        // runs FIRST, before @layer/@media/sabberworm ever see the text -- a `&`-nested rule can
+        // appear at ANY depth (Tailwind's real `odd:`/`even:` shape nests it inside `@layer
+        // utilities`, sometimes inside a `@media` too), and this pass is a pure, depth-agnostic
+        // textual strip (finds the `&...{...}` span wherever it is, removes exactly that span, in
+        // place) -- unlike resolveLayers()'s hoist-and-reorder, there is nothing here that could
+        // interact badly with @layer/@media resolution regardless of ordering, so running it first
+        // (right after comment stripping) is simplest.
+        [$css, $nestedSkippedCount] = $this->resolveCssNesting($css);
+        // M10 final-review Finding C (css-conditional-3 / css-cascade-5, see resolveLayers()'s own
+        // docblock for the full algorithm): @media now resolves BEFORE @layer -- swapped from this
+        // task's original "@layer first" ordering (see git history), which had a real bug: a
+        // `@media screen { @layer x { p{color:red} } }` let resolveLayers() (which HOISTS a
+        // layer's body out to a different position in the css) reach into an unresolved @media's
+        // body and hoist its content out UNCONDITIONALLY, before @media ever got to decide whether
+        // that content should exist at all -- the layer's rule ended up applying on EVERY medium
+        // (including print), plus a misleading "1 @media rule blocks skipped" warning (the block
+        // LOOKED empty by the time @media's resolver saw it, having already been hollowed out).
+        // @media-first fixes BOTH nesting directions: resolveMediaBlocks() never cares about its
+        // own surrounding depth (it only ever does precise in-place splicing, see its own
+        // docblock), so a `@layer x { @media print { ... } }` (media nested inside layer) still
+        // resolves correctly regardless of order; but a `@layer` nested inside an UNRESOLVED
+        // @media can only be handled safely by letting @media decide FIRST (discard the whole
+        // subtree if the medium doesn't apply, or splice the body back in place -- unwrapping it to
+        // top level -- if it does), so that resolveLayers() only ever sees a `@layer` that is
+        // either genuinely top-level to begin with, or has just been unwrapped to top level by an
+        // applying @media, in both cases now safe for its top-level-only scan (see
+        // resolveLayers()'s own docblock for that half of the fix).
         [$css, $mediaSkippedCount] = $this->resolveMediaBlocks($css, $pageWidthPx);
+        [$css, $importantInLayer] = $this->resolveLayers($css);
+        // M9-T2: @media ya se resolvió ARRIBA (Finding C moved it before @layer -- see this
+        // method's own comment at that call site) -- @font-face/@page todavía necesitan quedar
+        // DESPUÉS de esa resolución (ver su razón original: un `@media print { @font-face {...} }`
+        // debe quedar aplanado a un `@font-face` de nivel superior antes de que
+        // extractAtRuleBlocks() lo vea), lo cual ya se cumple con el nuevo orden.
         // M10-T3 (css-properties-values-api-1, out of scope): @property registers a custom
         // property's syntax/inheritance/initial-value for typed-custom-property animation and
         // validation -- none of which this static print engine implements (no animation, and a
@@ -153,6 +178,12 @@ final class StylesheetParser
         $selectorParser = new SelectorParser($selectorWarnings);
         $rules = [];
         $warnings = [...$fontFaceWarnings, ...$pageWarnings];
+        // M10 final-review Finding B: same "one aggregated warning" shape as every other extractor
+        // in this class -- see resolveCssNesting()'s own docblock for the exact bug this guards
+        // against (sabberworm silently swallowing the rule AFTER a `&`-nested one).
+        if ($nestedSkippedCount > 0) {
+            $warnings[] = "$nestedSkippedCount nested CSS rules skipped (CSS nesting is not supported)";
+        }
         // M9-T2: UN único warning agregado (nunca uno por bloque, ver docblock de clase) -- el
         // conteo ya está cerrado en $mediaSkippedCount desde el paso de resolución, arriba. Texto
         // fijo (brief M9-T2, RESTRICCIONES GLOBALES): "N @media rule blocks skipped
@@ -329,6 +360,66 @@ final class StylesheetParser
     }
 
     /**
+     * M10 final-review Finding B (css-nesting-1 `&`): probed by hand against
+     * sabberworm/php-css-parser 8.9 -- `.a { &:hover { color: red } } .b { color: blue }
+     * .c { color: green } ` parses DIRECTLY (no extraction at all) to `.a {}` (its nested block
+     * silently swallowed, no warning) AND `.b` GONE too -- only `.c` survives. Real, silent,
+     * zero-warning data loss, not just "nesting unsupported" (losing .a's own content would be
+     * fine and expected; losing the UNRELATED next rule is not). This is exactly Tailwind v4's
+     * `odd:`/`even:` (and every other pseudo-class variant) compiled shape --
+     * `.odd\:bg-white { &:nth-child(odd) { background-color: ... } }` (see README's Tailwind
+     * section) -- so every nested-variant utility in a real v4 build risked eating whatever rule
+     * happened to follow it.
+     *
+     * Fix (minimum, per adjudication): a single global, offset-driven scan (same brace-matching
+     * pattern as every other extractor in this class) for the literal TEXT SHAPE of a nested `&`
+     * rule -- an `&` character, followed by selector text that cannot syntactically contain `{`,
+     * `}`, or `;` (a real CSS selector never does), followed by that rule's own opening `{` --
+     * then removes the WHOLE matched construct (from the `&` through its own matching `}`),
+     * replaced by a single space, same convention as extractAtRuleBlocks()/resolveMediaBlocks().
+     * Deliberately depth-AGNOSTIC (does not care where in the document the match sits, unlike
+     * resolveLayers()'s top-level-only scan) -- a `&`-nested rule can only ever appear ONE level
+     * inside SOME enclosing rule's body, whatever depth that outer rule itself sits at (top level,
+     * inside `@layer`, inside `@layer` + `@media`, ...), so anchoring the match on the `&` itself
+     * finds it correctly regardless. Runs BEFORE sabberworm ever sees the text (parse()'s very
+     * first resolution step, right after stripComments()), so the malformed-nesting bug above
+     * never has a chance to trigger.
+     *
+     * Why this can never repeat resolveLayers()'s Finding C mistake (reaching into an unresolved
+     * @media/@layer and losing conditional context): this method never MOVES text to a different
+     * position the way resolveLayers() hoists a layer's body -- it only ever DELETES the exact
+     * nested span it matched, leaving everything before and after it (however deeply nested that
+     * context is) byte-for-byte untouched. There is no "outer conditional" for a deletion to
+     * accidentally escape.
+     *
+     * Does NOT recurse into the just-removed nested body to find a FURTHER nested `&` inside it
+     * (double nesting, e.g. `&:hover { &.active { ... } }`) -- the removed text is gone, so a
+     * second `&` construct nested INSIDE it is (correctly) never counted separately; a SIBLING `&`
+     * block later in the SAME outer rule (`.x { &:hover {...} &:focus {...} }`) IS still found
+     * and counted on the next loop iteration (the scan resumes from $matchStart, i.e. right where
+     * the just-removed span used to start, so it naturally continues into whatever follows it).
+     *
+     * @return array{0: string, 1: int} [cssSinNestingAnidado, bloquesAnidadosDescartados]
+     */
+    private function resolveCssNesting(string $css): array
+    {
+        $skipped = 0;
+        $offset = 0;
+        while (preg_match('/&[^{};]*\{/', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
+            $matchStart = (int) $m[0][1];
+            $openBrace = $matchStart + strlen((string) $m[0][0]) - 1;
+            $closeBrace = $this->findMatchingBrace($css, $openBrace);
+            if ($closeBrace === null) {
+                break;
+            }
+            $skipped++;
+            $css = substr($css, 0, $matchStart) . ' ' . substr($css, $closeBrace + 1);
+            $offset = $matchStart;
+        }
+        return [$css, $skipped];
+    }
+
+    /**
      * M8-T7: generalización de la extracción de @page (brace-matching manual, ver docblock de
      * clase) a cualquier at-rule de nivel superior identificado por nombre — @font-face es el
      * segundo consumidor. Sustituye cada bloque encontrado por un espacio en el CSS que se le
@@ -455,8 +546,30 @@ final class StylesheetParser
      * see tests/Fixtures/tailwind/tailwind-output.css), so this is a deliberate scope narrowing,
      * not an oversight; a hand-authored stylesheet that nests `@layer` INSIDE another `@layer`
      * block would have that inner construct pass through unresolved into whatever consumes the
-     * outer layer's body next (@media resolution, then sabberworm) — likely misinterpreted, same
-     * "reduced, documented" spirit as every other explicitly-scoped-down at-rule in this class.
+     * outer layer's body next (@property/@container/@font-face/@page extraction, then sabberworm
+     * directly -- @media already ran BEFORE this method, see parse()'s own ordering comment,
+     * M10 final-review Finding C) — likely misinterpreted, same "reduced, documented" spirit as
+     * every other explicitly-scoped-down at-rule in this class.
+     *
+     * M10 final-review Finding C (css-cascade-5 / css-conditional-3): the scan below used to match
+     * `@layer` at ANY brace depth, completely blind to whether it sat inside some OTHER, still-
+     * unresolved conditional construct -- `@media screen { @layer x { p{color:red} } }` let this
+     * method reach INTO the unresolved `@media screen` body and HOIST `p{color:red}` out to
+     * wherever layer "x"'s rank placed it, entirely divorced from the `screen` condition that
+     * should have gated it (making it apply on every medium, including print) -- see parse()'s own
+     * docblock for the full bug and why @media now resolves BEFORE this method runs. That ordering
+     * fix alone covers @media, but this method is ALSO reachable with a still-unresolved @container
+     * wrapped around a `@layer` (@container extraction runs AFTER this method, unchanged by the
+     * @media/@layer reordering -- @container is never evaluated at all, M10-T6) — same hoisting
+     * bug, different wrapper. Fix: `braceDepthAt()` computes how many un-matched `{` precede a
+     * candidate match; any match at depth > 0 is left COMPLETELY untouched (not extracted, not
+     * counted, not advanced past — the loop simply resumes scanning from just after it) instead of
+     * being extracted/hoisted, so a `@layer` genuinely nested inside ANY still-unresolved
+     * conditional construct (whatever it is) is safely ignored by this pass and handled by
+     * whatever construct wraps it instead (discarded whole, same as the pre-existing @container/
+     * @media "outer decision governs the nested subtree" rule already documented on those methods
+     * -- or, for @media specifically, already unwrapped to genuine top level by the time this
+     * method runs, in which case it's found normally at depth 0).
      *
      * !important note: this method ALSO detects (via a single case-insensitive substring scan per
      * collected body -- declarations are still raw text here, sabberworm has not tokenized them
@@ -478,6 +591,12 @@ final class StylesheetParser
         $offset = 0;
         while (preg_match('/@layer\b([^{;]*)([{;])/i', $css, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
             $matchStart = (int) $m[0][1];
+            // M10 final-review Finding C: a match nested inside some other still-unresolved
+            // construct (brace depth > 0) is left untouched -- see this method's own docblock.
+            if ($this->braceDepthAt($css, $matchStart) > 0) {
+                $offset = $matchStart + strlen((string) $m[0][0]);
+                continue;
+            }
             $namesPart = trim((string) $m[1][0]);
             $terminator = $m[2][0];
             if ($terminator === ';') {
@@ -711,6 +830,30 @@ final class StylesheetParser
             }
         }
         return null;
+    }
+
+    /**
+     * M10 final-review Finding C: how many un-matched `{` precede $position in $text -- 0 means
+     * $position sits at the top level of the document (not inside ANY block, of any kind);
+     * anything > 0 means it's nested inside at least one still-open construct. Used by
+     * resolveLayers() to refuse to touch a `@layer` match that isn't genuinely top-level (see that
+     * method's own docblock for the hoisting bug this guards against). Same pragmatic, non-string-
+     * aware brace counting as findMatchingBrace() right above -- a `{`/`}` inside a quoted CSS
+     * string value would miscount, a limitation already shared by every other brace-matcher in
+     * this class (comments are stripped upstream by stripComments(), the one source of stray
+     * braces this class DOES account for).
+     */
+    private function braceDepthAt(string $text, int $position): int
+    {
+        $depth = 0;
+        for ($i = 0; $i < $position; $i++) {
+            if ($text[$i] === '{') {
+                $depth++;
+            } elseif ($text[$i] === '}') {
+                $depth--;
+            }
+        }
+        return $depth;
     }
 
     /**

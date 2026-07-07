@@ -1130,8 +1130,12 @@ of sync with whatever Tailwind version your own build actually used.
 M10-T3 ingested a **real, pinned Tailwind v4.3.2 CLI build**
 (`tests/Fixtures/tailwind/tailwind-output.css`, MIT — generated once
 against a representative utilities page and vendored as a golden fixture,
-never re-run) end to end: 191 rules, 104 warnings across 16 categories, a
-complete honest partition just like the Bootstrap audit.
+never re-run) end to end: 191 rules, 106 warnings across 17 categories
+(M10 final-review Finding B added `nesting-skipped`: +2 vs. the original
+104/16 — the css-nesting `&` guard below now correctly extracts and warns
+about the 2 nested `&:nth-child()` variants the vendored sheet uses,
+instead of one of them being silently swallowed by sabberworm with zero
+warning), a complete honest partition just like the Bootstrap audit.
 
 - Static utility classes: spacing (`p-*`/`m-*`/`gap-*`), flexbox (`flex`,
   `flex-direction`, `flex-wrap`, `justify-*`, `items-*`), colors
@@ -1150,26 +1154,46 @@ complete honest partition just like the Bootstrap audit.
   and layered `!important` doesn't invert cross-layer precedence per
   §4.4 — one document-wide warning instead).
 - Hand-written `:nth-child(odd)`/`:nth-child(even)` CSS pseudo-classes
-  (used in the sample at line 208) and CSS custom properties/`calc()`
-  (Tailwind's entire spacing scale is `calc(var(--spacing) * N)`). Note:
-  Tailwind's own `odd:` and `even:` **utilities** do **not** work — they
-  compile to CSS nesting which sabberworm mishandles (see below).
+  and CSS custom properties/`calc()` (Tailwind's entire spacing scale is
+  `calc(var(--spacing) * N)`). Note: Tailwind's own `odd:` and `even:`
+  **utilities** do **not** work — they compile to CSS nesting, which this
+  engine does not implement (see below).
 
 ### What doesn't, and why
 
 - **Variant classes never apply**: `hover:`, `sm:`, `md:`, `dark:`,
   `odd:`, `even:`, … all fail to match. Tailwind v4 compiles these to CSS
-  nesting rules (e.g., `.odd\:bg-white { &:nth-child(odd) {...} }`), and
-  sabberworm (the CSS parser) mishandles `&` nesting — it returns an empty
-  block **and silently drops all subsequent rules in the stylesheet** (a
-  verified regression, see M10-T4's report for details). The escaped colon
-  in the class name (`.odd\:bg-white`) is secondary; the nesting
-  mis-handling is the primary cause. Static (non-variant) utilities on the
-  same element are unaffected.
+  nesting rules (e.g., `.odd\:bg-white { &:nth-child(odd) {...} }`), which
+  this engine does not implement (css-nesting-1 is out of scope). The
+  escaped colon in the class name (`.odd\:bg-white`) is secondary; the
+  nesting itself is the primary reason the rule never matches. Static
+  (non-variant) utilities on the same element are unaffected.
+  sabberworm (the vendored CSS parser) mishandles `&` nesting on its own —
+  a **pre-existing gap** in the library, not something a pliego task
+  regressed — it returns an empty block for the nested rule **and, when
+  fed directly, silently drops the immediately following rule too**
+  (measured; not "all subsequent rules in the stylesheet", see M10 final
+  review's Finding B for the exact repro and count). M10 final-review
+  Finding B closes the silent-data-loss half of that: `StylesheetParser`
+  now pre-extracts every `&`-nested rule **before** sabberworm ever sees
+  the text, with one aggregated `"N nested CSS rules skipped (CSS nesting
+  is not supported)"` warning — the immediately-following rule is no
+  longer lost, only the nested variant's own content is (now loudly, not
+  silently). Real CSS nesting **support** (making `&:hover`/etc. actually
+  apply) is still out of scope, not currently on the roadmap.
 - **Fraction utilities fail the exact same way**: `w-1/2`, `h-1/2`, …
   Tailwind escapes the `/` as `\/` in the class name for the identical
   reason above — the same backslash-escape gap, not a fraction-math
   problem.
+- **`.container`'s responsive max-widths never apply**: Tailwind v4's
+  default build emits its `@media` breakpoints in the modern **range
+  syntax** (`@media (width >= 40rem) { ... }`, repeated at 48rem/64rem/
+  80rem/96rem for `.container`), not the `min-width:`/`max-width:` feature
+  form `Css\MediaQueryEvaluator` implements (see that class's own docblock:
+  "no ranges like `(400px <= width)`") — conservatively skipped like any
+  other unrecognized feature clause, so `.container` stays at its
+  mobile-first base rule (`width: 100%`) at every page width instead of
+  ever picking up a breakpoint's `max-width`, unlike Chrome.
 - **No grid support**: `display: grid`, `grid-template-columns`,
   `grid-cols-*`, `col-span-*`, etc. all warn and are dropped — this engine
   only implements block/inline/flex/table layout, no grid formatting
@@ -1189,14 +1213,14 @@ complete honest partition just like the Bootstrap audit.
   property) are dropped with a single aggregated warning; animation/
   transition support is out of scope for a paginated PDF regardless.
 
-Most gaps surface as warnings, except nested variant rules: when
-sabberworm mishandles `&` nesting (see the bullet above), it silently
-drops all subsequent rules until the next top-level rule, with zero
-warning emitted — a data loss risk tracked in the roadmap. All other gaps
-above surface as real entries in `RenderReport::$warnings` (the same list
-the playground's warnings panel renders), and the counts come from
-ingesting the **entire** real build with zero exceptions carved out, not a
-cherry-picked sample.
+Every gap above surfaces as a real, warned entry in `RenderReport::$warnings`
+(the same list the playground's warnings panel renders) — including nested
+variant rules, as of M10 final-review Finding B: `&` nesting used to be the
+one silent exception (sabberworm dropping the immediately following rule
+with zero warning, see the bullet above), now guarded by
+`StylesheetParser`'s own pre-extraction pass and its aggregated
+`nesting-skipped` warning. The counts come from ingesting the **entire**
+real build with zero exceptions carved out, not a cherry-picked sample.
 
 ### Why no preflight preset
 
@@ -1300,7 +1324,7 @@ aspirational targets:
 | 04 | Flex layout | `display:flex`, `gap`, `justify-content`/`align-items` | 0.089% | **1.471% → 0.089%** (16.5×, flex-item fix) | 0.5% (tightened from 2.0%) | Near pixel-perfect since M10-T2's flex-item fix — two adjacent inline elements inside a flex container used to merge into ONE flex item instead of two, see fixture 07's own row below |
 | 05 | Blockquote / monospace | `blockquote`, `pre`/`code`, `white-space: pre` | 0.144% | 0.144% — **igual** (not exercised by M10) | 1.0% | Near pixel-perfect — smallest, simplest fixture |
 | 06 | Gradients / shadows | Linear/radial `/Shading` gradients, `box-shadow` | 0.151% | 0.151% — **igual** (not exercised by M10) | 1.0% | Near pixel-perfect — native PDF shadings match Chrome's own gradient rendering closely |
-| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 2.641% | **5.654% → 2.641%** (media queries + navbar flex-item fix + line-height inheritance fix) | 3.5% (tightened from 5.5%) | **Was still the worst fixture through M10-T1; three real fixes later (M10-T2), it comfortably passes.** History: 4.665% (pre-M10-T1) → 5.654% (M10-T1's `vw`/`vh` fix, a genuine correctness win for headings that UNMASKED a pre-existing, unrelated navbar bug instead of fixing it — see M10-T1's own report) → 5.558% (M10-T2 PART 1, real `min-width`/`max-width` evaluation against the page's own 793.70px A4 width — `Css\MediaQueryEvaluator`, e.g. Bootstrap's `.row-cols-md-3` grid now genuinely applies) → 5.523% (M10-T2 PART 2's navbar fix — see below — barely moved 07's own number because a second, larger issue below the navbar dominated the diff mass by then) → **2.641%** (a line-height inheritance fix found while investigating why the navbar fix barely moved the number). Two real M10-T2 root causes, found via `tools/oracle/probe-*.mjs` (Playwright `getComputedStyle()` dumps, not part of the oracle pipeline) diffed against `Layout\FragmentDumper` dumps of pliego's own box tree: (1) `Box\BoxTreeBuilder`'s flex-item construction merged TWO adjacent `Display::Inline` children (`.navbar-brand`/`.navbar-text`, both real elements with their own Bootstrap padding) into ONE shared anonymous flex item instead of two separate ones (css-flexbox-1 §4 violation) — pliego's navbar rendered 40px tall against Chrome's real 56px, now hand-verified identical; (2) `Style\ComputedStyle`'s line-height inheritance carried an ancestor's ALREADY-RESOLVED px value straight down the tree instead of re-deriving a bare-NUMBER `line-height` (css-inline-3 §5.2 — e.g. Bootstrap's `body{line-height:1.5}`) against each descendant's OWN font-size: `.small`/`.card-text` (14px) inherited the body's 24px (16×1.5) unchanged instead of the correct 21px (14×1.5), a small per-line drift that compounded across every line below the card row into the fixture's dominant remaining diff mass. Both fixes are general (not fixture-07-specific): the flex-item fix alone dropped fixture 04 (a flex-layout fixture unrelated to Bootstrap) from 1.471% to 0.089%. |
+| 07 | **Full Bootstrap page** | Real vendored `bootstrap.min.css` via `<link>`: navbar, grid of cards, buttons, badges, alerts, striped table, blockquote — `Engine::make()` + the same real sheet `Engine::bootstrap()` ships | 2.641% | **4.665% → 2.641%** (true M9 baseline, consistent with row 04 above — see the History column for the mid-M10 journey: M10-T1's `vw`/`vh` fix briefly REGRESSED this to 5.654% by unmasking a pre-existing navbar bug, before M10-T2's media queries + navbar flex-item fix + line-height inheritance fix brought it down to today's number) | 3.5% (tightened from 5.5%) | **Was still the worst fixture through M10-T1; three real fixes later (M10-T2), it comfortably passes.** History: 4.665% (pre-M10-T1) → 5.654% (M10-T1's `vw`/`vh` fix, a genuine correctness win for headings that UNMASKED a pre-existing, unrelated navbar bug instead of fixing it — see M10-T1's own report) → 5.558% (M10-T2 PART 1, real `min-width`/`max-width` evaluation against the page's own 793.70px A4 width — `Css\MediaQueryEvaluator`, e.g. Bootstrap's `.row-cols-md-3` grid now genuinely applies) → 5.523% (M10-T2 PART 2's navbar fix — see below — barely moved 07's own number because a second, larger issue below the navbar dominated the diff mass by then) → **2.641%** (a line-height inheritance fix found while investigating why the navbar fix barely moved the number). Two real M10-T2 root causes, found via `tools/oracle/probe-*.mjs` (Playwright `getComputedStyle()` dumps, not part of the oracle pipeline) diffed against `Layout\FragmentDumper` dumps of pliego's own box tree: (1) `Box\BoxTreeBuilder`'s flex-item construction merged TWO adjacent `Display::Inline` children (`.navbar-brand`/`.navbar-text`, both real elements with their own Bootstrap padding) into ONE shared anonymous flex item instead of two separate ones (css-flexbox-1 §4 violation) — pliego's navbar rendered 40px tall against Chrome's real 56px, now hand-verified identical; (2) `Style\ComputedStyle`'s line-height inheritance carried an ancestor's ALREADY-RESOLVED px value straight down the tree instead of re-deriving a bare-NUMBER `line-height` (css-inline-3 §5.2 — e.g. Bootstrap's `body{line-height:1.5}`) against each descendant's OWN font-size: `.small`/`.card-text` (14px) inherited the body's 24px (16×1.5) unchanged instead of the correct 21px (14×1.5), a small per-line drift that compounded across every line below the card row into the fixture's dominant remaining diff mass. Both fixes are general (not fixture-07-specific): the flex-item fix alone dropped fixture 04 (a flex-layout fixture unrelated to Bootstrap) from 1.471% to 0.089%. |
 | 08 | **Full Tailwind page** (NEW, M10-T5) | Real, unmodified vendored Tailwind v4.3.2 CLI build via `<link>`: dark header bar (`flex`, `justify-between`), rounded/shadowed stat cards, colored buttons, a zebra table — `oklch()` colors, `@layer`, `calc()`-based spacing/typography | 0.440% | **nueva** — no M9 baseline (fixture didn't exist before M10) | 1.2% (recalibrated from a first-pass 2.4%) | Two calibration passes, both honestly documented (`tools/oracle/thresholds.json`'s own `_08_comment`): first pass measured 1.582% against a WRONG root-cause narrative ("font-metric sub-pixel noise, same class as 01/03/07") — a code-review finding corrected it: the real dominant cause was Tailwind's bare-number `calc()` line-height ratios being rejected outright, discarding the WHOLE `line-height` declaration on every text-bearing element (a page-wide vertical drift, not sub-pixel noise) — see the `line-height`-calc fix above. Fixing that dropped the measurement to 0.440% (3.6×); what remains is genuine anti-aliasing edge-softness (rounded corners/shadows) plus a much smaller residual of real font-ascent sub-pixel noise, the same class of diff 01/03/07 already have. |
 
 Fixtures 07 and 08 are both deliberately kept to content that still fits

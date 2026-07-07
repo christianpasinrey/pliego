@@ -273,7 +273,7 @@ $tailwindSampleHtml = <<<'HTML'
   <div class="p-6 mb-3 rounded-lg bg-slate-50 shadow-md">
     <p class="mb-2 text-sm font-bold tracking-wide text-slate-700">TAILWIND SAMPLE</p>
     <h1 class="mb-3 text-2xl font-bold text-slate-900">Invoice #1042</h1>
-    <p class="text-base text-slate-700 leading-normal">Bring your own Tailwind build: this CSS is a slim, hand-curated slice of a real npx @tailwindcss/cli output, pasted straight into stylesheet(). No CLI runs inside pliego -- see the README's "Tailwind" section for the full workflow and its honest gaps. Variant classes (hover:/sm:/odd: etc.) don't apply due to CSS nesting mishandling; fractions like w-1/2 fail similarly; grid is unsupported; the all-sides border shorthand this sample deliberately avoids is unsupported too.</p>
+    <p class="text-base text-slate-700 leading-normal">Bring your own Tailwind build: this CSS is a slim, hand-curated slice of a real npx @tailwindcss/cli output, pasted straight into stylesheet(). No CLI runs inside pliego -- see the README's "Tailwind" section for the full workflow and its honest gaps. Variant classes (hover:/sm:/odd: etc.) don't apply (CSS nesting isn't supported); fractions like w-1/2 fail similarly (same escaped-character parsing gap); grid is unsupported; the all-sides border shorthand this sample deliberately avoids is unsupported too.</p>
     <div class="flex items-center justify-between gap-4 mb-2">
       <span class="p-4 rounded-md bg-blue-500 text-white font-bold text-sm">Pay now</span>
       <span class="p-4 rounded-md bg-slate-100 text-slate-700 text-sm">Details</span>
@@ -307,15 +307,16 @@ HTML;
 $tailwindSampleCss = <<<'CSS'
 /* Slim curated slice of tests/Fixtures/tailwind/tailwind-output.css (real Tailwind v4.3.2 CLI
    build output, MIT) -- selectors/values copied verbatim, trimmed to this sample's own classes.
-   Two REAL, pre-existing engine gaps (both already documented in the README's "Tailwind"
-   section and audited in tests/EndToEnd/TailwindIngestionTest.php) are deliberately worked
-   around here rather than demoed broken: (1) the all-sides `border-width`/`border-style`/
-   `border-color` shorthand Tailwind's plain `.border`/`.border-{color}` utilities emit is
-   unsupported (only the 4-part per-side `border-{side}-{width,style,color}` longhands are), so
-   this sample uses shadow/background for visual definition instead of borders; (2) `line-height`
-   via a bare-number calc() (`--text-sm--line-height: calc(1.25 / .875)`, Tailwind's real
-   per-size ratio) isn't resolvable (calc() here must resolve to a length/percentage) -- this
-   sample's --text-* vars only carry font-size, not the paired --text-*--line-height. */
+   ONE real, pre-existing engine gap (already documented in the README's "Tailwind" section and
+   audited in tests/EndToEnd/TailwindIngestionTest.php) is deliberately worked around here rather
+   than demoed broken: the all-sides `border-width`/`border-style`/`border-color` shorthand
+   Tailwind's plain `.border`/`.border-{color}` utilities emit is unsupported (only the 4-part
+   per-side `border-{side}-{width,style,color}` longhands are), so this sample uses
+   shadow/background for visual definition instead of borders. `line-height` via a bare-number
+   calc() (`--text-sm--line-height: calc(1.25 / .875)`, Tailwind's real per-size ratio) is FIXED
+   as of M10-T5 (`CalcParser::parseNumberOrLength()`, see the README's "Tailwind" section) -- no
+   longer a gap this sample needs to avoid; its --text-* vars simply were never revisited to add
+   the paired --text-*--line-height companion back in, not because it would fail. */
 @layer theme, utilities;
 @layer theme {
   :root {

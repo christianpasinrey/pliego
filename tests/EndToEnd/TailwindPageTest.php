@@ -18,11 +18,13 @@ use PliegoOracle\FixtureHtml;
  * all-sides `border`/`border-{color}` shorthand).
  *
  * Warning count: NOT the sheet-level parse-only audit (TailwindIngestionTest.php owns that number,
- * 104, "parse the WHOLE 1030-line build, no elements to resolve against") -- linking the SAME full
- * vendored sheet here via a real page produces those same 104 sheet-level warnings (they come from
- * the stylesheet's own @layer/@property/@media/pseudo-element/color-mix()/border-shorthand content,
+ * 106 [M10 final-review Finding B: was 104, +2 -- see this file's own "Pinned exact total" comment
+ * at the assertion site], "parse the WHOLE 1030-line build, no elements to resolve against") --
+ * linking the SAME full vendored sheet here via a real page produces those same 106 sheet-level
+ * warnings (they come from the stylesheet's own
+ * @layer/@property/@media/pseudo-element/color-mix()/border-shorthand/`&`-nesting content,
  * independent of which classes any given document actually uses) PLUS this page's own
- * resolved-against-real-elements warnings: 121 total, observed from a real run against this exact
+ * resolved-against-real-elements warnings: 123 total, observed from a real run against this exact
  * fixture (not guessed) -- a regression here means either the vendored sheet or this fixture's
  * markup changed. The extra 17 break down as +2 `unsupported-property-other`, +9
  * `unsupported-font-weight` (computed font-weight values -- `font-bold`/`font-semibold` resolve
@@ -85,6 +87,9 @@ function tailwindPageCategorizeWarning(string $warning): string
     return match (true) {
         (bool) preg_match('/@media rule blocks skipped/', $warning) => 'media-skipped',
         (bool) preg_match('/@property rule blocks skipped/', $warning) => 'property-skipped',
+        // M10 final-review Finding B: css-nesting-1 `&` guard, same shape as TailwindIngestionTest's
+        // own classifier -- see StylesheetParser::resolveCssNesting()'s docblock.
+        (bool) preg_match('/nested CSS rules skipped/', $warning) => 'nesting-skipped',
         (bool) preg_match('/^layered !important uses simplified precedence/', $warning) => 'layer-important-simplified',
         (bool) preg_match('/^color-mix\(\) is not supported/', $warning) => 'color-mix-fallback',
         (bool) preg_match('/^Invalid selector syntax:/', $warning) => 'invalid-selector',
@@ -159,18 +164,26 @@ it('produces a pinned, categorized warning count for this exact page (honest cap
     expect(array_sum($byCategory))->toBe(count($report->warnings));
 
     // Pinned exact total, observed from a real run against this exact fixture (not guessed) --
-    // see this file's class docblock for the sheet-level (104) vs resolved-against-elements (+17)
+    // see this file's class docblock for the sheet-level (106) vs resolved-against-elements (+17)
     // breakdown, and for the M10-T5 fix that dropped this from 145 (calc-bare-number gone).
-    expect($report->warnings)->toHaveCount(121);
+    // M10 final-review Finding B: 121 -> 123 (+2) -- the css-nesting `&` guard now correctly
+    // extracts+warns about the vendored sheet's 2 nested `&` rules (`.odd\:bg-white`/
+    // `.even\:bg-slate-50`'s own `&:nth-child()` variants, css-nesting-1) instead of silently
+    // letting sabberworm eat one of them with zero warning; the previously-invisible
+    // `.even\:bg-slate-50` selector now correctly surfaces its own (pre-existing, already
+    // documented) `\:`-escaping gap too (+1 invalid-selector), same +1/+1 shift
+    // TailwindIngestionTest.php's own golden pins for the raw sheet-level audit (37 -> 38).
+    expect($report->warnings)->toHaveCount(123);
 
     // Sheet-level categories, IDENTICAL to TailwindIngestionTest.php's own golden numbers (none of
     // this page's classes touch @media/@property/@layer !important/color-mix()) -- unaffected by
     // which classes this specific document happens to use.
     expect($byCategory['media-skipped'] ?? 0)->toBe(1);
     expect($byCategory['property-skipped'] ?? 0)->toBe(1);
+    expect($byCategory['nesting-skipped'] ?? 0)->toBe(1);
     expect($byCategory['layer-important-simplified'] ?? 0)->toBe(1);
     expect($byCategory['color-mix-fallback'] ?? 0)->toBe(1);
-    expect($byCategory['invalid-selector'] ?? 0)->toBe(37);
+    expect($byCategory['invalid-selector'] ?? 0)->toBe(38);
     expect($byCategory['pseudo-unknown'] ?? 0)->toBe(6);
     expect($byCategory['unsupported-color'] ?? 0)->toBe(3);
     expect($byCategory['unsupported-length'] ?? 0)->toBe(6);
