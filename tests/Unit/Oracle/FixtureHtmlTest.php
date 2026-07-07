@@ -116,3 +116,39 @@ it('stripStyleTags(): returns unchanged HTML when there is no <style> tag', func
 
     expect($stripped)->toBe($html);
 });
+
+// --- HTML comment blindness (M9 final-review Finding 1): a fixture's own prose comment
+// containing the literal text "<style>" must not confuse the tag-matching regexes. Both
+// stripStyleTags() and extractInlineCss()/extractCss() match `<style\b[^>]*>(.*?)<\/style>`
+// non-greedily -- if that literal text appears inside a `<!-- ... -->` comment BEFORE a real
+// `<style>` block, the match starts at the comment's fake occurrence and runs through the first
+// REAL `</style>`, eating the comment's own `-->` terminator plus everything in between (a real
+// `<link>` and the real `<style>` open tag). That leaves an unterminated `<!--` that swallows the
+// rest of the document from an HTML parser's point of view -- exactly what happened to
+// tools/oracle/fixtures/07-bootstrap-page.html's head comment (mentions "<style> block" in prose
+// right before the real `<link>` + `<style>`), blanking the whole rendered page. Comments carry
+// nothing for rendering, so both methods now strip/ignore them entirely before any tag matching.
+
+it('stripStyleTags(): ignores a literal "<style>" mention inside an HTML comment (fixture-07 shape) and does not swallow the rest of the document', function () {
+    $html = '<head><!-- see the <style> block below --><link rel="stylesheet" href="v.css"><style>h1{color:red}</style></head><body><p>text</p></body>';
+    $stripped = FixtureHtml::stripStyleTags($html);
+
+    expect($stripped)->toContain('<link rel="stylesheet" href="v.css">');
+    expect($stripped)->toContain('<p>text</p>');
+    expect($stripped)->not()->toContain('<style');
+    expect($stripped)->not()->toContain('h1{color:red}');
+    expect($stripped)->not()->toContain('<!--');
+});
+
+it('extractInlineCss(): ignores a literal "<style>" mention inside an HTML comment (fixture-07 shape)', function () {
+    $html = '<head><!-- see the <style> block below --><style>h1{color:red}</style></head>';
+    expect(FixtureHtml::extractInlineCss($html))->toBe('h1{color:red}');
+});
+
+it('extractCss(): ignores a literal "<style>" mention inside an HTML comment, still reads the real <link> AND <style>', function () {
+    $dir = fixtureHtmlTempCssDir();
+    file_put_contents($dir . '/v.css', '.btn{color:blue}');
+    $html = '<head><!-- see the <style> block below --><link rel="stylesheet" href="v.css"><style>h1{color:red}</style></head>';
+
+    expect(FixtureHtml::extractCss($html, $dir))->toBe(".btn{color:blue}\nh1{color:red}");
+});

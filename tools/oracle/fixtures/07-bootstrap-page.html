@@ -24,6 +24,15 @@
   @page { margin: 0; }
   html, body { margin: 0; padding: 0; }
   body { width: 794px; }
+  /* M9 final-review Finding 3: was a `style="font-size: 14px; color: #555;"` attribute on the
+     intro paragraph below -- pliego ignores element `style="..."` attributes BY DESIGN (see
+     BoxTreeBuilder's own docblock: only the two-string CSS/HTML API feeds the cascade, never
+     inline attributes), while Chrome applies them as the highest-specificity author rule. That
+     mismatch polluted every oracle diff (Chrome's paragraph at 14px/#555, pliego's at Bootstrap's
+     UA/class default) AND printed a real "inline style attribute ignored" warning on every run.
+     Moved here as a class so BOTH renderers see and apply the exact same declaration.
+  */
+  .report-intro { font-size: 14px; color: #555; }
 </style>
 </head>
 <body>
@@ -35,7 +44,7 @@
   </nav>
   <div class="container py-3">
     <h1 class="h3 mb-2">Quarterly Account Summary</h1>
-    <p class="mb-3" style="font-size: 14px; color: #555;">A compact, real Bootstrap 5.3 page: navbar, card grid, buttons, badges, alerts, a striped table and a closing blockquote -- the oracle's 7th fixture.</p>
+    <p class="mb-3 report-intro">A compact, real Bootstrap 5.3 page: navbar, card grid, buttons, badges, alerts, a striped table and a closing blockquote -- the oracle's 7th fixture.</p>
 
     <div class="row row-cols-3 g-2 mb-3">
       <div class="col">

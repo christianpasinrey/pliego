@@ -24,9 +24,32 @@ namespace PliegoOracle;
  */
 final class FixtureHtml
 {
+    /**
+     * M9 final-review Finding 1: every tag-matching regex in this class (`<style>` and `<link>`)
+     * must be blind to text that only LOOKS like a tag because it sits inside an HTML comment --
+     * fixture 07's own head comment mentions "<style> block" in prose, right before the real
+     * `<link>` and `<style>` tags, and the non-greedy `<style\b[^>]*>(.*?)<\/style>` pattern used
+     * below has no notion of "inside a comment": it happily starts matching at that literal text
+     * and runs through the first REAL `</style>`, eating the comment's own `-->` terminator plus
+     * everything between (the real `<link>` and the real `<style>` open tag) as if it were all one
+     * match. Comments carry nothing for rendering (Engine::render() never sees them; Chrome
+     * discards them from the render tree too), so every public method here removes them outright
+     * before running any tag-matching regex -- there is no content worth preserving from inside a
+     * `<!-- ... -->` span, unlike `<style>`/`<link>` content.
+     */
+    private static function stripHtmlComments(string $html): string
+    {
+        $result = preg_replace('/<!--.*?-->/s', '', $html);
+        if ($result === null) {
+            throw new \RuntimeException('FixtureHtml: regex failure while stripping HTML comments.');
+        }
+        return $result;
+    }
+
     /** Concatenates every inline `<style>...</style>` block's contents, in document order. */
     public static function extractInlineCss(string $html): string
     {
+        $html = self::stripHtmlComments($html);
         if (preg_match_all('/<style\b[^>]*>(.*?)<\/style>/is', $html, $matches) === false) {
             throw new \RuntimeException('FixtureHtml: regex failure while extracting inline <style> blocks.');
         }
@@ -58,6 +81,7 @@ final class FixtureHtml
      */
     public static function extractCss(string $html, string $baseDir): string
     {
+        $html = self::stripHtmlComments($html);
         if (preg_match_all('/<link\b[^>]*>/i', $html, $linkMatches) === false) {
             throw new \RuntimeException('FixtureHtml: regex failure while extracting <link> tags.');
         }
@@ -93,6 +117,7 @@ final class FixtureHtml
      */
     public static function stripStyleTags(string $html): string
     {
+        $html = self::stripHtmlComments($html);
         if (preg_match_all('/<style\b[^>]*>(.*?)<\/style>/is', $html, $matches, PREG_OFFSET_CAPTURE) === false) {
             throw new \RuntimeException('FixtureHtml: regex failure while stripping <style> tags.');
         }

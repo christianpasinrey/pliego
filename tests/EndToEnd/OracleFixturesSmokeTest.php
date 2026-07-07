@@ -70,3 +70,27 @@ it('renders oracle fixture through Engine without throwing, onto exactly one pag
     // (see this file's top docblock) -- a fixture that silently grew to 2 pages would desync it.
     expect($report->pageCount)->toBe(1);
 })->with(ORACLE_FIXTURE_NAMES);
+
+// --- M9 final-review Finding 2: "renders without throwing, one page" is NOT enough to catch a
+// BLANK page -- exactly what happened when FixtureHtml's tag-matching regexes were blind to a
+// literal "<style>" mention inside fixture 07's own head comment (see FixtureHtml's own docblock):
+// the resulting PDF still started with "%PDF-1.7", still reported pageCount === 1, and still threw
+// nothing -- it was simply an empty page. Content streams in this engine are never
+// FlateDecode-compressed (see TypographyTest.php's own raw `] TJ`/`Tj` substring checks on
+// ->toStream() output), so a text-showing op search on the raw PDF bytes is a legitimate,
+// uncompressed substring check, not something that needs a PDF parser. The byte-size floor catches
+// the same failure from a different angle -- a blank A4 page (no text runs, no embedded font
+// subsets) is a few hundred bytes; every one of these fixtures embeds at least the DejaVu Sans
+// family, so a real render is comfortably multiple times past 5KB.
+it('renders oracle fixture with actual text content, not a blank page', function (string $fixtureName) {
+    $fixturePath = __DIR__ . '/../../tools/oracle/fixtures/' . $fixtureName;
+    [$pdf, ] = oracleSmokeRender($fixturePath);
+
+    expect(strlen($pdf))->toBeGreaterThan(5 * 1024);
+    // `<hex> Tj` is the plain single-run text-showing op (see PdfCanvas::fillText()'s own
+    // `sprintf('<%s> Tj', ...)`), `] TJ` the per-glyph-adjusted array form -- same two literal
+    // substrings TypographyTest.php's own raw checks look for; either proves at least one real
+    // text run reached the content stream.
+    $hasTextShowingOp = str_contains($pdf, '> Tj') || str_contains($pdf, '] TJ');
+    expect($hasTextShowingOp)->toBeTrue();
+})->with(ORACLE_FIXTURE_NAMES);
