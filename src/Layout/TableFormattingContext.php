@@ -236,6 +236,7 @@ final readonly class TableFormattingContext
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
             borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
+            backgroundGradient: $style->backgroundGradient,
         );
     }
 
@@ -446,6 +447,7 @@ final readonly class TableFormattingContext
             BorderSet::none(),
             atomic: true,
             opacity: $row->style->opacity,
+            backgroundGradient: $row->style->backgroundGradient,
         );
 
         return [$rowFragment, $rowTop + $rowHeight];
@@ -484,6 +486,7 @@ final readonly class TableFormattingContext
             $stretched->opacity,
             $stretched->clipsChildren,
             $stretched->borderRadius,
+            $stretched->backgroundGradient,
         );
     }
 
@@ -511,6 +514,7 @@ final readonly class TableFormattingContext
             $fragment->opacity,
             $fragment->clipsChildren,
             $fragment->borderRadius->reclampFor($fragment->rect->width, $height),
+            $fragment->backgroundGradient,
         );
     }
 

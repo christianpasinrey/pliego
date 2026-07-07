@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Pliego\Pdf;
 
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
@@ -56,6 +59,9 @@ final class PdfCanvas implements Canvas
             $this->fonts->pageResources(),
             [...$this->xobjectRefs, ...$this->images->pageResources()],
             $this->writer->extGStatePageResources(),
+            // M8-T3: mismo patrón "acumula globalmente, sobre-incluye en cada página" que
+            // extGStatePageResources() — ver el docblock de PdfWriter::shadingPageResources().
+            $this->writer->shadingPageResources(),
         );
     }
 
@@ -103,6 +109,230 @@ final class PdfCanvas implements Canvas
             . $this->roundedRectPathOps($innerRect, $innerRadius)
             . "f*\n";
         $this->emitWithAlpha($color->alpha, $body);
+    }
+
+    /**
+     * M8-T3 (ISO 32000-1 §8.7.4.5, shadings; css-images-3 §3.1 reducido): pinta $gradient dentro
+     * de $rect -- `q`, recorte al rect (rectangular o de esquinas redondeadas si $radius no es
+     * cero/null, mismo path Bézier que fillRoundedRect(), ver roundedRectPathOps()), `/ShN sh`
+     * (ISO 32000-1 §8.7.4.2: el operador `sh` PINTA el shading directamente dentro del clipping
+     * path actual, sin necesidad de un patrón/`scn` -- el shading LLENA lo que sea que esté
+     * recortado), `Q`. El shading en sí (registerShading()/buildShadingDict()) se dedup por
+     * FIRMA de contenido (rect + Gradient, ver gradientSignature()) -- dos elementos con el mismo
+     * rect y el mismo Gradient CSS comparten un único objeto /Shading, sin recalcular ni
+     * reescribir su(s) función(es) subyacente(s).
+     */
+    public function paintGradient(Rect $rect, Gradient $gradient, ?BorderRadius $radius = null): void
+    {
+        $signature = $this->gradientSignature($rect, $gradient);
+        $name = $this->writer->shadingResourceName($signature, fn(): string => $this->buildShadingDict($rect, $gradient));
+
+        $this->ops .= "q\n";
+        if ($radius !== null && !$radius->isZero()) {
+            $this->ops .= $this->roundedRectPathOps($rect, $radius) . "W n\n";
+        } else {
+            $x = ($rect->x + $this->offsetX) * self::PX_TO_PT;
+            $y = ($this->paper->heightPx() - ($rect->y + $this->offsetY) - $rect->height) * self::PX_TO_PT;
+            $this->ops .= sprintf(
+                "%.2F %.2F %.2F %.2F re W n\n",
+                $x,
+                $y,
+                $rect->width * self::PX_TO_PT,
+                $rect->height * self::PX_TO_PT,
+            );
+        }
+        $this->ops .= "/$name sh\n";
+        $this->ops .= "Q\n";
+    }
+
+    /**
+     * Firma de dedup: rect (redondeado a 2 decimales, la misma precisión con la que las /Coords
+     * se escribirán en el PDF -- dos rects que solo difieren más allá de esa precisión producirían
+     * bytes IDÉNTICOS de todas formas, así que compartir el shading es correcto) + kind + ángulo +
+     * cada stop (color + posición). Una cadena PLANA (sin serialize()/json_encode(), evita
+     * dependencias de formato) es suficiente: solo se usa como clave de un array, nunca se
+     * decodifica.
+     */
+    private function gradientSignature(Rect $rect, Gradient $gradient): string
+    {
+        $parts = [
+            $gradient->kind->name,
+            sprintf('%.2F', $gradient->angleDeg),
+            sprintf('%.2F,%.2F,%.2F,%.2F', $rect->x, $rect->y, $rect->width, $rect->height),
+        ];
+        foreach ($gradient->stops as $stop) {
+            $parts[] = sprintf('%d:%d:%d@%.2F', $stop->color->r, $stop->color->g, $stop->color->b, $stop->positionPct ?? 0.0);
+        }
+        return implode('|', $parts);
+    }
+
+    /**
+     * ISO 32000-1 §8.7.4.5.3 (Type 2, axial)/§8.7.4.5.4 (Type 3, radial): construye el /Shading
+     * dict COMPLETO -- incluye allocar+escribir el/los /Function subyacente(s) (buildFunctionDict())
+     * ANTES de referenciarlos por object id, vía $this->writer directamente (mismo PdfWriter que
+     * ya posee el objectId reservado para ESTE shading, ver PdfWriter::registerShading() -- los
+     * objetos de función se escriben con ids MENORES o mayores sin que el orden de escritura en el
+     * stream importe, ISO 32000-1 no exige orden ascendente de object id).
+     */
+    private function buildShadingDict(Rect $rect, Gradient $gradient): string
+    {
+        $functionId = $this->writeFunctionDict($gradient->stops);
+        if ($gradient->kind === GradientKind::Linear) {
+            [[$x0, $y0], [$x1, $y1]] = $this->linearGradientEndpointsPt($rect, $gradient->angleDeg);
+            $coords = sprintf('%.2F %.2F %.2F %.2F', $x0, $y0, $x1, $y1);
+            return "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
+        }
+        [$cx, $cy, $r] = $this->radialGradientGeometryPt($rect);
+        $coords = sprintf('%.2F %.2F 0 %.2F %.2F %.2F', $cx, $cy, $cx, $cy, $r);
+        return "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [$coords] /Function $functionId 0 R /Extend [true true] >>";
+    }
+
+    /**
+     * css-images-3 §3.4.2 ("abstract gradient line"): el vector de dirección se computa en
+     * espacio PX CSS (origen arriba-izquierda, Y crece hacia abajo -- $angleDeg 0=arriba,
+     * 90=derecha, igual convención que Css\Value\Gradient) contra el CENTRO de $rect, con
+     * media-longitud = (W·|sin(θ)|+H·|cos(θ)|)/2 (fórmula estándar del "gradient line length" --
+     * hand-verificable: a 0deg da H/2 exacto (línea vertical completa), a 90deg da W/2 exacto, a
+     * 45deg en una caja CUADRADA da la diagonal completa, ver PdfCanvasTest). El punto de INICIO
+     * (0% stop) queda en la dirección OPUESTA al ángulo, el de FIN (100%) en la dirección del
+     * ángulo -- de ahí que 0deg produzca "bottom→top" (el punto de abajo es el 0%, el de arriba el
+     * 100%, coherente con "0deg = to top").
+     *
+     * Los dos puntos, en PX CSS, se convierten a PDF pt con la MISMA transformación por-punto que
+     * strokeLine() ya usa para sus dos extremos (flip de Y + offsetX/offsetY + escala 0.75) --
+     * nunca se piensa en términos de "voltear el ángulo": son dos puntos literales que pasan por
+     * la conversión de coordenadas de siempre.
+     *
+     * @return array{0: array{0: float, 1: float}, 1: array{0: float, 1: float}}
+     */
+    private function linearGradientEndpointsPt(Rect $rect, float $angleDeg): array
+    {
+        $cx = $rect->x + $rect->width / 2.0;
+        $cy = $rect->y + $rect->height / 2.0;
+        $rad = deg2rad($angleDeg);
+        $dx = sin($rad);
+        $dy = -cos($rad);
+        $halfLen = ($rect->width * abs(sin($rad)) + $rect->height * abs(cos($rad))) / 2.0;
+
+        $startX = $cx - $halfLen * $dx;
+        $startY = $cy - $halfLen * $dy;
+        $endX = $cx + $halfLen * $dx;
+        $endY = $cy + $halfLen * $dy;
+
+        return [$this->toPagePointPt($startX, $startY), $this->toPagePointPt($endX, $endY)];
+    }
+
+    /**
+     * css-images-3 §3.1 reducido: SIEMPRE circle-at-center -- centro de $rect, radio = distancia al
+     * corner MÁS LEJANO (default real "farthest-corner" del spec para un radial-gradient sin
+     * tamaño explícito), suficiente para que el círculo cubra la caja entera. El radio (una
+     * MAGNITUD, no un punto) se escala directamente por PX_TO_PT -- sin distorsión posible: la
+     * conversión px->pt de este motor es una escala UNIFORME (mismo factor en ambos ejes, ver
+     * PX_TO_PT), a diferencia de un rect con aspect ratio que SÍ necesita las 2 coordenadas del
+     * punto por separado.
+     *
+     * @return array{0: float, 1: float, 2: float} [cxPt, cyPt, rPt]
+     */
+    private function radialGradientGeometryPt(Rect $rect): array
+    {
+        $cx = $rect->x + $rect->width / 2.0;
+        $cy = $rect->y + $rect->height / 2.0;
+        $rPx = sqrt(($rect->width / 2.0) ** 2 + ($rect->height / 2.0) ** 2);
+        [$cxPt, $cyPt] = $this->toPagePointPt($cx, $cy);
+        return [$cxPt, $cyPt, $rPx * self::PX_TO_PT];
+    }
+
+    /** Mismo flip de Y + offsetX/offsetY + escala 0.75 que fillRect()/strokeLine() usan para un
+     *  punto suelto en px CSS -- convierte a PDF pt (origen abajo-izquierda).
+     *
+     * M8-T3: pasa por cleanZero() -- a diferencia de fillRect()/strokeLine() (cuyas coordenadas
+     * de entrada son siempre exactas, rects/líneas declaradas), las endpoints de un gradiente
+     * salen de sin()/cos() (ver linearGradientEndpointsPt()): un ángulo "limpio" como 45deg en una
+     * caja cuadrada produce, en aritmética de coma flotante, un resultado matemáticamente CERO
+     * pero representado como un residuo negativo minúsculo (p.ej. -7.1e-15) -- sin esta limpieza,
+     * `sprintf('%.2F', ...)` lo formatea como el feo/confuso "-0.00" en vez de "0.00" en los bytes
+     * del PDF (ISO 32000-1 no lo prohíbe, pero es ruido innecesario que un hand-computed test no
+     * debería tener que tolerar).
+     *
+     * @return array{0: float, 1: float} */
+    private function toPagePointPt(float $xPx, float $yPx): array
+    {
+        return [
+            self::cleanZero(($xPx + $this->offsetX) * self::PX_TO_PT),
+            self::cleanZero(($this->paper->heightPx() - ($yPx + $this->offsetY)) * self::PX_TO_PT),
+        ];
+    }
+
+    /** Ver el docblock de toPagePointPt() -- normaliza un -0.0 residual de coma flotante (tras
+     *  redondear a 2 decimales, la misma precisión de sprintf('%.2F', ...)) a un 0.0 limpio. */
+    private static function cleanZero(float $value): float
+    {
+        $rounded = round($value, 2);
+        return $rounded === 0.0 ? 0.0 : $rounded;
+    }
+
+    /**
+     * ISO 32000-1 §7.10.2 (Type 2, exponential interpolation, N=1 -> lineal) para exactamente 2
+     * stops; §7.10.3 (Type 3, stitching) para N>2 -- cada tramo entre stops consecutivos es su
+     * PROPIA función Type 2 (Domain [0 1], C0/C1 = los 2 colores del tramo), y /Bounds son las
+     * posiciones INTERIORES (ni la primera ni la última, ya implícitas en el Domain [0 1] del
+     * stitching) expresadas como fracción 0-1 (positionPct/100 -- distributeStopPositions() en
+     * DeclarationParser YA garantiza first=0/last=100, así que esta división es siempre exacta).
+     * /Encode es [0 1] repetido por cada sub-función (cada tramo interpola linealmente dentro de
+     * SU propio rango, ISO 32000-1 §7.10.3 nota: el remapeo real tramo->[0,1] ya lo hace /Bounds).
+     *
+     * Escribe la función (y, si Type 3, cada sub-función Type 2) inmediatamente y devuelve su
+     * object id -- llamado SOLO en caché-miss de registerShading() (ver su docblock), así que
+     * nunca escribe una función huérfana que ningún /Shading llegue a referenciar.
+     *
+     * @param list<GradientStop> $stops
+     */
+    private function writeFunctionDict(array $stops): int
+    {
+        $n = count($stops);
+        if ($n === 2) {
+            return $this->writeExponentialFunction($stops[0]->color, $stops[1]->color);
+        }
+        $subFunctionIds = [];
+        for ($i = 0; $i < $n - 1; $i++) {
+            $subFunctionIds[] = $this->writeExponentialFunction($stops[$i]->color, $stops[$i + 1]->color);
+        }
+        $bounds = [];
+        for ($i = 1; $i < $n - 1; $i++) {
+            $bounds[] = sprintf('%.4F', ($stops[$i]->positionPct ?? 0.0) / 100.0);
+        }
+        $functionsRefs = implode(' ', array_map(static fn(int $id): string => "$id 0 R", $subFunctionIds));
+        // Un par "0 1" por sub-función (ISO 32000-1 §7.10.3: /Encode remapea cada tramo [Bounds_i,
+        // Bounds_i+1] al Domain [0 1] de SU PROPIA sub-función Type 2).
+        $encodeStr = implode(' ', array_fill(0, $n - 1, '0 1'));
+        $boundsStr = implode(' ', $bounds);
+        $objectId = $this->writer->allocateObjectId();
+        $this->writer->writeObject(
+            $objectId,
+            "<< /FunctionType 3 /Domain [0 1] /Functions [$functionsRefs] /Bounds [$boundsStr] /Encode [$encodeStr] >>",
+        );
+        return $objectId;
+    }
+
+    /** ISO 32000-1 §7.10.2, N=1 (interpolación lineal -- "exponential interpolation" con exponente
+     *  1 es exactamente lineal, la ÚNICA variante que este motor necesita: M8 no tiene forma de
+     *  declarar un exponente CSS custom). C0/C1 en 0-1 (mismo /255 que rg()/rgStroke()). */
+    private function writeExponentialFunction(Color $c0, Color $c1): int
+    {
+        $objectId = $this->writer->allocateObjectId();
+        $this->writer->writeObject(
+            $objectId,
+            sprintf(
+                '<< /FunctionType 2 /Domain [0 1] /C0 [%.3F %.3F %.3F] /C1 [%.3F %.3F %.3F] /N 1 >>',
+                $c0->r / 255,
+                $c0->g / 255,
+                $c0->b / 255,
+                $c1->r / 255,
+                $c1->g / 255,
+                $c1->b / 255,
+            ),
+        );
+        return $objectId;
     }
 
     /**

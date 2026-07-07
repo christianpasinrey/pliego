@@ -7,6 +7,7 @@ namespace Pliego\Paint;
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
@@ -60,7 +61,7 @@ final readonly class Painter
             // withOpacity() — no-op si opacity es 1.0, ver su docblock) — los HIJOS (pintados más
             // abajo, vía recursión) NO reciben esta opacity (divergencia M6 documentada, ver
             // ComputedStyle::$opacity): cada uno trae la SUYA propia.
-            $this->paintBackground($fragment->rect, $fragment->background, $fragment->opacity, $fragment->borderRadius, $canvas);
+            $this->paintBackground($fragment->rect, $fragment->background, $fragment->backgroundGradient, $fragment->opacity, $fragment->borderRadius, $canvas);
             $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $fragment->borderRadius, $canvas);
             // M7-T5 (css-overflow-3): $clipsChildren envuelve SOLO a los descendientes en un
             // scope de recorte PDF (Canvas::clipRect()/restoreClip()) al rect BORDER-BOX de ESTA
@@ -98,7 +99,7 @@ final readonly class Painter
             // lógica de slice-awareness propia, solo pinta lo que trae el BorderSet. M8-T2:
             // $fragment->borderRadius llega YA con las esquinas no-extremas a cero (misma
             // convención de slice, ver InlineFlowContext::buildInlineBoxFragment()).
-            $this->paintBackground($fragment->rect, $fragment->background, $fragment->opacity, $fragment->borderRadius, $canvas);
+            $this->paintBackground($fragment->rect, $fragment->background, $fragment->backgroundGradient, $fragment->opacity, $fragment->borderRadius, $canvas);
             $this->paintBorders($fragment->rect, $fragment->borders, $fragment->opacity, $fragment->borderRadius, $canvas);
         } elseif ($fragment instanceof TextFragment) {
             // InlineFlowContext::closeLine() emite un TextFragment con text === '' y
@@ -161,17 +162,26 @@ final readonly class Painter
      * M8-T2: fondo de una caja (BoxFragment o InlineBoxFragment) — fillRect() cuando $radius es
      * cero (byte-idéntico a antes de esta tarea), fillRoundedRect() en caso contrario (path
      * Bézier, ver Pdf\PdfCanvas::roundedRectPathOps()).
+     *
+     * M8-T3 (css-images-3 §3.1 reducido): $gradient, si lo hay, se pinta DESPUÉS del color (ver
+     * ComputedStyle::$backgroundGradient) — ambos pueden coexistir (el color, cuando lo hay, sirve
+     * de fondo visible detrás del gradiente; M8 no soporta alpha en stops, así que el gradiente en
+     * sí siempre es opaco y normalmente lo tapa por completo, pero pintar el color de todas formas
+     * es la interpretación correcta del spec y barata de mantener). Canvas::paintGradient() recibe
+     * el MISMO $radius (recorta a la curva del border-box, igual criterio que fillRoundedRect()).
      */
-    private function paintBackground(Rect $rect, ?Color $background, float $opacity, BorderRadius $radius, Canvas $canvas): void
+    private function paintBackground(Rect $rect, ?Color $background, ?Gradient $gradient, float $opacity, BorderRadius $radius, Canvas $canvas): void
     {
-        if ($background === null) {
-            return;
+        if ($background !== null) {
+            $color = $background->withOpacity($opacity);
+            if ($radius->isZero()) {
+                $canvas->fillRect($rect, $color);
+            } else {
+                $canvas->fillRoundedRect($rect, $radius, $color);
+            }
         }
-        $color = $background->withOpacity($opacity);
-        if ($radius->isZero()) {
-            $canvas->fillRect($rect, $color);
-        } else {
-            $canvas->fillRoundedRect($rect, $radius, $color);
+        if ($gradient !== null) {
+            $canvas->paintGradient($rect, $gradient, $radius);
         }
     }
 

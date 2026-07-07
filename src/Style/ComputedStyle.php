@@ -12,6 +12,7 @@ use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\CalcValue;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
+use Pliego\Css\Value\Gradient;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\Value\LengthUnit;
@@ -191,6 +192,18 @@ final readonly class ComputedStyle
         // en cada uso, ver StyleResolver::resolveDeferred()).
         /** @var array<string, string> */
         public array $customProperties = [],
+        // M8-T3 (css-images-3 §3.1 reducido): NO hereda -- initial value real es "none" (sin
+        // gradiente) siempre que no haya declaración propia, nunca $parent->backgroundGradient
+        // (mismo patrón que $backgroundColor, que tampoco hereda -- un <div> dentro de un padre
+        // con gradiente no "hereda" el fondo del padre, cada caja pinta el SUYO). Raw VO sin
+        // resolver contra ninguna caja (los stops YA traen su posición final 0-100, ver
+        // Css\Value\GradientStop, pero /Coords se calculan en Pdf\PdfCanvas::paintGradient(), en
+        // tiempo de pintado, contra el border-box final del fragmento -- igual división de
+        // responsabilidades Css-vs-Layout/Pdf que BorderRadius). Pinta POR ENCIMA de
+        // $backgroundColor (ambos pueden coexistir: el color sirve de fallback visible en los
+        // huecos de un gradiente con alpha, aunque M8 no soporta alpha en stops todavía -- ver
+        // Paint\Painter::paintBackground()).
+        public ?Gradient $backgroundGradient = null,
     ) {}
 
     /**
@@ -759,6 +772,13 @@ final readonly class ComputedStyle
             $fontFamily = $parent->fontFamily;
         }
 
+        // M8-T3 (css-images-3 §3.1 reducido): NO hereda (ver docblock del constructor) -- initial
+        // "none" (null) siempre que no haya declaración propia, nunca $parent->backgroundGradient.
+        // DeclarationParser::parseBackgroundShorthand()/parseBackgroundImageValue() ya producen
+        // este valor listo para usar (Gradient|nada, nunca otro tipo).
+        $backgroundGradientValue = $declarations['background-gradient'] ?? null;
+        $backgroundGradient = $backgroundGradientValue instanceof Gradient ? $backgroundGradientValue : null;
+
         return new self(
             $display,
             $lengthPercentage('margin-top'),
@@ -816,6 +836,7 @@ final readonly class ComputedStyle
             $borderRadius,
             $opacity,
             $customProperties,
+            $backgroundGradient,
         );
     }
 }

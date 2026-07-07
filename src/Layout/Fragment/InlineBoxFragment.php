@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Layout\Fragment;
 
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
 use Pliego\Layout\Geometry\Rect;
 
 /**
@@ -41,6 +42,17 @@ final readonly class InlineBoxFragment implements Fragment
      * (idéntico patrón que $borders). Default "new BorderRadius()" por el mismo motivo que
      * BoxFragment (construction sites preexistentes sin tocar).
      */
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido, adjudicación del milestone): un gradiente en una caja
+     * inline partida en varias líneas (box-decoration-break:slice) pinta el gradiente PER-SLICE --
+     * cada InlineBoxFragment usa su PROPIO $rect (el de ESA línea) como caja de gradiente, en vez
+     * de resolver un ÚNICO gradiente continuo a través de las N líneas (lo que exigiría conocer el
+     * bounding box de TODAS las slices juntas, información que ni este fragment ni Paint\Painter
+     * tienen en el momento de pintar cada slice por separado). Divergencia DOCUMENTADA frente a un
+     * navegador real (que sí pinta un gradiente continuo cruzando líneas) -- adjudicada "mínima"
+     * por el brief: aceptable para el caso común (un span con gradiente que cabe en una sola
+     * línea, que es donde este resultado coincide exactamente con CSS real).
+     */
     public function __construct(
         public Rect $rect,
         public ?Color $background,
@@ -49,6 +61,7 @@ final readonly class InlineBoxFragment implements Fragment
         public bool $isFirstSlice,
         public bool $isLastSlice,
         public BorderRadius $borderRadius = new BorderRadius(),
+        public ?Gradient $backgroundGradient = null,
     ) {}
 
     public function rect(): Rect

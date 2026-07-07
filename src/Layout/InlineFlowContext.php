@@ -805,6 +805,10 @@ final class InlineFlowContext
             $isFirstSlice,
             $isLastSlice,
             $radius,
+            // M8-T3: gradiente PER-SLICE, el rect de ESTA línea como caja de gradiente -- ver el
+            // docblock de InlineBoxFragment::$backgroundGradient (divergencia documentada frente a
+            // un gradiente único continuo cruzando líneas).
+            $style->backgroundGradient,
         );
     }
 
@@ -824,6 +828,7 @@ final class InlineFlowContext
                 $fragment->opacity,
                 $fragment->clipsChildren,
                 $fragment->borderRadius,
+                $fragment->backgroundGradient,
             );
         }
         if ($fragment instanceof TextFragment) {
@@ -854,6 +859,7 @@ final class InlineFlowContext
                 $fragment->isFirstSlice,
                 $fragment->isLastSlice,
                 $fragment->borderRadius,
+                $fragment->backgroundGradient,
             );
         }
         throw new \LogicException('Unknown fragment kind: ' . $fragment::class);

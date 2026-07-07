@@ -101,8 +101,13 @@ final readonly class Paginator
         // background/borde visible no pinta nada por sí solo, exactamente igual que antes de esta
         // tarea; una caja clipsChildren con radio SIEMPRE sale por la rama de arriba, nunca llega
         // aquí, ver el docblock de esta clase).
-        if ($box->background !== null || $box->borders->isVisible()) {
-            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity, borderRadius: $box->borderRadius);
+        // M8-T3: $backgroundGradient se UNE a la condición -- una caja con gradiente pero SIN
+        // background-color ni borde visible (el caso común: `background: linear-gradient(...)`
+        // solo) también necesita una hoja paintable; sin esta rama, esa caja se perdería en
+        // silencio (ni fondo ni gradiente pintados) exactamente como le pasaba a un borde-sin-fondo
+        // antes de T5.
+        if ($box->background !== null || $box->borders->isVisible() || $box->backgroundGradient !== null) {
+            yield new BoxFragment($box->rect, $box->background, [], $box->borders, opacity: $box->opacity, borderRadius: $box->borderRadius, backgroundGradient: $box->backgroundGradient);
         }
         foreach ($box->children as $child) {
             if ($child instanceof BoxFragment) {
@@ -142,6 +147,7 @@ final readonly class Paginator
                 $leaf->opacity,
                 $leaf->clipsChildren,
                 $leaf->borderRadius,
+                $leaf->backgroundGradient,
             ),
             // M3-T3: hoja simple igual que TextFragment — el push-down genérico de arriba ya la
             // trata como cualquier otra hoja (una imagen más alta que la página no se parte, se
@@ -159,6 +165,7 @@ final readonly class Paginator
                 $leaf->isFirstSlice,
                 $leaf->isLastSlice,
                 $leaf->borderRadius,
+                $leaf->backgroundGradient,
             ),
             default => throw new \LogicException('Unknown fragment leaf: ' . $leaf::class),
         };

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Paint;
 
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\TextFragment;
 use Pliego\Layout\Geometry\Rect;
@@ -36,6 +37,15 @@ interface Canvas
      * aproximación de 4 rects existente (ver Painter), que no usa este método.
      */
     public function fillRoundedRectRing(Rect $outerRect, BorderRadius $outerRadius, Rect $innerRect, BorderRadius $innerRadius, Color $color): void;
+
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido; ISO 32000-1 §8.7.4.5 shadings): pinta $gradient dentro de
+     * $rect (border-box del fragmento) -- recorte al rect ($radius no-cero recorta a esquinas
+     * redondeadas, mismo path que fillRoundedRect(); null/cero recorta a un rect plano), luego el
+     * shading LLENA ese clip por completo (`sh`, ISO 32000-1 §8.7.4.2). Pinta POR ENCIMA del
+     * background-color (ver Paint\Painter::paintBackground()) -- ambos pueden coexistir.
+     */
+    public function paintGradient(Rect $rect, Gradient $gradient, ?BorderRadius $radius = null): void;
 
     public function fillText(TextFragment $text): void;
 

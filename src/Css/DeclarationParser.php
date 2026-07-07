@@ -9,6 +9,9 @@ use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\CalcParser;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\Value\LengthUnit;
@@ -215,6 +218,17 @@ final class DeclarationParser
         }
         if ($property === 'list-style') {
             return $this->parseListStyleShorthand($value);
+        }
+        // M8-T3 (css-images-3 §3.1 reducido): 'background' (shorthand) y 'background-image'
+        // (longhand) -- ambos detectan linear-gradient()/radial-gradient() (color O gradiente O
+        // imagen url(), "detectar" per el brief); url() todavía no está soportado (background-image
+        // real de M8-T6, un milestone posterior) así que cae a warning + valor descartado, igual
+        // disciplina "todo lo excluido avisa" que el resto de este parser.
+        if ($property === 'background') {
+            return $this->parseBackgroundShorthand($value);
+        }
+        if ($property === 'background-image') {
+            return $this->parseBackgroundImageValue($value);
         }
         if ($this->isBorderLonghand($property, 'width')) {
             return $this->parseBorderWidth($property, $value);
@@ -695,6 +709,375 @@ final class DeclarationParser
             return $this->warn("Negative value not allowed for $property: $value");
         }
         return [$property => $length];
+    }
+
+    /**
+     * RESTRICCIONES GLOBALES M8 ("multiple backgrounds (primera capa se usa + warning)"): tanto
+     * 'background' como 'background-image' admiten una LISTA de capas separadas por comas de
+     * NIVEL SUPERIOR (css-backgrounds-3 §3.4 -- `background-image: linear-gradient(...), url(...)`
+     * apila varias imágenes) -- fuera de alcance M8 entero, no solo de esta tarea. splitTopLevelCommas()
+     * (reutilizado de la gramática de linear-gradient()/radial-gradient()) distingue correctamente
+     * un ÚNICO linear-gradient(a, b) -- cuyas comas internas viven DENTRO de un paréntesis, así que
+     * el split de nivel superior devuelve un solo segmento -- de una lista real de 2+ capas (comas
+     * FUERA de cualquier paréntesis). Con 2+ segmentos, se avisa UNA vez y se seccion solo la
+     * PRIMERA capa (recortada) para el resto del método -- exactamente "primera capa se usa +
+     * warning" del brief.
+     */
+    private function firstBackgroundLayer(string $value): string
+    {
+        $layers = self::splitTopLevelCommas(trim($value));
+        if (count($layers) > 1) {
+            $this->warnings[] = "Multiple backgrounds not supported (using the first layer only): $value";
+        }
+        return $layers[0] ?? '';
+    }
+
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido): `background: <color> | <gradient-function> | url(...)`
+     * -- forma MUY reducida del shorthand real (ningún position/size/repeat/attachment: quedan
+     * fuera de alcance M8, ver RESTRICCIONES GLOBALES "multiple backgrounds"/"background-
+     * attachment"). "Detectar" (per el brief): un valor que empieza por linear-gradient(/
+     * radial-gradient( se parsea como gradiente; si no, un color válido gana; si no, url(...) cae
+     * al warning de "no soportado todavía" (M8-T6); cualquier otra cosa, warning genérico.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundShorthand(string $value): array
+    {
+        $trimmed = $this->firstBackgroundLayer($value);
+        if ($this->isGradientFunction($trimmed)) {
+            $gradient = $this->parseGradientFunction($trimmed);
+            return $gradient === null ? [] : ['background-gradient' => $gradient];
+        }
+        if (stripos($trimmed, 'url(') === 0) {
+            return $this->warn("Unsupported background (url() images land in a later milestone): $value");
+        }
+        $color = Color::fromCss($trimmed);
+        if ($color !== null) {
+            return ['background-color' => $color];
+        }
+        return $this->warn("Unsupported background shorthand: $value");
+    }
+
+    /**
+     * M8-T3: `background-image: <gradient-function> | url(...) | none` -- misma detección que el
+     * shorthand de arriba (ver su docblock), sin la rama de color (background-image nunca acepta
+     * un color liso).
+     *
+     * @return array<string, mixed>
+     */
+    private function parseBackgroundImageValue(string $value): array
+    {
+        if (strtolower(trim($value)) === 'none') {
+            return [];
+        }
+        $trimmed = $this->firstBackgroundLayer($value);
+        if ($this->isGradientFunction($trimmed)) {
+            $gradient = $this->parseGradientFunction($trimmed);
+            return $gradient === null ? [] : ['background-gradient' => $gradient];
+        }
+        if (stripos($trimmed, 'url(') === 0) {
+            return $this->warn("Unsupported background-image (url() images land in a later milestone): $value");
+        }
+        return $this->warn("Unsupported background-image: $value");
+    }
+
+    /**
+     * M8-T3: true cuando $trimmed empieza literalmente por "linear-gradient(" o "radial-gradient("
+     * -- a partir de ahí el llamador se COMPROMETE con parseGradientFunction() (éxito -> Gradient,
+     * fallo -> null con el warning específico ya emitido dentro), sin intentar la rama de color/
+     * url() como fallback (evitaría un segundo warning confuso sobre el mismo valor) — mismo
+     * patrón que looksLikeCalc()/tryParseCalc() para calc().
+     */
+    private function isGradientFunction(string $trimmed): bool
+    {
+        $lower = strtolower($trimmed);
+        return str_starts_with($lower, 'linear-gradient(') || str_starts_with($lower, 'radial-gradient(');
+    }
+
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido): dispatcher linear-gradient()/radial-gradient() --
+     * conic-gradient() y cualquier otra función no reconocida caen al `null` genérico del llamador
+     * (tryParseGradientPrefix() ya garantizó el prefijo correcto antes de llegar aquí, así que este
+     * método SIEMPRE reconoce cuál de los dos es).
+     */
+    private function parseGradientFunction(string $value): ?Gradient
+    {
+        $inner = $this->functionArgs($value);
+        if ($inner === null) {
+            return $this->warnGradientNull("Invalid gradient syntax (unbalanced parentheses): $value");
+        }
+        return str_starts_with(strtolower($value), 'linear-gradient(')
+            ? $this->parseLinearGradient($inner, $value)
+            : $this->parseRadialGradient($inner, $value);
+    }
+
+    /** Extrae el contenido entre el primer '(' y su paréntesis de cierre (que debe coincidir
+     *  exactamente con el final de la cadena) -- mismo criterio que tryParseCalc(). */
+    private function functionArgs(string $value): ?string
+    {
+        $open = strpos($value, '(');
+        if ($open === false) {
+            return null;
+        }
+        $close = $this->matchingParen($value, $open);
+        if ($close === null || $close !== strlen($value) - 1) {
+            return null;
+        }
+        return substr($value, $open + 1, $close - $open - 1);
+    }
+
+    /**
+     * css-images-3 §3.4.1: `linear-gradient([<angle> | to <side-or-corner>]? , <color-stop-list>)`.
+     * Sin dirección declarada, el default real del spec es 180deg ("to bottom").
+     */
+    private function parseLinearGradient(string $inner, string $original): ?Gradient
+    {
+        $args = self::splitTopLevelCommas($inner);
+        if (count($args) < 2) {
+            return $this->warnGradientNull("linear-gradient() needs a direction and/or at least 2 color stops: $original");
+        }
+        $direction = $this->parseGradientDirection($args[0]);
+        $stopArgs = $direction !== null ? array_slice($args, 1) : $args;
+        $angleDeg = $direction ?? 180.0;
+        if (count($stopArgs) < 2) {
+            return $this->warnGradientNull("linear-gradient() needs at least 2 color stops: $original");
+        }
+        $stops = $this->parseGradientStops($stopArgs, $original);
+        if ($stops === null) {
+            return null;
+        }
+        return new Gradient(GradientKind::Linear, $angleDeg, $stops);
+    }
+
+    /**
+     * css-images-3 §3.1 reducido: SOLO `radial-gradient([circle at center]?, <color-stop-list>)`
+     * -- cualquier forma más rica (ellipse, tamaños con keyword/longitud, `at <posición>` distinta
+     * de center) cae a un warning + aproximación "circle at center" (primera capa del brief),
+     * nunca rechaza el gradiente entero.
+     */
+    private function parseRadialGradient(string $inner, string $original): ?Gradient
+    {
+        $args = self::splitTopLevelCommas($inner);
+        if ($args === []) {
+            return $this->warnGradientNull("radial-gradient() needs at least 2 color stops: $original");
+        }
+        $first = strtolower(trim($args[0]));
+        $stopArgs = $args;
+        if ($this->looksLikeRadialPrefix($first)) {
+            $stopArgs = array_slice($args, 1);
+            if ($first !== 'circle' && $first !== 'circle at center' && $first !== 'at center') {
+                $this->warnings[] = "Unsupported radial-gradient() shape/position (approximated as circle at center): $original";
+            }
+        }
+        if (count($stopArgs) < 2) {
+            return $this->warnGradientNull("radial-gradient() needs at least 2 color stops: $original");
+        }
+        $stops = $this->parseGradientStops($stopArgs, $original);
+        if ($stops === null) {
+            return null;
+        }
+        return new Gradient(GradientKind::Radial, 0.0, $stops);
+    }
+
+    /**
+     * True cuando el primer argumento de radial-gradient() es una descripción de forma/posición
+     * (en vez de ya ser el primer color-stop) -- cualquier token que no sea un color válido y no
+     * empiece por un color-function reconocible se asume que pertenece a esta categoría (shape/
+     * size/position), consistente con "todo lo que no es un stop es geometría" del spec real.
+     */
+    private function looksLikeRadialPrefix(string $token): bool
+    {
+        if ($token === '') {
+            return false;
+        }
+        // Un primer argumento que YA parsea como color (con o sin posición -- pero un color-stop
+        // NUNCA empieza por 'circle'/'ellipse'/'at', que son las únicas palabras clave de forma/
+        // posición reducidas de este milestone) es casi siempre un stop -- pero un token compuesto
+        // como "red 10%" tampoco es una forma; basta comprobar si CONTIENE alguna de las 3 keywords
+        // reservadas (nunca aparecen en un nombre de color ni en una función rgb()/hsl()).
+        return str_contains($token, 'circle') || str_contains($token, 'ellipse') || str_starts_with($token, 'at ');
+    }
+
+    /**
+     * css-images-3 §3.4.2: `<angle>` o `to <side-or-corner>` -- ninguno de los dos aparece nunca
+     * como color-stop válido (un color no empieza por un número seguido de "deg" ni por "to "), así
+     * que "no reconocido como dirección" (null) es la señal correcta para que el llamador trate
+     * $args[0] como el primer color-stop en su lugar.
+     *
+     * Esquinas (`to top right`, etc.): aproximación de CAJA CUADRADA -- 45/135/225/315deg fijos,
+     * en vez del cálculo real dependiente del aspect-ratio de la caja (css-images-3 §3.4.2) -- ver
+     * el docblock de Css\Value\Gradient::$angleDeg para el razonamiento completo. Hand-verificable
+     * contra el ángulo numérico `45deg` en una caja CUADRADA (mismo /Coords, ver PdfCanvasTest).
+     */
+    private function parseGradientDirection(string $token): ?float
+    {
+        $t = strtolower(trim($token));
+        if (preg_match('/^(-?\d+(?:\.\d+)?)deg$/', $t, $m) === 1) {
+            return (float) $m[1];
+        }
+        if (!str_starts_with($t, 'to ')) {
+            return null;
+        }
+        $sides = preg_split('/\s+/', trim(substr($t, 3)));
+        if ($sides === false || $sides === [] || count($sides) > 2) {
+            return null;
+        }
+        sort($sides);
+        return match (implode(' ', $sides)) {
+            'top' => 0.0,
+            'right' => 90.0,
+            'bottom' => 180.0,
+            'left' => 270.0,
+            'right top' => 45.0,
+            'bottom right' => 135.0,
+            'bottom left' => 225.0,
+            'left top' => 315.0,
+            default => null,
+        };
+    }
+
+    /**
+     * css-images-3 §3.4.1: cada elemento de $stopArgs es "<color> <percentage>?" (posición
+     * OPCIONAL) -- separados por espacio de nivel superior (splitTopLevel(), reutilizado de los
+     * shorthands existentes: respeta paréntesis, así que "rgba(0,0,0,.5) 50%" trocea en
+     * ["rgba(0,0,0,.5)", "50%"] y no se rompe por las comas internas de rgba()).
+     *
+     * @param list<string> $stopArgs
+     * @return list<GradientStop>|null
+     */
+    private function parseGradientStops(array $stopArgs, string $original): ?array
+    {
+        /** @var list<array{0: Color, 1: ?float}> $rawStops */
+        $rawStops = [];
+        foreach ($stopArgs as $stopArg) {
+            $parts = self::splitTopLevel(trim($stopArg));
+            if (count($parts) !== 1 && count($parts) !== 2) {
+                $this->warnings[] = "Unsupported gradient color-stop \"$stopArg\": $original";
+                return null;
+            }
+            $color = Color::fromCss($parts[0]);
+            if ($color === null) {
+                $this->warnings[] = "Unsupported gradient stop color \"{$parts[0]}\": $original";
+                return null;
+            }
+            $position = null;
+            if (count($parts) === 2) {
+                if (preg_match('/^(-?\d+(?:\.\d+)?)%$/', $parts[1], $m) !== 1) {
+                    $this->warnings[] = "Unsupported gradient stop position \"{$parts[1]}\": $original";
+                    return null;
+                }
+                $position = max(0.0, min(100.0, (float) $m[1]));
+            }
+            // M8-T3 (RESTRICCIONES GLOBALES M8, shadings con alpha -> M9): un stop con alpha
+            // declarado (rgba()/hsla() con canal alpha<1) no puede representarse en un
+            // /FunctionType 2/3 de PDF (RGB puro, sin canal alfa) sin un soft mask -- se avisa y
+            // se pinta OPACO (mismo color RGB, alpha descartado) en vez de fallar el gradiente
+            // entero.
+            if ($color->alpha !== null && $color->alpha < 1.0) {
+                $this->warnings[] = "Gradient color-stop alpha not supported (rendered opaque; soft masks are a later milestone): $stopArg";
+                $color = new Color($color->r, $color->g, $color->b);
+            }
+            $rawStops[] = [$color, $position];
+        }
+        return self::distributeStopPositions($rawStops);
+    }
+
+    /**
+     * css-images-3 §3.4.1 ("Determining the actual position of a color stop"), reducido: rellena
+     * las posiciones ausentes --
+     *   1. el PRIMER stop sin posición colapsa a 0%, el ÚLTIMO sin posición a 100% (endpoints
+     *      implícitos del brief).
+     *   2. cualquier posición EXPLÍCITA menor que la máxima ya vista se sube hasta esa máxima
+     *      (monotonía del spec: una lista de posiciones nunca puede "retroceder").
+     *   3. cada tramo de stops SIN posición entre dos stops YA resueltos se reparte uniformemente
+     *      entre ambos (regla "simple" del brief -- 3 stops sin posición → 0/50/100).
+     *
+     * @param list<array{0: Color, 1: ?float}> $rawStops
+     * @return list<GradientStop>
+     */
+    private static function distributeStopPositions(array $rawStops): array
+    {
+        $n = count($rawStops);
+        $positions = array_map(static fn(array $s): ?float => $s[1], $rawStops);
+        if ($positions[0] === null) {
+            $positions[0] = 0.0;
+        }
+        if ($positions[$n - 1] === null) {
+            $positions[$n - 1] = 100.0;
+        }
+        $runningMax = $positions[0];
+        for ($i = 1; $i < $n; $i++) {
+            if ($positions[$i] !== null) {
+                if ($positions[$i] < $runningMax) {
+                    $positions[$i] = $runningMax;
+                }
+                $runningMax = $positions[$i];
+            }
+        }
+        $i = 0;
+        while ($i < $n) {
+            if ($positions[$i] !== null) {
+                $i++;
+                continue;
+            }
+            $runStart = $i - 1;
+            $j = $i;
+            while ($positions[$j] === null) {
+                $j++;
+            }
+            $startPos = $positions[$runStart];
+            $endPos = $positions[$j];
+            $steps = $j - $runStart;
+            for ($k = $runStart + 1; $k < $j; $k++) {
+                $positions[$k] = $startPos + ($endPos - $startPos) * ($k - $runStart) / $steps;
+            }
+            $i = $j;
+        }
+        $stops = [];
+        foreach ($rawStops as $index => $rawStop) {
+            $stops[] = new GradientStop($rawStop[0], $positions[$index]);
+        }
+        return $stops;
+    }
+
+    /** @return list<string> */
+    private static function splitTopLevelCommas(string $value): array
+    {
+        $tokens = [];
+        $current = '';
+        $depth = 0;
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $value[$i];
+            if ($char === '(') {
+                $depth++;
+                $current .= $char;
+                continue;
+            }
+            if ($char === ')') {
+                $depth--;
+                $current .= $char;
+                continue;
+            }
+            if ($depth === 0 && $char === ',') {
+                $tokens[] = trim($current);
+                $current = '';
+                continue;
+            }
+            $current .= $char;
+        }
+        $tokens[] = trim($current);
+        return $tokens;
+    }
+
+    /** warn() devuelve `array<string, mixed>` (el contrato de parse()) -- los helpers de gradiente
+     *  necesitan devolver `null` en su lugar (el tipo de retorno ?Gradient de sus llamadores, que
+     *  aceptan perfectamente este `null` literal), así que no pueden reutilizar warn() directamente. */
+    private function warnGradientNull(string $message): null
+    {
+        $this->warnings[] = $message;
+        return null;
     }
 
     /**

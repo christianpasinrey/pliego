@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pliego\Layout\Fragment;
 
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
 use Pliego\Layout\Geometry\Rect;
 
 final readonly class BoxFragment implements Fragment
@@ -49,6 +50,15 @@ final readonly class BoxFragment implements Fragment
      * antes de esta tarea (ver Paint\Painter: $radius->isZero() hace caer el pintado por el mismo
      * camino fillRect/paintBordersFlat pre-M8-T2).
      */
+    /**
+     * M8-T3 (css-images-3 §3.1 reducido): $backgroundGradient llega como VO CRUDO (sin resolver
+     * contra ningún rect todavía -- Pdf\PdfCanvas::paintGradient() computa las /Coords finales
+     * contra $this->rect en tiempo de pintado, igual división de responsabilidades que
+     * $borderRadius frente a Css\Value\BorderRadius). Default null para que los ~40 construction
+     * sites preexistentes (tests + GeometryShift/Paginator) sigan compilando sin tocarlos: sin
+     * gradiente declarado, comportamiento de pintado byte-idéntico a antes de esta tarea (ver
+     * Paint\Painter::paintBackground(): $gradient === null es un no-op).
+     */
     /** @param list<Fragment> $children */
     public function __construct(
         public Rect $rect,
@@ -59,6 +69,7 @@ final readonly class BoxFragment implements Fragment
         public float $opacity = 1.0,
         public bool $clipsChildren = false,
         public BorderRadius $borderRadius = new BorderRadius(),
+        public ?Gradient $backgroundGradient = null,
     ) {}
 
     public function rect(): Rect

@@ -7,6 +7,9 @@ use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\CalcExpr;
 use Pliego\Css\Value\Color;
 use Pliego\Css\Value\CssLength;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\Value\Length;
 use Pliego\Css\Value\LengthPercentage;
 use Pliego\Css\Value\LengthUnit;
@@ -1078,4 +1081,190 @@ it('warns on an unparsable border-radius shorthand token', function () {
     $result = $parser->parse('border-radius', 'banana');
     expect($result)->toBe([]);
     expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+// --- M8-T3 (css-images-3 §3.1 reducido): linear-gradient()/radial-gradient() ------------------
+
+/**
+ * Narrows the `array<string, mixed>` returned by DeclarationParser::parse() down to the concrete
+ * Gradient stored under 'background-gradient' — an `instanceof` guard (not assert()/inline @var,
+ * both banned by the gate: this is a REAL runtime check PHPStan already understands as narrowing)
+ * so every gradient test below can read ->angleDeg/->stops with a real type instead of `mixed`.
+ *
+ * @param array<string, mixed> $result
+ */
+function gradientFrom(array $result): Gradient
+{
+    $gradient = $result['background-gradient'] ?? null;
+    if (!$gradient instanceof Gradient) {
+        throw new \RuntimeException('Expected a Gradient under "background-gradient"');
+    }
+    return $gradient;
+}
+
+it('parses a numeric-angle linear-gradient() with 2 explicit color stops, zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(45deg, red, blue)');
+    expect($result)->toEqual([
+        'background-gradient' => new Gradient(GradientKind::Linear, 45.0, [
+            new GradientStop(new Color(255, 0, 0), 0.0),
+            new GradientStop(new Color(0, 0, 255), 100.0),
+        ]),
+    ]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('defaults a linear-gradient() with no direction to 180deg ("to bottom"), per spec', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red, blue)');
+    expect($result['background-gradient'])->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+});
+
+it('maps the 4 cardinal "to <side>" keywords to their angle, regardless of side order', function () {
+    $parser = new DeclarationParser();
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top, red, blue)'))->angleDeg)->toBe(0.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right, red, blue)'))->angleDeg)->toBe(90.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom, red, blue)'))->angleDeg)->toBe(180.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to left, red, blue)'))->angleDeg)->toBe(270.0);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('maps the 4 corner "to <corner>" keywords to a fixed 45/135/225/315deg (square-box approximation), order-insensitive', function () {
+    $parser = new DeclarationParser();
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top right, red, blue)'))->angleDeg)->toBe(45.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to right top, red, blue)'))->angleDeg)->toBe(45.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom right, red, blue)'))->angleDeg)->toBe(135.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to bottom left, red, blue)'))->angleDeg)->toBe(225.0);
+    expect(gradientFrom($parser->parse('background-image', 'linear-gradient(to top left, red, blue)'))->angleDeg)->toBe(315.0);
+});
+
+it('distributes 3 color stops with no explicit position evenly to 0%/50%/100% (css-images-3 §3.4.1 simple rule)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(to right, red, lime, blue)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops)->toHaveCount(3);
+    expect($stops[0]->positionPct)->toBe(0.0);
+    expect($stops[1]->positionPct)->toBe(50.0);
+    expect($stops[2]->positionPct)->toBe(100.0);
+});
+
+it('keeps an explicit stop position and only distributes the ones left unset around it', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(to right, red, lime 20%, blue, yellow)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops[0]->positionPct)->toBe(0.0);
+    expect($stops[1]->positionPct)->toBe(20.0);
+    // (blue) is the single gap between the explicit 20% and the implicit 100% end -> midpoint 60%.
+    expect($stops[2]->positionPct)->toBe(60.0);
+    expect($stops[3]->positionPct)->toBe(100.0);
+});
+
+it('clamps a decreasing explicit stop position up to the previous one (monotonic positions, css-images-3 §3.4.1)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(to right, red 50%, blue 10%)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops[0]->positionPct)->toBe(50.0);
+    expect($stops[1]->positionPct)->toBe(50.0);
+});
+
+it('parses radial-gradient(circle at center, ...) with zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(circle at center, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('parses a bare radial-gradient(red, blue) (no shape/position argument at all) with zero warnings', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('falls back to circle-at-center + a warning for a complex radial-gradient() form (ellipse/explicit position)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'radial-gradient(ellipse at top left, red, blue)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('warns and renders opaque for a gradient color-stop with alpha (soft masks are a later milestone)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(rgba(255, 0, 0, 0.5), blue)');
+    $stops = gradientFrom($result)->stops;
+    expect($stops[0]->color)->toEqual(new Color(255, 0, 0));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('rejects a gradient with fewer than 2 color stops with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red)');
+    expect($result)->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('detects a gradient inside the "background" shorthand', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', 'linear-gradient(to right, red, blue)');
+    expect($result)->toHaveKey('background-gradient');
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('detects a plain color inside the "background" shorthand (gradient/color/image detection)', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', '#ff0000');
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0)]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+it('warns that url() images are not supported yet, in both "background" and "background-image"', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background', 'url(photo.jpg)'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+    expect($parser->parse('background-image', 'url(photo.jpg)'))->toBe([]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('treats background-image: none as "no declaration", without a warning', function () {
+    $parser = new DeclarationParser();
+    expect($parser->parse('background-image', 'none'))->toBe([]);
+    expect($parser->drainWarnings())->toBeEmpty();
+});
+
+// --- RESTRICCIONES GLOBALES M8 ("multiple backgrounds -> primera capa se usa + warning") -------
+
+it('uses only the first layer of a multi-layer background-image, with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red, blue), url(photo.jpg)');
+    expect(gradientFrom($result))->toEqual(new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]));
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('uses only the first layer of a multi-layer "background" shorthand, with a warning', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background', '#ff0000, linear-gradient(red, blue)');
+    expect($result)->toEqual(['background-color' => new Color(255, 0, 0)]);
+    expect($parser->drainWarnings())->toHaveCount(1);
+});
+
+it('does NOT confuse a single gradient function\'s own internal commas with multiple background layers', function () {
+    $parser = new DeclarationParser();
+    $result = $parser->parse('background-image', 'linear-gradient(red, lime, blue)');
+    expect(gradientFrom($result)->stops)->toHaveCount(3);
+    expect($parser->drainWarnings())->toBeEmpty();
 });

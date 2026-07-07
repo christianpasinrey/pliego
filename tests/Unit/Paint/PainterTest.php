@@ -5,6 +5,9 @@ declare(strict_types=1);
 use Pliego\Css\Value\BorderSide;
 use Pliego\Css\Value\BorderStyle;
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Css\WarningCollector;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\BorderSet;
@@ -124,6 +127,24 @@ final class RecordingCanvas implements Canvas
             $radius->tr,
             $radius->br,
             $radius->bl,
+        );
+    }
+
+    public function paintGradient(Rect $rect, Gradient $gradient, ?BorderRadius $radius = null): void
+    {
+        $r = $radius ?? new BorderRadius();
+        $this->calls[] = sprintf(
+            'gradient(%.2F,%.2F,%.2F,%.2F,%s,stops=%d,r=%.2F/%.2F/%.2F/%.2F)',
+            $rect->x,
+            $rect->y,
+            $rect->width,
+            $rect->height,
+            $gradient->kind->name,
+            count($gradient->stops),
+            $r->tl,
+            $r->tr,
+            $r->br,
+            $r->bl,
         );
     }
 }
@@ -755,4 +776,69 @@ it('Finding 1 regression guard: GENUINELY mixed declared border widths (no None 
         'rect(0.00,2.00,2.00,46.00,#000000)',
     ]);
     expect($warnings->drain())->toBe(['mixed border widths with border-radius approximated']);
+});
+
+// --- M8-T3 (css-images-3 §3.1 reducido): gradient painting order + coexistence with background-color
+
+function twoStopGradient(): Gradient
+{
+    return new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+}
+
+it('paints a gradient via Canvas::paintGradient() when the box has no background-color', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), null, [], BorderSet::none(), backgroundGradient: twoStopGradient());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['gradient(0.00,0.00,100.00,50.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)']);
+});
+
+it('paints the gradient AFTER the background-color, when both are declared (gradient sits on top)', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(0, 128, 0), [], BorderSet::none(), backgroundGradient: twoStopGradient());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe([
+        'rect(0.00,0.00,100.00,50.00,#008000)',
+        'gradient(0.00,0.00,100.00,50.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)',
+    ]);
+});
+
+it('passes the box borderRadius through to Canvas::paintGradient() (rounded clip)', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(
+        new Rect(0, 0, 100, 50),
+        null,
+        [],
+        BorderSet::none(),
+        backgroundGradient: twoStopGradient(),
+        borderRadius: new BorderRadius(10.0, 10.0, 10.0, 10.0),
+    );
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['gradient(0.00,0.00,100.00,50.00,Linear,stops=2,r=10.00/10.00/10.00/10.00)']);
+});
+
+it('does not paint any gradient op when backgroundGradient is null (default), byte-identical to before this task', function () {
+    $canvas = new RecordingCanvas();
+    $box = new BoxFragment(new Rect(0, 0, 100, 50), new Color(255, 0, 0), [], BorderSet::none());
+    $page = new Page(1, [$box]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['rect(0.00,0.00,100.00,50.00,#ff0000)']);
+});
+
+it('paints an InlineBoxFragment gradient using its OWN (per-slice) rect as the gradient box', function () {
+    $canvas = new RecordingCanvas();
+    $inline = new InlineBoxFragment(new Rect(10, 10, 40, 20), null, BorderSet::none(), 1.0, true, true, backgroundGradient: twoStopGradient());
+    $page = new Page(1, [$inline]);
+    new Painter(FontCatalog::withDefaults())->paint($page, $canvas);
+
+    expect($canvas->calls)->toBe(['gradient(10.00,10.00,40.00,20.00,Linear,stops=2,r=0.00/0.00/0.00/0.00)']);
 });

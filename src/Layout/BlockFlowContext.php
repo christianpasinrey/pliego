@@ -582,6 +582,8 @@ final class BlockFlowContext implements FormattingContext
             // M8-T2: % resuelto contra $borderBoxWidth (adjudicación M8, ver BorderRadius::
             // fromCss()), clamp de solapes §5.5 contra el $height final YA calculado arriba.
             borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $height),
+            // M8-T3: VO crudo, sin resolver -- ver el docblock de BoxFragment::$backgroundGradient.
+            backgroundGradient: $style->backgroundGradient,
         );
 
         // M7-T6 (CSS 2.2 §9.4.3): position:relative -- shift visual PURO, aplicado DESPUÉS de que
@@ -1084,6 +1086,7 @@ final class BlockFlowContext implements FormattingContext
             new BorderSet($style->borderTop, $style->borderRight, $style->borderBottom, $style->borderLeft),
             opacity: $style->opacity,
             borderRadius: BorderRadius::fromCss($style->borderRadius, $borderBoxWidth, $borderBoxHeight),
+            backgroundGradient: $style->backgroundGradient,
         );
 
         // M7-T6: un <img> también puede ser position:relative -- mismo shift visual puro que un

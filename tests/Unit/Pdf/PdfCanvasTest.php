@@ -4,6 +4,9 @@
 declare(strict_types=1);
 
 use Pliego\Css\Value\Color;
+use Pliego\Css\Value\Gradient;
+use Pliego\Css\Value\GradientKind;
+use Pliego\Css\Value\GradientStop;
 use Pliego\Image\ImageLoader;
 use Pliego\Layout\Fragment\BorderRadius;
 use Pliego\Layout\Fragment\TextFragment;
@@ -412,4 +415,185 @@ it('emits a /GSn gs for fillRoundedRect with an alpha color, same emitWithAlpha(
         $canvas->fillRoundedRect(new Rect(0, 0, 100, 100), new BorderRadius(10.0, 10.0, 10.0, 10.0), new Color(255, 0, 0, 0.5));
     });
     expect($pdf)->toContain('/GS1 gs')->toContain('/ca 0.500');
+});
+
+// M8-T3 (css-images-3 §3.1 reducido; ISO 32000-1 §8.7.4.5 shadings): paintGradient() -- /Coords
+// hand-computed for 0/90/180/45deg (css-images-3 §3.4.2 "abstract gradient line"), FunctionType
+// 2/3, dedup by content signature, rounded clip, radial farthest-corner, alpha-stop opacity.
+
+it('hand-computes /Coords for a 0deg linear-gradient as a straight bottom-to-top line', function () {
+    $red = new Color(255, 0, 0);
+    $blue = new Color(0, 0, 255);
+    $gradient = new Gradient(GradientKind::Linear, 0.0, [new GradientStop($red, 0.0), new GradientStop($blue, 100.0)]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 200, 100), $gradient);
+    });
+    // Rect center (100,50) px; half-length = H/2 = 50 -> start (bottom, 0%) = (100,100)px, end
+    // (top, 100%) = (100,0)px -- flip Y + ×0.75 like any other point conversion (strokeLine()).
+    $y0 = (PaperSize::A4->heightPx() - 100.0) * 0.75;
+    $y1 = PaperSize::A4->heightPx() * 0.75;
+    expect($pdf)->toContain('/ShadingType 2');
+    expect($pdf)->toContain(sprintf('/Coords [75.00 %.2F 75.00 %.2F]', $y0, $y1));
+    expect($pdf)->toContain('/Extend [true true]');
+});
+
+it('hand-computes /Coords for a 90deg linear-gradient as a straight left-to-right line', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 200, 100), $gradient);
+    });
+    // half-length = W/2 = 100 -> start (left,0%) = (0,50)px, end (right,100%) = (200,50)px --
+    // same Y for both (dy=0), only X moves.
+    $y = (PaperSize::A4->heightPx() - 50.0) * 0.75;
+    expect($pdf)->toContain(sprintf('/Coords [0.00 %.2F 150.00 %.2F]', $y, $y));
+});
+
+it('hand-computes /Coords for a 180deg linear-gradient as a straight top-to-bottom line', function () {
+    $gradient = new Gradient(GradientKind::Linear, 180.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 200, 100), $gradient);
+    });
+    $y0 = PaperSize::A4->heightPx() * 0.75; // start = top (0%)
+    $y1 = (PaperSize::A4->heightPx() - 100.0) * 0.75; // end = bottom (100%)
+    expect($pdf)->toContain(sprintf('/Coords [75.00 %.2F 75.00 %.2F]', $y0, $y1));
+});
+
+it('hand-computes /Coords for a 45deg linear-gradient on a SQUARE box as the exact corner-to-corner diagonal', function () {
+    // css-images-3 §3.4.2 "abstract gradient line" length formula: half-length =
+    // (W·|sin θ|+H·|cos θ|)/2 -- at 45deg on a square 100×100 box this is EXACTLY the diagonal
+    // (100·0.70710678 = 70.710678, ×2 sides / 2 = 70.710678), so start/end land EXACTLY on the
+    // two opposite corners: (0,100)px bottom-left (0%) -> (100,0)px top-right (100%).
+    $gradient = new Gradient(GradientKind::Linear, 45.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    // start = bottom-left px(0,100) -> PDF y uses (heightPx-100)*0.75 (SMALLER, lower on the page).
+    // end = top-right px(100,0) -> PDF y uses heightPx*0.75 (LARGER, the page's own top edge).
+    $y0 = (PaperSize::A4->heightPx() - 100.0) * 0.75;
+    $y1 = PaperSize::A4->heightPx() * 0.75;
+    expect($pdf)->toContain(sprintf('/Coords [0.00 %.2F 75.00 %.2F]', $y0, $y1));
+});
+
+it('hand-computes the radial-gradient /Coords as circle-at-center with the farthest-corner radius', function () {
+    $gradient = new Gradient(GradientKind::Radial, 0.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    // center (50,50)px; farthest-corner radius = sqrt(50^2+50^2) = 70.7106781px -> ×0.75 = 53.03pt.
+    $cy = (PaperSize::A4->heightPx() - 50.0) * 0.75;
+    expect($pdf)->toContain('/ShadingType 3');
+    expect($pdf)->toContain(sprintf('/Coords [37.50 %.2F 0 37.50 %.2F 53.03]', $cy, $cy));
+});
+
+it('uses a FunctionType 2 (single exponential, N=1) for exactly 2 color stops', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain('/FunctionType 2 /Domain [0 1] /C0 [1.000 0.000 0.000] /C1 [0.000 0.000 1.000] /N 1');
+    expect($pdf)->not->toContain('/FunctionType 3');
+});
+
+it('uses a FunctionType 3 stitching function with exact Bounds/Encode bytes for 4 color stops', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 255, 0), 25.0),
+        new GradientStop(new Color(255, 255, 0), 50.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain('/FunctionType 3 /Domain [0 1]');
+    expect($pdf)->toContain('/Bounds [0.2500 0.5000]');
+    expect($pdf)->toContain('/Encode [0 1 0 1 0 1]');
+    // 3 sub-tramos Type 2 (red->green, green->yellow, yellow->blue), N=1 cada uno.
+    expect(substr_count($pdf, '/FunctionType 2'))->toBe(3);
+});
+
+it('dedups TWO paintGradient() calls sharing the same rect+Gradient into a SINGLE /Shading object (and its Function)', function () {
+    $stops = [new GradientStop(new Color(255, 0, 0), 0.0), new GradientStop(new Color(0, 0, 255), 100.0)];
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($stops): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), new Gradient(GradientKind::Linear, 90.0, $stops));
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), new Gradient(GradientKind::Linear, 90.0, $stops));
+    });
+    expect(substr_count($pdf, '/ShadingType'))->toBe(1);
+    expect(substr_count($pdf, '/FunctionType 2'))->toBe(1);
+    expect(substr_count($pdf, '/Sh1 sh'))->toBe(2);
+});
+
+it('registers TWO distinct /Shading objects for two gradients with different rects (different /Coords)', function () {
+    $stops = [new GradientStop(new Color(255, 0, 0), 0.0), new GradientStop(new Color(0, 0, 255), 100.0)];
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($stops): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), new Gradient(GradientKind::Linear, 90.0, $stops));
+        $canvas->paintGradient(new Rect(0, 0, 200, 100), new Gradient(GradientKind::Linear, 90.0, $stops));
+    });
+    expect(substr_count($pdf, '/ShadingType'))->toBe(2);
+    expect($pdf)->toContain('/Sh1 sh')->toContain('/Sh2 sh');
+});
+
+it('registers the shading as a page /Resources /Shading entry', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain('/Shading <<')->toContain('/Sh1');
+});
+
+it('emits q, a plain rect clip (re W n), /ShN sh, Q for a gradient with no border-radius', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain("q\n");
+    expect($pdf)->toContain(" re W n\n/Sh1 sh\nQ\n");
+});
+
+it('emits a ROUNDED clip (Bézier path + W n) instead of a plain rect when a border-radius is passed', function () {
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient, new BorderRadius(10.0, 10.0, 10.0, 10.0));
+    });
+    expect(substr_count($pdf, " c\n"))->toBe(4);
+    expect($pdf)->toContain("h\nW n\n/Sh1 sh\nQ\n");
+    expect($pdf)->not->toContain(' re W n');
+});
+
+it('renders an alpha color-stop OPAQUE in the Function (r/g/b only, no alpha channel anywhere)', function () {
+    // Simulates a Gradient constructed with a stop that still carries alpha (defensive: the real
+    // pipeline always strips it in DeclarationParser, see its test file, but PdfCanvas itself
+    // must never leak an alpha component into a PDF Function regardless of caller).
+    $gradient = new Gradient(GradientKind::Linear, 90.0, [
+        new GradientStop(new Color(255, 0, 0, 0.5), 0.0),
+        new GradientStop(new Color(0, 0, 255), 100.0),
+    ]);
+    $pdf = renderOnePage(function (PdfCanvas $canvas) use ($gradient): void {
+        $canvas->paintGradient(new Rect(0, 0, 100, 100), $gradient);
+    });
+    expect($pdf)->toContain('/C0 [1.000 0.000 0.000] /C1 [0.000 0.000 1.000] /N 1');
+    expect($pdf)->not->toContain('/ca');
 });
