@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan M11 — pliego: v1.0</title>
+<script src="../design/assets/mermaid.min.js"></script>
+<script src="../design/assets/chart.umd.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  :root { --bg:#fdfcfa; --fg:#1f2328; --muted:#59636e; --accent:#8b5e34;
+          --card:#fff; --border:#e3e0da; --code-bg:#f4f2ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e6e3de; --muted:#9aa4af; --accent:#d8a878;
+            --card:#1c1f24; --border:#2c3038; --code-bg:#22262c; } }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:1020px; padding:3rem 1.5rem 6rem;
+         font:16px/1.6 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--fg) }
+  h1 { font-size:1.9rem; margin-bottom:.2rem }
+  h2 { margin-top:2.6rem; padding-bottom:.35rem; border-bottom:2px solid var(--accent); font-size:1.35rem }
+  .meta { color:var(--muted); font-size:.9rem }
+  code,pre { font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:.86em }
+  code { background:var(--code-bg); padding:.1em .35em; border-radius:4px }
+  pre:not(.mermaid) { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:.9rem 1rem; overflow-x:auto; line-height:1.45 }
+  pre:not(.mermaid) code { background:none; padding:0 }
+  pre.mermaid { display:flex; justify-content:center; background:var(--card);
+        border:1px solid var(--border); border-radius:8px; padding:1rem; overflow-x:auto }
+  .task { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+          border-radius:8px; padding:1rem 1.3rem; margin:1.6rem 0 }
+  .task h3 { margin-top:.2rem }
+</style>
+</head>
+<body>
+
+<h1>Plan de implementación — pliego M11 «v1.0»</h1>
+<p class="meta">2026-07-08 · Previos: M0-M10 ✅ (main, CI+Oracle verdes, 1494 tests; tabla de fidelidad 0.089-3.27%) · Ejecución: subagent-driven · La última estación: producción de verdad.</p>
+
+<div class="task">
+  <strong>Goal:</strong> lo que separa un motor impresionante de un package v1.0: (1) housekeeping M10; (2) <strong>Flate</strong> — streams comprimidos, PDFs ~70% menores; (3) <strong>límites de recursos</strong> — un HTML hostil no puede colgar el servidor; (4) <strong>enlaces</strong> — los href funcionan en el PDF; (5) <strong>el compilador CSS→PHP</strong> — la apuesta fundacional del diseño original: hojas compiladas a matchers PHP opcacheables (alcance mínimo viable, benchmark honesto); (6) pulido de release: README definitivo, metadata, tag v1.0.0 y checklist Packagist (PREGUNTAR antes de publicar).<br>
+  <strong>Nota de streaming:</strong> Flate y los offsets del xref interactúan — los offsets se calculan sobre bytes ya emitidos, y comprimir cambia longitudes; el writer ya difiere XObjects, el patrón aguanta (comprimir ANTES de medir /Length).
+</div>
+
+<h2>Restricciones globales</h2>
+<ul>
+  <li>Todo lo de M0-M10 vigente (strict_types, VOs readonly, px→pt solo Pdf\, deptrac, sin datos personales — christianpasinrey handle únicamente, sin deps runtime, trailer, TDD 4-gates, baselines tests-only, warning discipline, umbrales del oráculo nunca relajados).</li>
+  <li>Lecciones del ledger completas. 1494 tests + goldens + oráculo 8/8 intactos (¡Flate cambia BYTES de los PDFs — los tests que asserten sobre streams sin comprimir deben usar el toggle debug o inspeccionar descomprimido; auditar TODOS los tests byte-level ANTES de activar Flate por defecto!).</li>
+  <li>NO publicar en Packagist sin confirmación explícita del usuario — T6 prepara todo y el controller PREGUNTA.</li>
+</ul>
+
+<h2>Interfaces nuevas del milestone</h2>
+<pre><code>// Engine
+Engine::compression(bool $on = true): static          // default ON en v1.0; off = streams legibles (debug)
+Engine::limits(?int $maxPages = null, ?int $maxRenderMs = null, ?int $maxImagePixels = null): static
+final class RenderLimitException extends \RuntimeException { }  // qué límite, valor, consejo
+
+// Pdf
+PdfWriter: los streams de contenido/fuentes/imágenes pasan por gzcompress nivel 6 → /Filter /FlateDecode
+  (im ágenes DCT ya llevan su filtro — NO doble-comprimir JPEG; PNG raw sí)
+
+// Css compilado (la costura StyleSource)
+interface StyleSource { /** @return list&lt;StyleRule&gt; */ public function rulesFor(ElementContext $el): array; }
+// (o la forma que el diseño de T5 justifique — el runtime actual se adapta detrás de la costura)
+final class StylesheetCompiler { public function compile(string $css, string $outPhpPath): void; }
+// genera <?php return new class implements CompiledStylesheet { match/arrays por tag/clase/id... }
+Engine::compiledStylesheet(string $phpPath): static  // carga el matcher generado (opcache lo cachea)
+bin/pliego-compile (o composer script) — CLI mínima: pliego-compile styles.css styles.compiled.php
+
+// Paint/Pdf enlaces
+TextFragment/InlineBoxFragment += ?string $href (fluye desde BoxTreeBuilder &lt;a href&gt;);
+PdfWriter: page /Annots [ &lt;&lt;/Type/Annot/Subtype/Link/Rect [...]/Border[0 0 0]/A&lt;&lt;/S/URI/URI(...)&gt;&gt;&gt;&gt; ]
+// un annot por fragment con href (multi-línea = varios rects, natural)</code></pre>
+
+<pre class="mermaid">
+flowchart LR
+  T1["T1 housekeeping M10<br/>+ inset shadow"] --> T2["T2 Flate<br/>compression"]
+  T2 --> T3["T3 límites<br/>de recursos"]
+  T1 --> T4["T4 enlaces<br/>/Annots URI"]
+  T3 --> T5["T5 compilador<br/>CSS→PHP"]
+  T4 --> T6["T6 release v1.0:<br/>README, metadata, tag,<br/>checklist Packagist"]
+  T5 --> T6
+</pre>
+
+<h2>Tareas</h2>
+
+<div class="task">
+<h3>M11-T1 — Housekeeping M10 + inset box-shadow básica</h3>
+<p>(1) Matcher & string-aware (boundary de statement: & precedido de {, }, ; o inicio de body — el falso positivo &-en-string muere). (2) Range syntax en MediaQueryEvaluator: (width >= Xrem/px), (width <= X), (X <= width <= Y) — emisión default de Tailwind v4; el .container gana sus max-widths; re-run oráculo (¿fixture 08 mejora?; recalibrar honesto si cambia). (3) <strong>inset box-shadow BÁSICA</strong>: spread-only sin blur (el caso Bootstrap: inset 0 0 0 9999px color = pintar un rect del color DENTRO del padding box ENCIMA del fondo, debajo del contenido — exactamente el mecanismo de striping); inset con blur → warning como hoy. Verificar: .table-striped REAL raya (quitar compat CSS de la fixture, el oráculo 02 debería mejorar — recalibrar honesto). (4) Dead branch wrapAnonymousFlexItems fuera. Commit: <code>fix(css,paint): string-aware nesting, range media queries and basic inset shadows</code></p>
+</div>
+
+<div class="task">
+<h3>M11-T2 — Flate compression</h3>
+<p>PdfWriter: todo stream (contenido de página, fuentes embebidas, ToUnicode, XObjects de forma, imágenes PNG-raw) → gzcompress(nivel 6) + /Filter /FlateDecode; JPEG (DCTDecode) NO se re-comprime; /Length = bytes comprimidos (calcular tras comprimir — el patrón deferred aguanta). Engine::compression(bool) default TRUE; false → como hoy (debug/tests legibles). AUDITORÍA PREVIA obligatoria: grep de todos los tests que asserten sobre bytes de stream (Tj, re, sh, c ops...) → esos tests fuerzan compression(false) O descomprimen para assertar (helper de test: extractStream($pdf, $n) con gzuncompress) — elegir el patrón y aplicarlo consistente; los goldens del oráculo usan el pipeline completo → los PDFs cambian de bytes pero el RASTER es idéntico (Ghostscript descomprime — verificar 8/8 sin recalibrar). Medir: kitchen-sink y páginas Bootstrap/Tailwind antes/después (~70% esperado). Ghostscript + validación xref (offsets correctos con streams comprimidos). Commit: <code>feat(pdf): flate stream compression</code></p>
+</div>
+
+<div class="task">
+<h3>M11-T3 — Límites de recursos</h3>
+<p>Engine::limits(maxPages, maxRenderMs, maxImagePixels): maxPages → el Paginator (generator — cortar al superar con RenderLimitException); maxRenderMs → checkpoints en las fases largas (layout por bloque, paginación por página — hrtime; granularidad documentada, no preemptivo); maxImagePixels → ImageLoader antes de decodificar (w×h del header — protege de PNG bombs). Defaults v1.0: sin límites (null — opt-in, documentado con recomendaciones para user input: 100 páginas / 30s / 25MP). RenderLimitException con mensaje accionable. Tests: cada límite dispara limpio (sin PDF a medias en disco — render abortado entero), sin límites nada cambia. Commit: <code>feat(engine): resource limits</code></p>
+</div>
+
+<div class="task">
+<h3>M11-T4 — Enlaces</h3>
+<p>BoxTreeBuilder: &lt;a href&gt; (http/https/mailto; relativos → warning + sin annot; # anchors → warning M11) propaga href a los runs/inline boxes descendientes (atributo en el token InlineBoxStart y los TextRuns del subtree — diseño: ComputedStyle NO (no es estilo); un campo href en los runs/boxes como el faceKey). Fragments: TextFragment/InlineBoxFragment ganan ?string $href. Página: al pintar, coleccionar rects con href → PdfWriter::addLinkAnnotation(pageId, rectPt, uri) → /Annots por página (Rect en puntos con Y-flip, Border [0 0 0], /A /S /URI). Multi-línea: annots por fragment (natural). Tests: annot bytes (Rect hand-computed, URI escapado), multi-línea 2 annots, mailto, relativo warning, click-área cubre el texto (rect vs fragment), Ghostscript (annots no rompen render), el link del playground sample funciona (Adobe/navegador manual — nota al usuario). Commit: <code>feat(pdf): link annotations for anchors</code></p>
+</div>
+
+<div class="task">
+<h3>M11-T5 — Compilador CSS→PHP (alcance mínimo viable)</h3>
+<p>LA apuesta fundacional. Alcance MVP adjudicado: compilar la PARTE CARA — el matching de selectores. StylesheetCompiler::compile(css, outPath): parsea con el pipeline real (reutiliza TODO — @media/@layer/nesting guards incluidos) y genera un PHP que devuelve un objeto CompiledStylesheet con: (a) las reglas serializadas (selector pre-parseado → estructura PHP literal: arrays anidados de compounds/combinators — var_export de los VOs o forma dedicada), (b) los buckets por tag/clase/id PRE-CALCULADOS (el trabajo de bucketedRules() hecho en compile-time), (c) match() lookups para los casos rápidos (tag-only, single-class — el 80% de Bootstrap/Tailwind). StyleResolver acepta CompiledStylesheet como fuente (la costura StyleSource del diseño — el runtime actual se envuelve en RuntimeStylesheet, misma interfaz). Engine::compiledStylesheet(path) (+ la validación: hash del css original embebido — si no coincide con lo que esperas, docs). bin/pliego-compile CLI mínima. BENCHMARK HONESTO: doc de 50 páginas con Bootstrap: runtime vs compilado (esperable: ahorro en parse+bucket ~200ms primera vez + algo en matching; con opcache el compilado carga a coste ~0). Si el ahorro real es marginal más allá del parse, DOCUMENTARLO honesto (la apuesta era opcache-friendliness — medir eso: segunda petición warm). Tests: compilado == runtime en resolución (A/B FragmentDumper sobre docs reales — byte-idéntico), CLI, hash mismatch, benchmark en el report. Commit: <code>feat(css): compiled stylesheets</code></p>
+</div>
+
+<div class="task">
+<h3>M11-T6 — Release v1.0</h3>
+<p>README DEFINITIVO: badges (CI/Oracle), instalación composer, quickstart 5 líneas, tabla de capacidades por milestone condensada, tabla de fidelidad, límites/seguridad, filosofía (100% PHP, spec-anotado, oráculo), CONTRIBUTING básico, versioning (semver desde v1.0.0). composer.json: description/keywords (pdf, html-to-pdf, css, pure-php...)/license MIT/authors [{"name":"christianpasinrey"}] SIN email personal — verificar TODO el repo una vez más por datos personales (grep nombre/email/empresa). LICENSE file (MIT, copyright "pliego contributors" o christianpasinrey — adjudicar neutral). CHANGELOG.md v1.0.0 (resumen por milestone). Tag v1.0.0 anotado (tras merge a main — el controller lo hace en el cierre). CHECKLIST PACKAGIST en el report: pasos exactos (packagist.org/packages/submit con la URL del repo, webhook GitHub) — el repo es PRIVADO: nota de que hay que hacerlo público primero — DECISIÓN DEL USUARIO, preguntar. Playground: línea de versión. Commit: <code>chore: v1.0.0 release preparation</code></p>
+</div>
+
+</body>
+</html>
